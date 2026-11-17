@@ -203,6 +203,7 @@ export interface Sim2RealBoardStationRouteDeps {
   requestOwner: OwnerResolver;
   visibleDevices: (owner?: string) => Promise<readonly OwnedDevice[]>;
   /** Resolve an active loopback URL for a web-managed device tunnel. */
+  hasDesktopRelay?: (owner?: string) => boolean;
   resolveDeviceAgentUrl?: (deviceId: string, owner?: string) => string | null;
   /** Owner-scoped run lookup used by policy staging to bind evidence. */
   getRun?: (runId: string, owner?: string) => Promise<Sim2RealRunRecord | null>;
@@ -404,12 +405,16 @@ export function registerSim2RealBoardStationRoutes(
   const api = (suffix: string): string => `${prefix}${suffix}`;
   const { auth, requestOwner, visibleDevices, resolveDeviceAgentUrl } = deps;
   const multiUser = auth.isMultiUserDeployment();
+  const desktopRelayOwners = new WeakMap<Request, string>();
   const stationOptions = (
     request: Request,
     options: StationAgentFetchOptions = {},
   ): StationAgentFetchOptions => ({
     ...options,
     cookieHeader: String(request.headers.cookie ?? ''),
+    ...(desktopRelayOwners.has(request)
+      ? { desktopRelayOwner: desktopRelayOwners.get(request) }
+      : {}),
     // resolveStation records the auth-filtered registry choice on the request
     // so the Studio bridge follows the same dynamic device as the API.
     deviceId:
@@ -459,7 +464,9 @@ export function registerSim2RealBoardStationRoutes(
 
   /** Resolve the station target: the configured agent plus a visible device. */
   const resolveStation = async (request: Request, response: Response) => {
-    if (!isBoardAgentConfigured()) {
+    const owner = requestOwner(request, response);
+    if (owner === null) return null;
+    if (!isBoardAgentConfigured() && !deps.hasDesktopRelay?.(owner)) {
       noStore(response);
       sendApiError(
         response,
@@ -470,8 +477,6 @@ export function registerSim2RealBoardStationRoutes(
       );
       return null;
     }
-    const owner = requestOwner(request, response);
-    if (owner === null) return null;
     const deviceId = String(request.query.deviceId ?? '').trim();
     const devices = (await visibleDevicesForAuth(owner)) as readonly OwnedDevice[];
     // When the browser omits deviceId, prefer a currently connected device.
@@ -496,8 +501,11 @@ export function registerSim2RealBoardStationRoutes(
     // Studio exec uses its native registration ID, while the raw Bridge ID
     // identifies the discovered connection. Preserve older registry fallbacks.
     (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
-      device.studioDeviceId ?? device.bridgeDeviceId ?? device.id,
+      device.bridgeId === 'studio-desktop' || device.bridgeId === 'studio-desktop-relay'
+        ? device.id
+        : (device.studioDeviceId ?? device.bridgeDeviceId ?? device.id),
     ).trim();
+    if (multiUser && owner) desktopRelayOwners.set(request, owner);
     // Device connections own a loopback-only SSH tunnel. Carry its URL on the
     // request so JSON and streaming station calls select the same device;
     // the proxy validates the URL again before making any network request.

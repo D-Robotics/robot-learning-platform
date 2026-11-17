@@ -11078,10 +11078,26 @@ function stationBridgeRow(bridge, device) {
   item.querySelector('.station-device-item-title').textContent = device.name || device.host || '本地板卡';
   item.querySelector('.station-device-item-meta').textContent = `${device.username || 'root'}@${device.host || '本机网络'} · ${device.transport || 'ssh'} · ${device.probeOk === true ? 'SSH 已验证' : '等待验证'}`;
   const button = item.querySelector('.station-device-connect');
-  if (registered) {
+  if (bridge.provider === 'studio-desktop') {
+    const live = device.status === 'connected';
+    const badge = item.querySelector('.station-device-badge');
+    badge.textContent = live ? 'Studio 已连接' : 'Studio 离线';
+    badge.classList.toggle('live', live);
+    badge.classList.toggle('down', !live);
+    item.querySelector('.station-device-item-meta').textContent = device.transport === 'studio-relay'
+      ? `通过本地 Studio 连接 · ${live ? 'BoardAgent 待预检' : '请在 Studio 恢复连接'}`
+      : `${device.username}@${device.host} · ${live ? '复用 Studio SSH；BoardAgent 待预检' : '请在 Studio 恢复连接'}`;
+    button.dataset.action = 'bridge-select';
+    button.dataset.deviceId = device.platformDeviceId || registered?.id || '';
+    button.textContent = '设为目标';
+    button.disabled = !live || !button.dataset.deviceId;
+    return item;
+  }
+  const registeredId = device.registeredDeviceId || registered?.id;
+  if (registeredId) {
     button.textContent = '已接入 · 设为目标';
     button.dataset.action = 'bridge-select';
-    button.dataset.deviceId = registered.id;
+    button.dataset.deviceId = registeredId;
     const reconnect = document.createElement('button');
     reconnect.className = 'button button-quiet';
     reconnect.type = 'button';
@@ -11108,15 +11124,73 @@ async function stationDeviceManagerLoad() {
   } catch (error) {
     if (!deviceConnectionsError) stationLog(`Local Bridge 状态暂不可用：${error instanceof Error ? error.message : '未知错误'}`, 'error');
   }
+  const form = document.querySelector('#station-device-manager .station-device-add');
+  if (form) {
+    let toggle = $('station-device-add-toggle');
+    if (bridgeStatus?.provider === 'studio-desktop') {
+      if (!toggle) {
+        toggle = document.createElement('button');
+        toggle.id = 'station-device-add-toggle';
+        toggle.type = 'button';
+        toggle.className = 'button button-ghost';
+        toggle.textContent = '添加其他设备';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.addEventListener('click', () => {
+          form.hidden = !form.hidden;
+          toggle.setAttribute('aria-expanded', String(!form.hidden));
+          toggle.textContent = form.hidden ? '添加其他设备' : '收起添加设备';
+        });
+        const toggleRow = document.createElement('p');
+        toggleRow.className = 'station-device-ssh-hint';
+        toggleRow.append(toggle);
+        form.before(toggleRow);
+        form.hidden = true;
+      }
+      toggle.hidden = false;
+      toggle.parentElement.before(list);
+    } else {
+      form.hidden = false;
+      if (toggle) toggle.hidden = true;
+    }
+  }
   list.replaceChildren();
   const bridges = Array.isArray(bridgeStatus?.bridges) ? bridgeStatus.bridges : [];
   const bridgeDevices = bridges.flatMap((bridge) => bridge.online !== false ? (bridge.devices || []).map((device) => ({ bridge, device })) : []);
-  for (const entry of bridgeDevices) list.append(stationBridgeRow(entry.bridge, entry.device));
-  if (!connections.length && !bridgeDevices.length) {
+  const liveDeviceIds = new Set(bridgeDevices.map(({ device }) => device.bridgeDeviceId || device.id));
+  const studioDevices = Array.isArray(payload?.studioDevices) ? payload.studioDevices : [];
+  const registeredDevices = studioDevices.filter((device) =>
+    device.provider === 'studio-local-bridge' && device.bridgeId !== 'studio-desktop-relay' &&
+    !liveDeviceIds.has(device.bridgeDeviceId));
+  for (const { bridge, device } of bridgeDevices) list.append(stationBridgeRow(bridge, device));
+  for (const device of registeredDevices) {
+    const row = stationBridgeRow({ bridgeId: device.bridgeId }, device);
+    const badge = row.querySelector('.station-device-badge');
+    badge.textContent = '已登记 · Bridge 离线';
+    badge.classList.replace('live', 'down');
+    const button = row.querySelector('.station-device-connect');
+    button.dataset.action = 'bridge-select';
+    button.dataset.deviceId = device.id;
+    button.textContent = '设为目标';
+    row.querySelector('[data-action="bridge-connect"]')?.remove();
+    list.append(row);
+  }
+  if (bridgeStatus?.provider === 'studio-desktop' && bridgeStatus.state !== 'ready') {
+    const hint = document.createElement('span');
+    hint.className = 'station-topic-empty';
+    hint.textContent = bridgeStatus.code === 'STUDIO_DESKTOP_UPGRADE_REQUIRED'
+      ? '当前 Studio 尚不支持设备共享，请更新宿主后重试。'
+      : bridgeStatus.code === 'STUDIO_DESKTOP_AUTH_REQUIRED' || bridgeStatus.state === 'awaiting-host'
+        ? '请在 Studio 启用并重连插件；若宿主未提供设备共享能力，请更新支持该能力的 Studio。'
+        : '暂时无法连接 Studio 设备桥，请确认 Studio 正在运行，并检查本机连接后重试。';
+    list.append(hint);
+  }
+  if (!connections.length && !bridgeDevices.length && !registeredDevices.length && !(bridgeStatus?.provider === 'studio-desktop' && bridgeStatus.state !== 'ready')) {
     const empty = document.createElement('span');
     empty.className = 'station-topic-empty';
     empty.id = 'station-device-list-empty';
-    empty.textContent = deviceConnectionsError ? '暂时无法读取设备列表；Local Bridge 在线后会自动刷新。' : '尚未添加设备。';
+    empty.textContent = bridgeStatus?.provider === 'studio-desktop' && bridgeStatus.state === 'ready'
+      ? 'Studio 当前没有可共享的本地设备。请先在 Studio 连接板卡。'
+      : deviceConnectionsError ? '暂时无法读取设备列表；Local Bridge 在线后会自动刷新。' : '尚无已建立的配对连接。已登记的设备可通过上方目标选择器查看。';
     list.append(empty);
   }
   for (const connection of connections) list.append(stationDeviceRow(connection));

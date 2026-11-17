@@ -1,3 +1,4 @@
+import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
 import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
@@ -28,6 +29,7 @@ import { stationAgentFetch, stationAgentFetchWithStatus } from '../sim2real/boar
 export interface Sim2RealDeviceConnectionRouteDeps {
   auth: Sim2RealAuthPort;
   requestOwner: (request: Request, response: Response) => string | undefined | null;
+  listRegisteredLocalBridgeDevices?: (owner?: string) => Promise<Record<string, unknown>[]>;
 }
 
 export interface Sim2RealDeviceConnectionRouteOptions {
@@ -112,7 +114,7 @@ export function registerSim2RealDeviceConnectionRoutes(
 ): void {
   const prefix = normalizePrefix(options.prefix);
   const api = (suffix: string): string => `${prefix}${suffix}`;
-  const { auth, requestOwner } = deps;
+  const { auth, requestOwner, listRegisteredLocalBridgeDevices } = deps;
   const multiUser = auth.isMultiUserDeployment();
   const activeTunnels = () => new Set(activeDeviceConnections());
 
@@ -124,6 +126,10 @@ export function registerSim2RealDeviceConnectionRoutes(
       if (owner === null) return;
       noStore(response);
       const live = activeTunnels();
+      const [desktop, localBridgeDevices] = await Promise.all([
+        studioDesktopBridge.catalog(),
+        listRegisteredLocalBridgeDevices?.(owner) ?? [],
+      ]);
       const connections = listDeviceConnections(multiUser ? owner : undefined).map((record) =>
         serializeConnection(
           record,
@@ -135,6 +141,8 @@ export function registerSim2RealDeviceConnectionRoutes(
       response.json({
         ok: true,
         connections,
+        studioDesktop: { state: desktop.state, ...(desktop.code ? { code: desktop.code } : {}) },
+        studioDevices: [...desktop.devices, ...localBridgeDevices],
         sshNote:
           '隧道使用服务器本机 ssh 与已有密钥/代理跳转（与 deploy-x5-board-agent.sh 相同），不存储密码。',
       });

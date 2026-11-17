@@ -9,10 +9,17 @@ import { principalCan, SIM2REAL_PERMISSIONS } from './sim2real-rbac.js';
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
 import { activeTunnelAgentUrl, setTunnelDataDirResolver } from './board-tunnel-manager.js';
 
+import {
+  isStudioDesktopDeviceId,
+  setStudioDesktopBridgeGate,
+  studioDesktopBridge,
+} from './studio-desktop-bridge.js';
+
 // Wire the tunnel manager's data-dir resolution to the adapters' own resolver
 // (kept as an explicit init call instead of a direct import so this module
 // stays the single owner of storage paths).
 setTunnelDataDirResolver(resolveDataDir);
+setStudioDesktopBridgeGate(() => !isMultiUserStandaloneAuth());
 
 function isMultiUserStandaloneAuth(): boolean {
   return resolveStandaloneAuthMode() !== 'standalone' || isWebCloudDeployment();
@@ -70,8 +77,16 @@ export function resolveStandaloneAuthMode():
   return studioCookieAuthConfigured() ? 'studio-cookie' : 'standalone';
 }
 
-export const storageRequestContextMiddleware: RequestHandler = (_request, _response, next) =>
-  next();
+export const storageRequestContextMiddleware: RequestHandler = (request, _response, next) => {
+  const capability = request.headers['x-rdk-studio-desktop-token'];
+  studioDesktopBridge.runWithToken(capability, () => {
+    if (capability !== undefined && studioDesktopBridge.configured()) {
+      // The native launcher reads health before opening the browser. Validate its
+      // inherited capability here; no host token is ever placed in a browser URL.
+      void studioDesktopBridge.catalog().then(() => next(), next);
+    } else next();
+  });
+};
 
 /** Baseline hardening applied to every response, including the relaxed
  * MicroDuck surface. These headers are cheap and cannot break a WASM bundle. */
@@ -565,19 +580,27 @@ function normalizedDevice(value: unknown): (Device & { bridgeOwnerKey?: string }
   return normalized;
 }
 
-export async function readDevices(): Promise<Device[]> {
+export async function readDevices(): Promise<Array<Device & { bridgeOwnerKey?: string }>> {
+  const desktop = await studioDesktopBridge.catalog();
+  const desktopIds = new Set(desktop.devices.map((device) => device.id));
   try {
     const raw = await fs.readFile(path.join(resolveDataDir(), 'devices.json'), 'utf8');
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return desktop.devices;
     // A corrupt record must not make the whole overview fail. Keep a bounded
     // registry in memory; the device manager remains the owner of persistence.
-    return parsed
+    const saved = parsed
       .slice(0, 500)
       .map(normalizedDevice)
       .filter((device): device is Device => device !== null);
+    return [
+      ...saved.filter(
+        (device) => !isStudioDesktopDeviceId(device.id) && !desktopIds.has(device.id),
+      ),
+      ...desktop.devices,
+    ];
   } catch {
-    return [];
+    return desktop.devices;
   }
 }
 
@@ -1056,6 +1079,7 @@ export function boardAgentTokenConfigured(): boolean {
 
 /** True when a configured endpoint can be used safely by this process. */
 export function boardAgentConnectionReady(): boolean {
+  if (studioDesktopBridge.hasVerifiedLease()) return true;
   const endpoint = boardAgentUrl();
   if (!endpoint) return Boolean(studioBridgeConfiguration());
   return !boardAgentTokenRequired(Boolean(endpoint)) || boardAgentTokenConfigured();
@@ -1149,6 +1173,33 @@ export const runOnDevice = async (
   const studioTargetId = String(
     bridgeTarget?.studioDeviceId ?? bridgeTarget?.bridgeDeviceId ?? '',
   ).trim();
+  if (bridgeTarget?.bridgeId === 'studio-desktop') {
+    const result = await studioDesktopBridge.agent(
+      id,
+      `/v1/devices/${encodeURIComponent(id)}/commands`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ commands: commands.slice(0, 8) }),
+        agentToken: process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN,
+        timeoutMs: adapterTimeout(options.timeoutMs),
+        signal: options.abortSignal,
+      },
+    );
+    const payload = result?.ok ? result.payload : null;
+    const output = payload && safeAgentOutput(payload.output);
+    if (!payload || !output) return null;
+    return {
+      device: projectBoardAgentDevice(payload.device, id),
+      output,
+      ...(typeof payload.exitCode === 'number' && Number.isSafeInteger(payload.exitCode)
+        ? { exitCode: payload.exitCode }
+        : {}),
+      ...(typeof payload.mock === 'boolean' ? { mock: payload.mock } : {}),
+      ...(typeof payload.actuatorControl === 'boolean'
+        ? { actuatorControl: payload.actuatorControl }
+        : {}),
+    };
+  }
   const cookie = String(request?.headers?.cookie || '').trim();
   const studioOrigin = safeStudioOrigin(
     process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN ||
