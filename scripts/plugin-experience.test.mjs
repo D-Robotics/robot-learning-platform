@@ -1580,9 +1580,11 @@ test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool'
     const descriptor = catalog.tools.find(({ name }) => name === tool);
     assert.deepEqual(descriptor.inputSchema.required, ['runId']);
     assert.equal(descriptor.annotations.destructiveHint, false);
+    assert.match(descriptor.description, /stopWorkflow=true.*studentReply.*结束本轮/);
     const missing = await proxy('tools/call', { name: tool, arguments: { runId: args.runId } });
     assert.equal(missing.isError, undefined);
     assert.equal(missing.structuredContent.stopWorkflow, true);
+    assert.match(missing.structuredContent.instructions, /studentReply.*结束本轮/);
     assert.match(
       missing.structuredContent.studentReply,
       /实际采样 503,808 步.*没有已接通的 RDK X5/,

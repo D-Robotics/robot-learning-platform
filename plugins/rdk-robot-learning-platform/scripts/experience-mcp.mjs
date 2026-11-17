@@ -536,7 +536,7 @@ const DANCE_REPLAY_READ_TOOL = {
 const DANCE_CPU_REHEARSAL_TOOL = {
   name: 'rdk_originman_dance_cpu_rehearse',
   description:
-    'OriginMan 舞蹈 X5 CPU 零致动验收。先按完整 Run ID 读取原始训练记录、实际采样步数和 ONNX，再核对目标设备。没有 X5 或未传 deviceId 时只查询并给出缺项，不暂存、不推理。明确选择已连接 X5 后才执行合成观测循环，不写舵机指令。',
+    'OriginMan 舞蹈 X5 CPU 零致动验收。先按完整 Run ID 读取原始训练记录、实际采样步数和 ONNX，再核对目标设备。没有 X5 或未传 deviceId 时只查询并给出缺项，不暂存、不推理。回执 stopWorkflow=true 时直接把 studentReply 告诉用户并结束本轮，无需再查询设备、日志或其他记录。明确选择已连接 X5 后才执行合成观测循环，不写舵机指令。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1472,6 +1472,8 @@ export function experienceProxy(
           const runSummary = `原 Run ${payload.runId}，${steps === null ? '实际采样步数待核对' : `实际采样 ${steps.toLocaleString('en-US')} 步`}。`;
           if (payload.phase === 'preflight') {
             payload.studentReply = `${runSummary}${payload.nextAction} 本次停在前置检查。`;
+            if (payload.stopWorkflow === true)
+              payload.instructions = '直接用 studentReply 回复用户并结束本轮。';
           } else {
             const cadence =
               payload.timing?.syntheticCyclePassed === true
