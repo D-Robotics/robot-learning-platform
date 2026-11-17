@@ -1567,14 +1567,24 @@ test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool'
         };
       },
     });
-    await proxy('initialize', { clientInfo: { name: host, version: '1.0' } });
+    const { instructions } = await proxy('initialize', {
+      clientInfo: { name: host, version: '1.0' },
+    });
+    assert.match(instructions, /load_tools\(\{"query":"rdk_originman_dance_cpu_rehearse"\}\)/);
+    assert.match(instructions, /使用目录中的完整名称调用.*只有唯一匹配/);
+    assert.doesNotMatch(
+      instructions,
+      /mcp__rdk-robot-learning-platform__rdk_originman_dance_cpu_rehearse/,
+    );
     const catalog = await proxy('tools/list');
     const descriptor = catalog.tools.find(({ name }) => name === tool);
     assert.deepEqual(descriptor.inputSchema.required, ['runId']);
     assert.equal(descriptor.annotations.destructiveHint, false);
+    assert.match(descriptor.description, /stopWorkflow=true.*studentReply.*结束本轮/);
     const missing = await proxy('tools/call', { name: tool, arguments: { runId: args.runId } });
     assert.equal(missing.isError, undefined);
     assert.equal(missing.structuredContent.stopWorkflow, true);
+    assert.match(missing.structuredContent.instructions, /studentReply.*结束本轮/);
     assert.match(
       missing.structuredContent.studentReply,
       /实际采样 503,808 步.*没有已接通的 RDK X5/,

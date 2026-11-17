@@ -1,6 +1,6 @@
 ---
 name: devices-board
-description: 通过 RDK 学习平台连接设备、检查 BoardAgent 和传感器、指导 OriginMan 新机标定与实机验证，或暂存加载策略、执行受控策略及 D6A 机械臂动作。
+description: 通过 RDK 学习平台做 OriginMan 原 Run 的 X5 CPU 零致动验收（无 X5 时先核对记录与缺项）、连接设备、检查 BoardAgent 和传感器、指导新机标定、暂存加载策略或执行受控动作。
 ---
 
 # 设备、策略与机械臂
@@ -15,7 +15,7 @@ OriginMan“新机器人接入、站立模型上机、标定或复测”先读[�
 
 - `rdk_device_discover` 列出当前账号已登记连接，不扫描整个网络。没有连接时用工作台设备管理添加；MCP 没有添加 SSH 坐标的工具。`rdk_device_connect(connectionId)` / `rdk_device_disconnect(connectionId)` 操作已有连接。
 - 只读验收用 `rdk_board_health`、`rdk_board_onboarding_preflight`、`rdk_board_station_status`、`rdk_board_policy_status`、`rdk_board_policy_files`。`rdk_board_station_command(id)` 仅执行现有白名单命令 ID，不是任意 shell。多个设备时所有 station 类参数显式带实际 `deviceId`。
-- OriginMan 舞蹈 ONNX 的 X5 CPU 验收走 `rdk_originman_dance_cpu_rehearse`。Studio 的工具名可能带 MCP 连接前缀，按实际工具目录定位。先传完整 Run ID，按回执的 `run.trainingSteps` 报告实际采样步数。用户未选设备时省略 `deviceId`，按回执展示缺项并停住。明确指定已接通 X5 后才暂存并加载原 ONNX，运行 50 Hz 合成观测，不启动运动。
+- OriginMan 舞蹈 ONNX 的 X5 CPU 验收走 `rdk_originman_dance_cpu_rehearse`。在 Studio 中如果工具尚未出现在本轮目录，调用 `load_tools({"query":"rdk_originman_dance_cpu_rehearse"})`。从回执或下一步的工具目录读取实际完整名，再调用该工具。短名不传给 `load_tools.names`，连接前缀以实际目录为准。有多个连接时请用户选一个，无匹配时报告本轮未加载该工具并停住。传完整 Run ID，按回执的 `run.trainingSteps` 报告实际采样步数。用户未选设备时省略 `deviceId`，在 `stopWorkflow=true` 时展示 `studentReply` 并结束。明确指定已接通 X5 后才暂存并加载原 ONNX，运行 50 Hz 合成观测，不启动运动。
 - 策略依次按实际请求暂存 `rdk_board_policy_stage(runId)`、核对文件摘要、加载 `rdk_board_policy_load(path, artifactSha256, rehearsalReceipt)`。暂存、加载和启动是三个独立动作；前两步不授权运动。加载参数 `path` 是策略目录内文件名，不能任意路径。
 - `rdk_board_policy_start` 实际必需数值 `direction`，可带 `goalX` / `goalY`。平台/板端开关、契约、来源与现场条件都满足且已有用户动作授权时才调用；`rdk_board_policy_reset` 是显式故障复位。
 - 机械臂先 `rdk_board_arm_status` 核对能力/位姿/工作空间。`rdk_board_arm_move` 必需 `x/y/z`（mm），速度为 `speedMmPerS`；`rdk_board_arm_gripper` 必需 `action=open|close` 和正数 `value`（open=宽度 mm，close=力）。不把照片推测坐标当标定，不超出平台钳制。

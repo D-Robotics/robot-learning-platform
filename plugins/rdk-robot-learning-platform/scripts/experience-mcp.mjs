@@ -536,7 +536,7 @@ const DANCE_REPLAY_READ_TOOL = {
 const DANCE_CPU_REHEARSAL_TOOL = {
   name: 'rdk_originman_dance_cpu_rehearse',
   description:
-    'OriginMan 舞蹈 X5 CPU 零致动验收。先按完整 Run ID 读取原始训练记录、实际采样步数和 ONNX，再核对目标设备。没有 X5 或未传 deviceId 时只查询并给出缺项，不暂存、不推理。明确选择已连接 X5 后才执行合成观测循环，不写舵机指令。',
+    'OriginMan 舞蹈 X5 CPU 零致动验收。先按完整 Run ID 读取原始训练记录、实际采样步数和 ONNX，再核对目标设备。没有 X5 或未传 deviceId 时只查询并给出缺项，不暂存、不推理。回执 stopWorkflow=true 时直接把 studentReply 告诉用户并结束本轮，无需再查询设备、日志或其他记录。明确选择已连接 X5 后才执行合成观测循环，不写舵机指令。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1260,7 +1260,7 @@ export function experienceProxy(
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
-          '\n用户要求 OriginMan 现有 Run 的 X5 CPU 零致动验收时，按完整 Run ID 直接调用 rdk_originman_dance_cpu_rehearse。Studio 的工具名可能带 MCP 连接前缀，应通过实际工具目录定位。用户未指定设备时只传 runId。步数一律按回执 run.trainingSteps；收到 stopWorkflow=true 就展示 studentReply 并停住。' +
+          '\nOriginMan 原 Run 的 X5 CPU 零致动验收使用 rdk_originman_dance_cpu_rehearse。Studio 中先看本轮工具目录；工具未出现时，调用 load_tools({"query":"rdk_originman_dance_cpu_rehearse"})，从返回结果或下一步可用工具中取得真实的完整名称。使用目录中的完整名称调用，只有唯一匹配时才继续；有多个连接则请用户选择，无匹配则说明本轮未加载该工具并停住。不要把短名放进 load_tools.names，也不要猜测连接前缀。传完整 runId，未明确指定设备时省略 deviceId。只用回执 run.trainingSteps 报告步数，收到 stopWorkflow=true 就展示 studentReply 并停住。' +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
           '\n' +
           STUDIO_WORKSHOP_NAVIGATION +
@@ -1472,6 +1472,8 @@ export function experienceProxy(
           const runSummary = `原 Run ${payload.runId}，${steps === null ? '实际采样步数待核对' : `实际采样 ${steps.toLocaleString('en-US')} 步`}。`;
           if (payload.phase === 'preflight') {
             payload.studentReply = `${runSummary}${payload.nextAction} 本次停在前置检查。`;
+            if (payload.stopWorkflow === true)
+              payload.instructions = '直接用 studentReply 回复用户并结束本轮。';
           } else {
             const cadence =
               payload.timing?.syntheticCyclePassed === true
