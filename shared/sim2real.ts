@@ -1,3 +1,8 @@
+import {
+  ORIGINMAN_REFERENCE_ENGINE,
+  validateOriginmanReferenceTraining,
+  type OriginmanReferenceTraining,
+} from './originman-reference-training.js';
 import type {
   ModelArtifactDescriptor,
   ModelArtifactKind,
@@ -241,7 +246,8 @@ export type Sim2RealTrainingEngine =
   | 'diffusion-policy'
   | 'smolvla'
   | 'isaac-lab'
-  | 'originman-dance-ppo';
+  | 'originman-dance-ppo'
+  | typeof ORIGINMAN_REFERENCE_ENGINE;
 
 export interface Sim2RealTrainingSpec {
   profile: Sim2RealTrainingProfile;
@@ -260,6 +266,9 @@ export interface Sim2RealTrainingSpec {
   /** Explicit protocol smoke only; never a substitute for recorded data. */
   syntheticSmoke?: boolean;
   originmanDance?: OriginmanDanceTraining;
+  originmanReference?: OriginmanReferenceTraining;
+  /** Only the trajectory metadata is retained in the platform run ledger. */
+  originmanReferenceSummary?: { trainingSteps: number; seed: number; frames: number; fps: 50 };
 }
 
 /** Server-resolved, digest-pinned imitation input; never a client file path. */
@@ -895,6 +904,7 @@ const ALLOWED_TRAINING_ENGINES = new Set<Sim2RealTrainingEngine>([
   'smolvla',
   'isaac-lab',
   'originman-dance-ppo',
+  ORIGINMAN_REFERENCE_ENGINE,
 ]);
 const SAFE_ID = /^[a-z][a-z0-9-]{1,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/i;
@@ -1108,6 +1118,25 @@ export function normalizeTrainingSpec(value: unknown): {
     errors.push('training.originmanDance requires engine originman-dance-ppo and algorithm ppo');
   if (engine === 'originman-dance-ppo' && (!originmanDance || numEnvs > 64))
     errors.push('originman-dance-ppo requires a dance recipe and 1–64 parallel environments');
+  let originmanReference: OriginmanReferenceTraining | undefined;
+  if (engine === ORIGINMAN_REFERENCE_ENGINE || source.originmanReference !== undefined) {
+    if (
+      engine !== ORIGINMAN_REFERENCE_ENGINE ||
+      algorithm !== 'ppo' ||
+      numEnvs > 64 ||
+      4096 % numEnvs !== 0 ||
+      source.syntheticSmoke !== undefined ||
+      source.demonstrationRunId !== undefined ||
+      rawVideo !== true
+    ) {
+      errors.push('参考轨迹跟跳使用专用 PPO 引擎、1/2/4/8/16/32/64 并行环境和同源评测回放。');
+    }
+    try {
+      originmanReference = validateOriginmanReferenceTraining(source.originmanReference);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : '参考轨迹参数无效。');
+    }
+  }
   if (errors.length) return { errors };
   return {
     errors,
@@ -1122,6 +1151,7 @@ export function normalizeTrainingSpec(value: unknown): {
       ...(demonstrationRunId ? { demonstrationRunId } : {}),
       ...(source.syntheticSmoke === true ? { syntheticSmoke: true } : {}),
       ...(originmanDance ? { originmanDance } : {}),
+      ...(originmanReference ? { originmanReference } : {}),
     },
   };
 }

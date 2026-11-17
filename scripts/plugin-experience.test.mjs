@@ -1599,3 +1599,41 @@ test('Studio and Qoder expose and use the same non-actuating OriginMan CPU tool'
     );
   }
 });
+
+test('reference track opens the correct platform mount and keeps result navigation on its original task', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const read = [];
+  const proxy = experienceProxy(
+    {
+      readTrainingRun: async (runId) => {
+        read.push(runId);
+        return {
+          id: runId,
+          taskId: runId === 'ref-run' ? 'originman-reference-track' : 'originman-dance',
+        };
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning/' } },
+  );
+  const call = (args) =>
+    proxy('tools/call', {
+      name: 'rdk_originman_reference_track',
+      arguments: args,
+    });
+  const entry = (await call({})).structuredContent;
+  assert.deepEqual(read, []);
+  assert.deepEqual(entry.studioNavigation, {
+    tool: 'studio_open_url',
+    arguments: { url: 'https://platform.test/robotics-learning/originman-reference.html' },
+  });
+  const result = (await call({ runId: 'ref-run' })).structuredContent;
+  assert.equal(
+    result.studioNavigation.arguments.url,
+    'https://platform.test/robotics-learning/originman-reference-run.html?runId=ref-run',
+  );
+  assert.deepEqual(read, ['ref-run']);
+  assert.equal((await call({ runId: 'other-task' })).isError, true);
+  assert.equal((await call({ runId: '../ref-run' })).isError, true);
+  assert.deepEqual(read, ['ref-run', 'other-task']);
+});

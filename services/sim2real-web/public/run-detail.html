@@ -6,7 +6,7 @@
     <title>本次运行 · RDK Robot Learning</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./run-detail-page.mjs?v=2"></script>
+    <script type="module" src="./run-detail-page.mjs?v=3"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -43,6 +43,7 @@
           </div>
           <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
           <p id="run-hardware-readiness" hidden></p>
+          <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
           <p><a id="run-copy-config" hidden>用本轮参数准备下一轮</a></p>
           <div class="comparison-scroll">
             <table id="run-config-table" hidden>
@@ -115,7 +116,6 @@
             <dt>模型 ID</dt><dd id="run-model-id">—</dd>
             <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
           </dl>
-          <a id="run-policy-download" download hidden>下载本次 ONNX 策略</a>
         </details>
       </section>
     </main>

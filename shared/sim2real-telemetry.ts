@@ -21,6 +21,19 @@ export interface Sim2RealRunArtifactMetadata {
   deployable: boolean;
 }
 
+export interface SimulationReplayEvidence {
+  replay?: { sha256: string };
+  video?: {
+    file: 'dance-replay.mp4';
+    sha256: string;
+    sizeBytes: number;
+    policySha256: string;
+    fps?: number;
+    durationSeconds?: number;
+    sourceReplaySha256: string;
+  };
+}
+
 export interface Sim2RealRunMetrics {
   trainChunkMse?: number;
   validationChunkMse?: number;
@@ -74,7 +87,7 @@ export interface Sim2RealRunMetrics {
   trainingDevice?: string;
   /** Device model reported by the worker for its selected runtime device. */
   trainingDeviceName?: string;
-  originmanDance?: {
+  originmanDance?: SimulationReplayEvidence & {
     qualityGatePassed?: boolean;
     sceneProvenance?: { sceneSha256?: string };
     evaluations: {
@@ -87,14 +100,16 @@ export interface Sim2RealRunMetrics {
         measurements: Record<string, number>;
       }[];
     }[];
-    replay?: { sha256: string };
-    video?: {
-      file: 'dance-replay.mp4';
-      sha256: string;
-      sizeBytes: number;
-      policySha256: string;
-      sourceReplaySha256: string;
-    };
+  };
+  originmanReference?: SimulationReplayEvidence & {
+    framesExpected: number;
+    framesEvaluated: number;
+    trackingMaeRad: number;
+    maxTiltDeg: number;
+    finalYawDeg: number;
+    qualityGatePassed: boolean;
+    referenceSha256: string;
+    sceneSha256: string;
   };
   /**
    * True only when the training backend actually ran on CUDA. A requested but

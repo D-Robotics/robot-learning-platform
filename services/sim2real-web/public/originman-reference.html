@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OriginMan · 参考轨迹跟跳</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <script type="module" src="./originman-reference-page.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#reference-main">跳到任务内容</a>
+    <header class="experiment-header">
+      <a href="./">RDK Robot Learning</a>
+      <a href="./workshop.html">OriginMan Workshop</a>
+    </header>
+    <main id="reference-main" class="experiment-layout">
+      <aside aria-label="任务说明">
+        <p class="eyebrow">OriginMan · 仿真</p>
+        <h1>参考轨迹跟跳</h1>
+        <p>导入每帧的关节目标，训练策略在仿真中完整跟随。两个头部通道固定为零。</p>
+        <ol class="experiment-steps">
+          <li>导入并校验轨迹</li>
+          <li>选择算力并提交训练</li>
+          <li>查看评测、回放和 ONNX</li>
+        </ol>
+      </aside>
+      <section class="experiment-content" aria-label="任务表单">
+        <section aria-labelledby="reference-import-heading">
+          <h2 id="reference-import-heading">导入参考轨迹</h2>
+          <p id="reference-format">支持 50 Hz 的 NPZ 或 JSON。关节位置使用相对站姿的弧度，速度使用弧度/秒。</p>
+          <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" /></p>
+          <p><button id="reference-example" type="button" disabled>加载示例摆臂</button>
+          <button id="reference-example-download" type="button" disabled>下载示例 JSON</button></p>
+          <p id="reference-status" role="status" aria-live="polite">正在读取任务配置。</p>
+          <p id="reference-error" class="experiment-error" role="alert" hidden></p>
+        </section>
+        <section aria-labelledby="reference-training-heading">
+          <h2 id="reference-training-heading">训练与评测</h2>
+          <form id="reference-form">
+            <p><label for="reference-worker">训练 Worker</label>
+              <select id="reference-worker" required><option value="">请选择</option></select></p>
+            <p><label for="reference-steps">预算</label>
+              <select id="reference-steps">
+                <option value="8192">快检 · 8,192 步</option>
+                <option value="65536">标准 · 65,536 步</option>
+                <option value="503808">长训 · 503,808 步</option>
+              </select></p>
+            <p><label for="reference-envs">并行环境</label>
+              <select id="reference-envs">
+                <option>1</option><option>2</option><option>4</option><option>8</option>
+                <option>16</option><option>32</option><option>64</option>
+              </select></p>
+            <p id="reference-worker-hint"></p>
+            <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
+          </form>
+        </section>
+        <details class="experiment-details">
+          <summary>本体资料与实测标定来源</summary>
+          <p id="reference-calibration"></p>
+          <div class="comparison-scroll">
+            <table>
+              <caption>参考文件顺序与舵机对应关系</caption>
+              <thead><tr><th scope="col">顺序</th><th scope="col">关节</th><th scope="col">舵机通道</th><th scope="col">站姿 PWM</th><th scope="col">方向</th><th scope="col">方向证据</th></tr></thead>
+              <tbody id="reference-joints"></tbody>
+            </table>
+          </div>
+        </details>
+      </section>
+    </main>
+  </body>
+</html>
