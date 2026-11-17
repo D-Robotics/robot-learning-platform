@@ -7,6 +7,7 @@ import type {
   Sim2RealTaskEvaluationEvidence,
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
+import { ORIGINMAN_DANCE_SECTION_TYPES } from '../../shared/originman-dance-training.js';
 import { isIP } from 'node:net';
 import { normalizeLatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
@@ -498,7 +499,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
         const section = asRecord(entry);
         if (
           typeof section.type !== 'string' ||
-          !['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'].includes(section.type)
+          !ORIGINMAN_DANCE_SECTION_TYPES.some((type) => type === section.type)
         )
           return [];
         const measurements = Object.fromEntries(

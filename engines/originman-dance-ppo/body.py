@@ -36,7 +36,8 @@ class Dance(gym.Env):
         self.scale = np.array([.22 if "hip_roll" in name or "ank_roll" in name else
                                .34 if i in self.legs else .62 for i, name in enumerate(self.names)])
         self.floor = self.model.geom("ground").id
-        self.feet = {self.model.geom(f"{side}_ank_roll_link_collision").id for side in ("l", "r")}
+        self.foot_geoms = tuple(self.model.geom(f"{side}_ank_roll_link_collision").id for side in ("l", "r"))
+        self.feet = set(self.foot_geoms)
         self.action_space = gym.spaces.Box(-1, 1, (len(joints),), dtype=np.float32)
         self.observation_space = gym.spaces.Box(-np.inf, np.inf, (11 + 3 * len(joints),), dtype=np.float32)
         self.training = training
@@ -115,6 +116,7 @@ class Dance(gym.Env):
                   - 10. * failed)
         info = {"beats": beat, "pulse": pulse, "armSpeed": arm_speed, "legSpeed": leg_speed,
                 "tiltDeg": math.degrees(tilt), "travelM": float(travel), "mechanicalWorkJ": self.mechanical_work,
+                "footContacts": [geom in contacts for geom in self.foot_geoms],
                 "fallContacts": [self.model.geom(int(i)).name for i in sorted(contacts - self.feet)]}
         return self.observe(), float(reward), failed, beat >= BEATS and not failed, info
 

@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto';
 import { DANCE_TRAINING_TOOLS } from './dance-training.mjs';
-import { resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
+import {
+  DANCE_SECTION_TYPES,
+  DANCE_SECTION_LABELS,
+  resolveOriginmanDanceConfig,
+} from './originman-dance-config.mjs';
 import { rewardChangeText } from './dance-coaching.mjs';
 import { PluginRequestError } from './plugin-errors.mjs';
 
 export const ORIGINMAN_DANCE_DRAFT_TOOL = {
   name: 'rdk_originman_dance_draft',
   description:
-    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、交替摆臂/换重心/下蹲起身/展开定格和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
+    '仅在学员要求整理编舞草案时使用。算力离线、询问下一步、开始训练或改参时，用rdk_learning_guide。草案支持80–140 BPM、每段4/8/16拍、动作库中的10种动作和0.25–1幅度，默认50万步，8192步用于流程快检。草案只回显配置。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -23,7 +27,7 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
           properties: {
             type: {
               type: 'string',
-              enum: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+              enum: DANCE_SECTION_TYPES,
             },
             beats: { type: 'integer', enum: [4, 8, 16] },
             intensity: { type: 'number', minimum: 0.25, maximum: 1 },
@@ -412,8 +416,17 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       nextTool: 'rdk_workshop',
       nextArguments: { intent: answers.intent === 'new' ? 'new' : 'start', course: 'recovery' },
     });
-  if (!answers.dance && !answers.movement)
-    return progress('movement', '第一段舞想做什么？可以从左右交替摆臂开始。');
+  if (!answers.dance && !answers.movement) {
+    const availableActions = DANCE_SECTION_TYPES.map((type) => ({
+      type,
+      label: sectionTitles[type],
+    }));
+    return progress(
+      'movement',
+      `OriginMan 舞蹈支持 ${availableActions.length} 种仿真动作：${availableActions.map(({ label }) => label).join('、')}。可以从左右交替摆臂开始。`,
+      { availableActions },
+    );
+  }
   if (!answers.dance && answers.bpm === undefined)
     return progress('bpm', '这段舞想用多少 BPM？可以先试 100 BPM。');
   if (!answers.dance && answers.beats === undefined)
@@ -459,12 +472,7 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
   });
 }
 
-export const sectionTitles = {
-  'alternating-arms': '左右交替摆臂',
-  'weight-shift': '左右换重心',
-  'squat-rise': '下蹲起身',
-  'open-pose': '展开定格',
-};
+export const sectionTitles = DANCE_SECTION_LABELS;
 
 function editDanceSections(sections, edits) {
   const updated = sections.slice();
@@ -494,13 +502,16 @@ function danceInput(value) {
 
 export function originmanDanceDraft(args = {}) {
   const draft = resolveOriginmanDanceConfig(args);
+  const sections = draft.sections
+    .map(({ type, beats, intensity }) => `${sectionTitles[type]} ${beats} 拍（幅度 ${intensity}）`)
+    .join('、');
   return {
     scope: 'configuration-only',
     motionAuthorized: false,
     trainingSubmitted: false,
     qualityClaimAllowed: false,
     draft,
-    studentReply: `舞蹈草案已整理：${draft.title}，${draft.bpm} BPM、${draft.sections.length} 段、共 ${draft.totalBeats} 拍。它还没有提交训练；如果明确要开始，使用独立的OriginMan舞蹈仿真训练入口。训练质量和真机能力需要分别验证。`,
+    studentReply: `训练配方预览：${draft.title}，${draft.bpm} BPM，${sections}，共 ${draft.totalBeats} 拍。计划采样 ${draft.trainingSteps.toLocaleString('zh-CN')} 步。当前仅预览，尚未提交训练。`,
     nextAction:
       '保留草案作为课程设计输入；只有舞蹈训练Worker、模型合同、同源评测和回放接通并验收后，才可改为真实训练流程。',
   };

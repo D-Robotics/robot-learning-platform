@@ -7,6 +7,10 @@ and hardware assets are not included in this repository. A worker must point
 `model/scene.xml`, `model/model-manifest.json`, `model/meshes/`, and
 `reference.npy`.
 
+The Worker owner stages and verifies this bundle. Learners supply a
+choreography recipe, and PPO generates its rollout samples in MuJoCo. The
+course does not require an uploaded or registered workspace dataset.
+
 The training contract is simulation-only. The fixed model produces 18 policy
 actions (the 20-joint robot's two head actuators are excluded) and every
 choreography uses a fixed 78-value observation contract (up to eight section
@@ -20,7 +24,11 @@ learner-configurable choreography, PPO training, three-BPM style evaluation,
 and a nominal-BPM replay trace. For `squat-rise`, the target reaches its lowest
 point in the middle of the section and returns to the starting height at the
 end. The evaluation reports `squatDescentM` and `squatAscentM` separately and
-requires at least 24 mm in each direction. `adapter.py` implements the local worker's
+requires at least 24 mm in each direction. Single-arm wave, overhead raise,
+cross and open, side lean, alternating knee lift, and side tap use
+intensity-scaled pose targets. The evaluation checks active-beat pose
+tracking, and the two footwork sections also check floor contact at the
+intended phases. `adapter.py` implements the local worker's
 file protocol and emits a checked ONNX policy. The platform run contract carries
 the choreography under `training.originmanDance` and the worker receives it as
 `task.originmanDance`.

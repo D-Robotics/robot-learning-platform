@@ -9,7 +9,19 @@ import numpy as np
 
 from body import DT, Dance
 
+TRACKED_SECTION_TYPES = {
+    "single-arm-wave",
+    "arms-overhead",
+    "cross-and-open",
+    "side-lean",
+    "alternating-knee-lift",
+    "side-tap",
+}
+EXTENDED_ARM_SECTION_TYPES = {"single-arm-wave", "arms-overhead", "cross-and-open"}
+FOOT_SECTION_TYPES = {"alternating-knee-lift", "side-tap"}
+
 SECTION_TYPES = {
+    *TRACKED_SECTION_TYPES,
     "alternating-arms",
     "weight-shift",
     "squat-rise",
@@ -90,6 +102,69 @@ def squat_rise_phase(progress):
     return math.cos(2 * math.pi * progress)
 
 
+def tracked_style(type_, local, intensity, hands, upright, feet_delta, contacts):
+    """Return tracking reward, whether this beat tests the pose, and contact fidelity.
+
+    Hands are expressed relative to the torso. Feet use their reset world pose
+    so torso roll alone cannot produce a foot lift or a side step.
+    """
+    phase = local % 2.0
+    pulse = math.sin(math.pi * phase / 2.0) ** 2
+    active = pulse >= 0.55
+    contact_matches = True
+
+    if type_ == "single-arm-wave":
+        # Fixed left arm; the raised hand sweeps across its shoulder every beat.
+        wave = math.cos(2 * math.pi * local)
+        lateral = 0.145 + (0.035 + 0.02 * intensity) * wave
+        error = ((hands[0, 1] - lateral) / 0.023,
+                 (hands[0, 2] - (0.045 + 0.034 * intensity)) / 0.045,
+                 max(0.0, hands[1, 2] + 0.035) / 0.04)
+        active = abs(wave) >= 0.8
+    elif type_ == "arms-overhead":
+        height = -0.045 + (0.165 + 0.025 * intensity) * pulse
+        error = tuple((hands[:, 2] - height) / 0.055)
+        active = pulse >= 0.7 or pulse <= 0.2
+    elif type_ == "cross-and-open":
+        closed = 0.08 - 0.11 * intensity
+        opened = 0.20 + 0.12 * intensity
+        span = closed + (opened - closed) * pulse
+        stagger = 0.028 * (1.0 - pulse)
+        error = ((hands[0, 1] - hands[1, 1] - span) / 0.048,
+                 *(hands[:, 0] - 0.066) / 0.045,
+                 (hands[0, 2] - stagger) / 0.055,
+                 (hands[1, 2] + stagger) / 0.055)
+        active = active or pulse <= 0.25
+    elif type_ == "side-lean":
+        wave = math.sin(math.pi * local / 2.0)
+        roll = math.atan2(upright[1], upright[2])
+        error = ((roll - (0.10 + 0.16 * intensity) * wave) / 0.065,)
+        active = abs(wave) >= 0.65
+    elif type_ in FOOT_SECTION_TYPES:
+        swing = int(local // 2) % 2
+        stance = 1 - swing
+        offset = 1 if swing == 0 else -1
+        if type_ == "alternating-knee-lift":
+            height = (0.027 + 0.048 * intensity) * pulse
+            error = ((feet_delta[swing, 2] - height) / 0.018,
+                     (feet_delta[swing, 0] - (0.02 + 0.045 * intensity) * pulse) / 0.035)
+            contact_matches = contacts[stance] and (not active or not contacts[swing])
+        else:
+            # Lift on the way out and back. At peak displacement tap the floor.
+            lift = math.sin(math.pi * phase) ** 2
+            lateral = offset * (0.032 + 0.065 * intensity) * pulse
+            error = ((feet_delta[swing, 1] - lateral) / 0.022,
+                     (feet_delta[swing, 2] - 0.035 * lift) / 0.017)
+            active = pulse >= 0.88
+            contact_matches = contacts[stance] and (not active or contacts[swing])
+        error = (*error, feet_delta[stance, 0] / 0.04, feet_delta[stance, 1] / 0.04)
+    else:
+        raise ValueError(f"Unknown tracked dance section: {type_}")
+
+    tracking = math.exp(-float(np.mean(np.square(error))))
+    return tracking, active, bool(contact_matches)
+
+
 def validate_dance_config(value: dict) -> dict:
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise ValueError("task.originmanDance must be a schemaVersion 1 object")
@@ -167,6 +242,7 @@ class ConfigurableChoreography(Dance):
         self.end_beat = float(self.dance_config["totalBeats"])
         selected_bpm = float((options or {}).get("bpm", self.dance_config["bpm"]))
         super().reset(seed=seed, options={"bpm": selected_bpm})
+        self.home_feet = self.data.geom_xpos[list(self.foot_geoms)].copy()
         if self.training and options is None:
             self.bpm = float(np.clip(self.np_random.normal(self.dance_config["bpm"], 2.0), 80, 140))
         if self.training and len(self.sections) > 1 and self.np_random.random() < 0.5:
@@ -196,6 +272,13 @@ class ConfigurableChoreography(Dance):
         ].astype(np.float32)
 
     def step(self, action):
+        # Widen arm travel only for these simulation sections. Ramp into and out
+        # of that range to avoid abrupt servo targets at section boundaries.
+        _, _, local, _, current = self.condition()
+        reach = 0.0
+        if current["type"] in EXTENDED_ARM_SECTION_TYPES:
+            reach = min(1.0, 2.0 * local, 2.0 * (current["beats"] - local))
+        self.scale[self.arms] = 0.88 + 0.92 * reach
         _, _, failed, _, info = super().step(action)
         beat, index, local, progress, section = self.condition()
         root = self.data.xpos[self.torso]
@@ -233,13 +316,23 @@ class ConfigurableChoreography(Dance):
                 + 1.10 * np.clip(-squat_phase * arm_forward / 0.13, -1, 1)
                 + 0.4 * accent
             )
-        else:
+        elif section["type"] == "open-pose":
             settle = float(progress >= 0.75)
             open_arms = np.clip((spread - 0.18) / 0.17, 0, 1.4)
             style = intensity * (
                 (1 - settle) * (accent + 0.85 * open_arms)
                 + settle * (self.reward["settleArmsWeight"] * open_arms + self.reward["settleStillnessWeight"] * math.exp(-2.2 * speed**2))
             )
+        else:
+            tracking, active, contact_matches = tracked_style(
+                section["type"], local, intensity, hand, orientation[2],
+                self.data.geom_xpos[list(self.foot_geoms)] - self.home_feet,
+                info["footContacts"],
+            )
+            style = 4.0 * tracking
+            if section["type"] in FOOT_SECTION_TYPES:
+                style += 0.8 * contact_matches
+            info.update(styleTracking=tracking, styleActive=active, styleContactMatches=contact_matches)
         tilt = math.radians(info["tiltDeg"])
         work = info["mechanicalWorkJ"] - getattr(self, "previous_work", 0.0) if self.ticks > 1 else info["mechanicalWorkJ"]
         self.previous_work = info["mechanicalWorkJ"]

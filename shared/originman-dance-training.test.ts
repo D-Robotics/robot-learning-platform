@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DANCE_REWARD_LIMITS,
+  ORIGINMAN_DANCE_SECTION_TYPES,
   normalizeOriginmanDanceTraining,
 } from './originman-dance-training.js';
 import { normalizeTrainingSpec } from './sim2real.js';
@@ -27,6 +28,22 @@ describe('OriginMan dance platform contract', () => {
       numEnvs: 64,
       originmanDance: { ...dance, seed: 7, trainingSteps: 500_000, rewardTuning },
     });
+  });
+
+  it('accepts each new action at the API boundary and preserves the eight-section cap', () => {
+    const sections = [
+      'single-arm-wave',
+      'arms-overhead',
+      'cross-and-open',
+      'side-lean',
+      'alternating-knee-lift',
+      'side-tap',
+    ].map((type) => ({ type, beats: 4, intensity: 0.6 }));
+    expect(ORIGINMAN_DANCE_SECTION_TYPES).toHaveLength(10);
+    expect(normalizeOriginmanDanceTraining({ ...dance, sections })?.sections).toEqual(sections);
+    expect(
+      normalizeOriginmanDanceTraining({ ...dance, sections: sections.concat(sections) }),
+    ).toBeNull();
   });
 
   it('rejects incorrect engines, excessive parallelism and arbitrary reward keys', () => {

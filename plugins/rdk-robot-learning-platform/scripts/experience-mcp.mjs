@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
 import { isDeepStrictEqual } from 'node:util';
+import { DANCE_SECTION_TYPES } from './originman-dance-config.mjs';
 import { danceCoaching } from './dance-coaching.mjs';
 import {
   connectMcp,
@@ -1311,8 +1312,19 @@ export function experienceProxy(
     }
     if (method === 'tools/list') {
       const result = validateCatalogPage(await upstream.request(method, params, { signal }));
-      const forUi = (tool) =>
-        uiEnabled && tool.annotations?.readOnlyHint !== true
+      const forUi = (tool) => {
+        const danceType = (schema) =>
+          schema?.properties?.originmanDance?.properties?.sections?.items?.properties?.type;
+        if (
+          tool.name === 'rdk_training_submit' &&
+          Array.isArray(danceType(tool.inputSchema)?.enum)
+        ) {
+          // The retained core forwards dance recipes to the platform for validation.
+          const inputSchema = structuredClone(tool.inputSchema);
+          danceType(inputSchema).enum = DANCE_SECTION_TYPES;
+          tool = { ...tool, inputSchema };
+        }
+        return uiEnabled && tool.annotations?.readOnlyHint !== true
           ? {
               ...tool,
               _meta: {
@@ -1321,6 +1333,7 @@ export function experienceProxy(
               },
             }
           : tool;
+      };
       // Preserve upstream paging; advertise the extension exactly once, on the final page.
       return result.nextCursor === undefined
         ? {
@@ -1881,7 +1894,7 @@ export function experienceProxy(
               parameters: {
                 defaultTrainingSteps: 500000,
                 bpmRange: [80, 140],
-                sectionTypes: ['alternating-arms', 'weight-shift', 'squat-rise', 'open-pose'],
+                sectionTypes: DANCE_SECTION_TYPES,
                 beatsPerSection: [4, 8, 16],
                 maxSections: 8,
                 intensityRange: [0.25, 1],

@@ -13,7 +13,15 @@ export const DANCE_REWARDS = {
 };
 
 // Within each section, address stability or timing before increasing movement amplitude.
+const poseTracking = ['activePoseTracking', '动作关键拍姿态跟踪得分', 0.62, '%'];
+const floorContact = ['activeSupportFraction', '动作关键拍触地符合率', 0.8, '%'];
 const sections = {
+  'single-arm-wave': [poseTracking],
+  'arms-overhead': [poseTracking],
+  'cross-and-open': [poseTracking],
+  'side-lean': [poseTracking],
+  'alternating-knee-lift': [poseTracking, floorContact],
+  'side-tap': [poseTracking, floorContact],
   'alternating-arms': [
     ['alternatingArmFraction', '左右交替方向命中率', 0.65, '%'],
     ['armBeatCorrelation', '摆臂速度与节拍相关性', 0.2, '', 'armSpeedWeight'],
