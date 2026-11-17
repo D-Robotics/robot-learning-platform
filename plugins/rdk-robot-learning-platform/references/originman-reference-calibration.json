@@ -1,0 +1,235 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "name": "originman-rl-pack.zip",
+    "date": "2026-11-17",
+    "evidence": "source-pack-reported-physical-validation",
+    "calibrationSha256": "06e741f20dafe192a6256099af2a4ec71844022006e7f8879d38619b7338134b",
+    "jointMapSha256": "25462f9684d65d9ae12411506672a0cc26dcce3e12ec6e1483cbf3b46f72f55c"
+  },
+  "robot": {
+    "jointOrder": [
+      "head_pan",
+      "head_tilt",
+      "l_hip_roll",
+      "l_hip_pitch",
+      "l_knee",
+      "l_ank_pitch",
+      "l_ank_roll",
+      "r_hip_roll",
+      "r_hip_pitch",
+      "r_knee",
+      "r_ank_pitch",
+      "r_ank_roll",
+      "l_sho_pitch",
+      "l_sho_roll",
+      "l_el",
+      "l_hand",
+      "r_sho_pitch",
+      "r_sho_roll",
+      "r_el",
+      "r_hand"
+    ],
+    "servoOrder": [
+      "l_ank_roll",
+      "l_ank_pitch",
+      "l_knee",
+      "l_hip_pitch",
+      "l_hip_roll",
+      "l_el",
+      "l_sho_roll",
+      "l_sho_pitch",
+      "r_ank_roll",
+      "r_ank_pitch",
+      "r_knee",
+      "r_hip_pitch",
+      "r_hip_roll",
+      "r_el",
+      "r_sho_roll",
+      "r_sho_pitch",
+      "l_hand",
+      "r_hand"
+    ],
+    "massKg": 1.992,
+    "standHeightM": 0.223663,
+    "stanceRadOverrides": {
+      "l_sho_roll": 1.5707963267948966,
+      "r_sho_roll": -1.5707963267948966,
+      "l_ank_roll": 0.0,
+      "r_ank_roll": 0.0
+    }
+  },
+  "servoMap": [
+    {
+      "joint": "head_pan",
+      "channel": "PWM2",
+      "pwm_zero": 1500,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "head_tilt",
+      "channel": "PWM1",
+      "pwm_zero": 1500,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_ank_roll",
+      "servo": 1,
+      "pwm_zero": 500,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_ank_pitch",
+      "servo": 2,
+      "pwm_zero": 390,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_knee",
+      "servo": 3,
+      "pwm_zero": 500,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_hip_pitch",
+      "servo": 4,
+      "pwm_zero": 600,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_hip_roll",
+      "servo": 5,
+      "pwm_zero": 500,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_el",
+      "servo": 6,
+      "pwm_zero": 575,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_sho_roll",
+      "servo": 7,
+      "pwm_zero": 800,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_sho_pitch",
+      "servo": 8,
+      "pwm_zero": 725,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "l_hand",
+      "servo": 17,
+      "pwm_zero": 500,
+      "sign": null,
+      "evidence": "unmeasured"
+    },
+    {
+      "joint": "r_ank_roll",
+      "servo": 9,
+      "pwm_zero": 500,
+      "sign": 1,
+      "evidence": "mirror-inferred"
+    },
+    {
+      "joint": "r_ank_pitch",
+      "servo": 10,
+      "pwm_zero": 610,
+      "sign": -1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_knee",
+      "servo": 11,
+      "pwm_zero": 500,
+      "sign": -1,
+      "evidence": "mirror-inferred"
+    },
+    {
+      "joint": "r_hip_pitch",
+      "servo": 12,
+      "pwm_zero": 400,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_hip_roll",
+      "servo": 13,
+      "pwm_zero": 500,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_el",
+      "servo": 14,
+      "pwm_zero": 425,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_sho_roll",
+      "servo": 15,
+      "pwm_zero": 200,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_sho_pitch",
+      "servo": 16,
+      "pwm_zero": 275,
+      "sign": 1,
+      "evidence": "measured"
+    },
+    {
+      "joint": "r_hand",
+      "servo": 18,
+      "pwm_zero": 500,
+      "sign": null,
+      "evidence": "unmeasured"
+    }
+  ],
+  "pwmScale": {
+    "radPerPwm": 0.00418,
+    "evidence": "placeholder-per-joint-scale-unmeasured"
+  },
+  "trajectory": {
+    "fps": 50,
+    "positionBasis": "relative-to-stand",
+    "maxAbsRad": 2.09,
+    "maxSpeedRadPerS": 6.0,
+    "jointTrackingOnly": true
+  },
+  "simulation": {
+    "friction": [1.0, 0.5, 0.05],
+    "condim": 6,
+    "kp": 40.0,
+    "kd": 2.0,
+    "kpAnkleRoll": 2.5,
+    "kdAnkleRoll": 0.225,
+    "effortLimit": 8.0,
+    "lagSeconds": 0.12,
+    "physicsTimestepSeconds": 0.001,
+    "controlHz": 50,
+    "sourceTrainingTimestepSeconds": 0.002,
+    "sourceTrainingDecimation": 20
+  },
+  "evaluation": {
+    "maxTiltDeg": 32.0,
+    "maxAbsFinalYawDeg": 5,
+    "requireFullReference": true,
+    "comMarginDiagnosticCm": -2.5
+  }
+}

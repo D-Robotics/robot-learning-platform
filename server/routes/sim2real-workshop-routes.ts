@@ -1,3 +1,10 @@
+import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
+import {
+  ORIGINMAN_REFERENCE_ENGINE,
+  originmanReferenceCalibration,
+  originmanReferenceExample,
+  validateOriginmanReferenceTrajectory,
+} from '../../shared/originman-reference-training.js';
 import originManDanceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json' with { type: 'json' };
 import { isDeepStrictEqual } from 'node:util';
 import originManManifest from '../../plugins/rdk-robot-learning-platform/references/originman-manifest.json' with { type: 'json' };
@@ -56,6 +63,93 @@ export function registerSim2RealWorkshopRoutes(
         else sendApiError(s, 503, 'WORKSHOP_UNAVAILABLE', '课程暂不可用，保留原实验，不重新提交。');
       }
     });
+  const referenceApi = options.prefix + '/originman-reference';
+  router.get(
+    referenceApi,
+    handle(async (_request, owner) => ({
+      calibration: originmanReferenceCalibration,
+      example: originmanReferenceExample(),
+      resources: (await listSim2RealComputeResources(owner))
+        .filter(
+          ({ status, source, mock, engines }) =>
+            status === 'online' &&
+            source !== 'local-agent' &&
+            mock === false &&
+            engines?.includes(ORIGINMAN_REFERENCE_ENGINE),
+        )
+        .map(({ id, name, cuda }) => ({ id, name, cuda })),
+    })),
+  );
+  router.post(
+    referenceApi + '/validate',
+    handle(async (request) => {
+      try {
+        const trajectory = validateOriginmanReferenceTrajectory(request.body?.trajectory);
+        return {
+          frames: trajectory.joint_pos.length,
+          durationSeconds: trajectory.joint_pos.length / trajectory.fps,
+          fps: trajectory.fps,
+        };
+      } catch (error) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_INVALID',
+          error instanceof Error ? error.message : '参考轨迹无效。',
+          400,
+        );
+      }
+    }),
+  );
+  router.post(
+    referenceApi + '/model',
+    handle(async (request, owner) => {
+      const resource = await getSim2RealComputeResource(
+        String(request.body?.computeResourceId ?? ''),
+        owner,
+      );
+      if (
+        !resource ||
+        resource.status !== 'online' ||
+        resource.mock !== false ||
+        resource.source === 'local-agent' ||
+        !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
+      )
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_WORKER_MISSING',
+          '请选择已连接且支持参考轨迹跟跳的训练 Worker。',
+          409,
+        );
+      const manifest = validateSim2RealManifest(referenceManifest).manifest;
+      if (!manifest)
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_CONTRACT_INVALID',
+          '专用策略契约暂不可用。',
+          503,
+        );
+      const find = async () =>
+        (await listSim2RealModels(owner)).find(
+          ({ manifest: stored }) =>
+            stored.modelId === manifest.modelId && stored.version === manifest.version,
+        );
+      let model = await find();
+      if (!model) {
+        try {
+          model = await createSim2RealModel(manifest, owner);
+        } catch (error) {
+          if (!(error instanceof Error) || error.message !== 'sim2real_model_version_exists')
+            throw error;
+          model = await find();
+          if (!model) throw error;
+        }
+      }
+      if (!isDeepStrictEqual(model.manifest, manifest))
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_CONTRACT_MISMATCH',
+          '账号下的同名策略契约与跟跳任务不匹配。',
+          409,
+        );
+      return { modelId: model.id };
+    }),
+  );
   router.get(
     options.prefix + '/model-templates/originman',
     handle(async () => ({

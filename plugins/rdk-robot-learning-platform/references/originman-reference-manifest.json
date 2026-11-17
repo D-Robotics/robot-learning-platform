@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "modelId": "originman-reference-workshop",
+  "displayName": "OriginMan · 参考轨迹跟跳",
+  "version": "ppo-reference-v1",
+  "robot": {
+    "id": "originman",
+    "variant": "legs"
+  },
+  "contract": {
+    "id": "custom-policy-originman-reference-v1",
+    "robotId": "originman",
+    "jointCount": 20,
+    "observationSize": 96,
+    "actionSize": 18,
+    "controlHz": 50,
+    "physicsTimestepSeconds": 0.001,
+    "decimation": 20,
+    "observationLayout": [
+      {
+        "name": "projected_gravity_and_body_gyro",
+        "size": 6
+      },
+      {
+        "name": "joint_position_error",
+        "size": 18
+      },
+      {
+        "name": "joint_velocity",
+        "size": 18
+      },
+      {
+        "name": "reference_joint_position_error",
+        "size": 18
+      },
+      {
+        "name": "reference_joint_velocity",
+        "size": 18
+      },
+      {
+        "name": "previous_residual_action",
+        "size": 18
+      }
+    ]
+  },
+  "simulator": {
+    "backends": ["local"],
+    "policyArtifactId": "originman-reference-policy-placeholder"
+  },
+  "artifacts": [
+    {
+      "id": "originman-reference-policy-placeholder",
+      "role": "policy",
+      "ref": "artifact://originman-reference/contract-placeholder",
+      "kind": "source",
+      "format": "onnx",
+      "name": "originman-reference-contract-placeholder.onnx",
+      "workload": "humanoid-dance"
+    }
+  ],
+  "metadata": {
+    "source": "Existing hash-verified OriginMan MuJoCo worker bundle.",
+    "notes": "Simulation-only reference trajectory tracking PPO with 96 observations, 18 residual joint commands and 50 Hz control."
+  }
+}

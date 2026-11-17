@@ -48,10 +48,11 @@ def resolve_training_device(requested: str) -> str:
 
 
 class WorkerProgress(BaseCallback):
-    def __init__(self, total_timesteps, rollout_size):
+    def __init__(self, total_timesteps, rollout_size, engine="originman-dance-ppo"):
         super().__init__()
         self.total_iterations = max(1, math.ceil(total_timesteps / rollout_size))
         self.rollout_size = rollout_size
+        self.engine = engine
         self.started = time.monotonic()
         self.episode_successes = []
 
@@ -67,7 +68,7 @@ class WorkerProgress(BaseCallback):
         recent_success = float(np.mean(self.episode_successes[-50:])) if self.episode_successes else 0.0
         iteration = min(self.total_iterations, max(1, math.ceil(self.model.num_timesteps / self.rollout_size)))
         print(
-            f"[{ENGINE_ID}] iter {iteration}/{self.total_iterations} meanReward={mean_reward:.5f} "
+            f"[{self.engine}] iter {iteration}/{self.total_iterations} meanReward={mean_reward:.5f} "
             f"recentSuccess={recent_success:.4f} elapsed={time.monotonic() - self.started:.1f}s",
             flush=True,
         )

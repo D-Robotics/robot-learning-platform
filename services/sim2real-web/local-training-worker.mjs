@@ -1301,18 +1301,23 @@ async function handleDanceVideo(request, response) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
-  const dance = job.metrics?.originmanDance;
-  const video = dance?.video;
+  const taskId = job.request?.task?.id;
+  const evidence =
+    taskId === 'originman-reference-track'
+      ? job.metrics?.originmanReference
+      : taskId === 'originman-dance'
+        ? job.metrics?.originmanDance
+        : undefined;
+  const video = evidence?.video;
   if (
     job.status !== 'completed' ||
     job.mock !== false ||
-    job.request?.task?.id !== 'originman-dance' ||
     video?.file !== 'dance-replay.mp4' ||
     ![video.sha256, video.policySha256, video.sourceReplaySha256].every((value) =>
       /^[a-f0-9]{64}$/.test(value ?? ''),
     ) ||
     video.policySha256 !== job.artifact?.sha256 ||
-    video.sourceReplaySha256 !== dance.replay?.sha256 ||
+    video.sourceReplaySha256 !== evidence.replay?.sha256 ||
     !Number.isSafeInteger(video.sizeBytes) ||
     video.sizeBytes < 1 ||
     video.sizeBytes > MAX_DANCE_VIDEO_BYTES

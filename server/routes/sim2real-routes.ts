@@ -1,3 +1,9 @@
+import { isDeepStrictEqual } from 'node:util';
+import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
+import {
+  ORIGINMAN_REFERENCE_ENGINE,
+  ORIGINMAN_REFERENCE_TASK,
+} from '../../shared/originman-reference-training.js';
 import { registerSim2RealDanceEvaluationRoutes } from './sim2real-dance-evaluation-routes.js';
 import { setupDanceGoals } from '../sim2real/dance-goals.mjs';
 import { probeComputeWorker, safeComputeHealthText } from '../sim2real/compute-worker-health.js';
@@ -97,6 +103,7 @@ import {
   listSim2RealArtifacts,
   listSim2RealEvaluations,
   listSim2RealComputeResources,
+  getSim2RealComputeResource,
   getSim2RealComputeResourceSecret,
   createSim2RealComputeResource,
   updateSim2RealComputeResource,
@@ -1397,6 +1404,22 @@ function parseRunRequest(
       }
     }
   }
+  if (
+    (taskId === ORIGINMAN_REFERENCE_TASK || training?.originmanReference) &&
+    (taskId !== ORIGINMAN_REFERENCE_TASK ||
+      !training?.originmanReference ||
+      backend !== 'local' ||
+      body.resumeFrom != null ||
+      !String(body.computeResourceId ?? '').trim())
+  ) {
+    return {
+      apiError: {
+        status: 400,
+        code: 'ORIGINMAN_REFERENCE_RUN_INVALID',
+        message: '参考轨迹跟跳须选择支持该引擎的训练 Worker，并提交完整轨迹和专用 PPO 配置。',
+      },
+    };
+  }
   const resumeResult = normalizeResumeFrom(body.resumeFrom);
   if (resumeResult.error) {
     return {
@@ -2112,12 +2135,16 @@ async function autoAttachEvaluationTelemetry(
 }
 
 function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
-  const dance = run.metrics?.originmanDance;
-  const video = dance?.video;
+  const evidence =
+    run.taskId === ORIGINMAN_REFERENCE_TASK
+      ? run.metrics?.originmanReference
+      : run.taskId === 'originman-dance'
+        ? run.metrics?.originmanDance
+        : undefined;
+  const video = evidence?.video;
   if (
     run.status !== 'completed' ||
     run.mock !== false ||
-    run.taskId !== 'originman-dance' ||
     run.backend !== 'local' ||
     !run.externalRunId ||
     run.relayAgentUrl ||
@@ -2129,7 +2156,7 @@ function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
     !video.sourceReplaySha256 ||
     !/^[a-f0-9]{64}$/.test(video.sourceReplaySha256) ||
     video.policySha256 !== run.artifact?.sha256 ||
-    video.sourceReplaySha256 !== dance?.replay?.sha256 ||
+    video.sourceReplaySha256 !== evidence?.replay?.sha256 ||
     typeof video.sizeBytes !== 'number' ||
     !Number.isSafeInteger(video.sizeBytes) ||
     video.sizeBytes < 1 ||
@@ -2138,6 +2165,8 @@ function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
     return null;
   return { sha256: video.sha256, sizeBytes: video.sizeBytes, externalRunId: run.externalRunId };
 }
+
+const referenceModelManifest = validateSim2RealManifest(referenceManifest).manifest;
 
 export function createSim2RealRouter(
   deps: { runOnDevice?: RunOnDevice; auth?: Sim2RealAuthPort } = {},
@@ -4287,6 +4316,38 @@ export function createSim2RealRouter(
         });
         return;
       }
+      if (taskId === ORIGINMAN_REFERENCE_TASK) {
+        if (
+          !referenceModelManifest ||
+          !isDeepStrictEqual(model.manifest.contract, referenceModelManifest.contract) ||
+          !isDeepStrictEqual(model.manifest.robot, referenceModelManifest.robot) ||
+          !isDeepStrictEqual(model.manifest.simulator, referenceModelManifest.simulator) ||
+          !isDeepStrictEqual(model.manifest.artifacts, referenceModelManifest.artifacts)
+        ) {
+          sendApiError(
+            response,
+            422,
+            'ORIGINMAN_REFERENCE_CONTRACT_MISMATCH',
+            '请使用参考轨迹跟跳的独立仿真策略契约。',
+          );
+          return;
+        }
+        const resource = await getSim2RealComputeResource(computeResourceId!, owner);
+        if (
+          !resource ||
+          resource.source === 'local-agent' ||
+          resource.mock !== false ||
+          !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
+        ) {
+          sendApiError(
+            response,
+            409,
+            'ORIGINMAN_REFERENCE_WORKER_MISSING',
+            '所选 Worker 不支持参考轨迹跟跳引擎。',
+          );
+          return;
+        }
+      }
       // A project supplies its dataset snapshot by default.  An explicit
       // datasetIds array overrides that default, but every id must be visible
       // to the current account and match the model contract when declared.
@@ -4390,6 +4451,19 @@ export function createSim2RealRouter(
       }
       const now = new Date().toISOString();
 
+      const { originmanReference, ...trainingWithoutTrajectory } = training ?? {};
+      const recordedTraining = originmanReference
+        ? ({
+            ...trainingWithoutTrajectory,
+            originmanReferenceSummary: {
+              trainingSteps: originmanReference.trainingSteps,
+              seed: originmanReference.seed,
+              frames: originmanReference.trajectory.joint_pos.length,
+              fps: originmanReference.trajectory.fps,
+            },
+          } as Sim2RealTrainingSpec)
+        : training;
+
       // Reserve before any external side effect.  The reservation is an
       // atomic ledger operation, so concurrent retries carrying the same key
       // cannot both reach RoboGo/local runner and accidentally start two jobs.
@@ -4414,7 +4488,7 @@ export function createSim2RealRouter(
                   : backend === 'local'
                     ? '本地训练请求已受理，正在联系 runner。'
                     : '运行请求已受理，正在准备结果。',
-              ...(training ? { training } : {}),
+              ...(recordedTraining ? { training: recordedTraining } : {}),
               ...(resumeFrom ? { resumeFrom } : {}),
             },
             owner,
@@ -4472,7 +4546,7 @@ export function createSim2RealRouter(
                 ...(computeResourceId ? { computeResourceId } : {}),
                 ...(datasetIds.length ? { datasetIds } : {}),
                 ...finalRunInput,
-                ...(training ? { training } : {}),
+                ...(recordedTraining ? { training: recordedTraining } : {}),
                 ...(resumeFrom ? { resumeFrom } : {}),
               },
               owner,

@@ -1,4 +1,5 @@
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
+const REFERENCE_TASK = 'originman-reference-track';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const STATUS_LABELS = Object.freeze({
   ready: '已准备',
@@ -61,6 +62,11 @@ function danceEvidenceFor(run) {
   return run.metrics?.originmanDance ?? null;
 }
 
+function replayEvidenceFor(run) {
+  return run.taskId === REFERENCE_TASK ? run.metrics?.originmanReference : danceEvidenceFor(run);
+}
+
+
 function metricRows(evidence) {
   if (Array.isArray(evidence?.evaluations)) {
     return evidence.evaluations.flatMap(({ bpm, sections }) =>
@@ -122,6 +128,7 @@ function drawCurve(document, run) {
   const axis = document.createElementNS(namespace, 'path');
   axis.setAttribute('d', 'M56 24V204H686');
   axis.setAttribute('class', 'reward-axis');
+  axis.setAttribute('fill', 'none');
   const line = document.createElementNS(namespace, 'polyline');
   line.setAttribute('points', coordinates);
   line.setAttribute('class', 'reward-line');
@@ -170,17 +177,38 @@ function renderDance(document, run) {
   text(document, 'run-kind', 'OriginMan · PPO 舞蹈仿真');
 }
 
+function referenceQualityRows(evidence) {
+  if (!evidence) return [];
+  const rows = [
+    ['轨迹完成度', `${evidence.framesEvaluated} / ${evidence.framesExpected} 帧`],
+    ['平均关节跟踪误差', `${evidence.trackingMaeRad.toFixed(4)} rad`],
+    ['峰值倾角（通过标准 < 32°）', `${evidence.maxTiltDeg.toFixed(2)}°`],
+    ['末尾偏航（通过标准绝对值 < 5°）', `${evidence.finalYawDeg.toFixed(2)}°`],
+    ['参考轨迹 SHA-256', evidence.referenceSha256],
+  ];
+  return rows;
+}
+
 function renderQuality(document, run) {
   const evidence = danceEvidenceFor(run);
+  const tracking = run.taskId === REFERENCE_TASK;
+  const reference = tracking ? run.metrics?.originmanReference : null;
   const gate = evidence?.qualityGate;
-  const passed = typeof evidence?.qualityGatePassed === 'boolean'
+  const passed = tracking ? reference?.qualityGatePassed : typeof evidence?.qualityGatePassed === 'boolean'
     ? evidence.qualityGatePassed
     : typeof gate?.passed === 'boolean'
       ? gate.passed
       : null;
   const isDance = run.taskId === 'originman-dance' || Boolean(evidence);
-  text(document, 'quality-status', passed === true ? '风格门通过' : passed === false ? '风格门未通过' : '待核验');
-  text(document, 'quality-summary', !isDance
+  const gateLabel = tracking ? '跟跳评测' : '风格门';
+  text(document, 'quality-status', passed === true ? gateLabel + '通过' : passed === false ? gateLabel + '未通过' : '待核验');
+  text(document, 'quality-summary', tracking
+    ? reference
+      ? '评测使用本次导出的 ONNX 和同一份参考轨迹。完整度、倾角和偏航同时达标才通过。'
+      : run.status === 'failed'
+        ? '训练或训练前物理筛查失败，请查看本轮日志。'
+        : '同一轨迹的 ONNX 仿真评测将在训练完成后显示。'
+    : !isDance
     ? '该运行没有舞蹈专用质量门字段。'
     : passed === true
       ? '本次 Run 返回的舞蹈质量门已通过。'
@@ -189,7 +217,7 @@ function renderQuality(document, run) {
         : run.status === 'completed'
           ? '运行已结束，但没有可核验的舞蹈质量门结果。'
           : '运行终态后再读取本次舞蹈质量门结果。');
-  const rows = metricRows(evidence);
+  const rows = tracking ? referenceQualityRows(reference) : metricRows(evidence);
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
   if (table && body) {
@@ -209,7 +237,7 @@ function renderQuality(document, run) {
 }
 
 function verifiedDanceVideo(run) {
-  const evidence = danceEvidenceFor(run);
+  const evidence = replayEvidenceFor(run);
   const video = evidence?.video;
   const policySha = run.artifact?.sha256;
   const replaySha = evidence?.replay?.sha256;
@@ -220,8 +248,9 @@ function verifiedDanceVideo(run) {
 }
 
 function danceVideoUrl(location, run, runId) {
-  const candidate = run.links?.danceVideo ?? danceEvidenceFor(run)?.video?.url ??
-    new URLSearchParams(location.search).get('videoUrl');
+  const candidate = run.links?.danceVideo ?? replayEvidenceFor(run)?.video?.url ??
+    new URLSearchParams(location.search).get('videoUrl') ??
+    (run.taskId === REFERENCE_TASK ? `./api/v1/duck/runs/${encodeURIComponent(runId)}/dance-video` : null);
   if (typeof candidate !== 'string' || candidate.length > 2048) return null;
   try {
     const href = new URL(candidate, location.href);
@@ -275,7 +304,7 @@ function renderVideo(document, location, run, runId) {
     video.load();
   }
   empty.hidden = false;
-  const evidence = danceEvidenceFor(run);
+  const evidence = replayEvidenceFor(run);
   if (!evidence?.video && run.status === 'completed' && run.training?.video === false) {
     text(document, 'replay-status', '提交时关闭了视频生成');
     text(document, 'replay-empty', '本次 Run 未生成视频。仍可查看训练曲线和分段评测。');
@@ -295,11 +324,12 @@ function renderVideo(document, location, run, runId) {
 }
 
 function renderRun(document, location, run, runId) {
+  const tracking = run.taskId === REFERENCE_TASK;
   const isDance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
   const status = STATUS_LABELS[run.status] ?? '状态待核对';
-  text(document, 'run-title', isDance ? 'OriginMan · 本次舞蹈训练' : '本次训练运行');
+  text(document, 'run-title', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : '本次训练运行');
   text(document, 'run-status', status);
-  text(document, 'run-task', isDance ? 'OriginMan · 强化学习舞蹈' : run.taskId ?? run.productId ?? '—');
+  text(document, 'run-task', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 强化学习舞蹈' : run.taskId ?? run.productId ?? '—');
   text(document, 'run-engine', run.training?.engine ?? run.training?.algorithm ?? '—');
   text(document, 'run-id-label', `Run ${runId}`);
   text(document, 'run-id-detail', runId);
@@ -318,7 +348,7 @@ function renderRun(document, location, run, runId) {
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
   const hardware = document.getElementById('run-hardware-readiness');
   if (hardware) {
-    hardware.hidden = !isDance || run.status !== 'completed';
+    hardware.hidden = !(isDance || tracking) || run.status !== 'completed';
     hardware.textContent = run.artifact?.deployable === true
       ? '真机迁移需核对同源评测、已发布制品、目标设备和部署预检。'
       : '当前策略用于仿真。真机迁移还需板端契约、关节标定和可部署制品。';
@@ -334,12 +364,14 @@ function renderRun(document, location, run, runId) {
       copyConfig.href = href.toString();
     }
   }
-  const replayUrl = isDance ? danceVideoUrl(location, run, runId) : null;
-  const replayVerified = isDance && verifiedDanceVideo(run);
+  const replayUrl = (isDance || tracking) ? danceVideoUrl(location, run, runId) : null;
+  const replayVerified = (isDance || tracking) && verifiedDanceVideo(run);
   text(document, 'run-next-action', run.status === 'queued'
     ? '本次训练正在排队；页面会继续查询同一 Run。'
     : run.status === 'running'
       ? '本次训练正在运行；曲线只显示该 Run 实际上报的采样点。'
+      : run.status === 'completed' && tracking
+        ? '本次跟跳训练已结束。请查看同源评测、回放和 ONNX 下载。'
       : run.status === 'completed' && isDance && replayVerified && replayUrl
         ? '本次舞蹈训练已结束；风格门结果已显示，可以播放已核验的本次仿真回放。'
         : run.status === 'completed' && isDance
@@ -352,7 +384,7 @@ function renderRun(document, location, run, runId) {
   const body = document.getElementById('run-config-body');
   const configRows = [
     ['算法', config.algorithm],
-    ['训练预算', danceConfigFor(run)?.trainingSteps ?? config.timesteps ?? config.trainingSteps ?? config.totalTimesteps],
+    ['训练预算', config.originmanReferenceSummary?.trainingSteps ?? config.originmanReference?.trainingSteps ?? danceConfigFor(run)?.trainingSteps ?? config.timesteps ?? config.trainingSteps ?? config.totalTimesteps],
     ['实际训练步数', run.metrics?.trainingSteps],
     ['实际训练设备', run.metrics?.trainingDeviceName ?? run.metrics?.trainingDevice],
     ['并行环境', config.numEnvs],
@@ -377,6 +409,7 @@ function renderRun(document, location, run, runId) {
   }
   renderDance(document, run);
   renderQuality(document, run);
+  if (tracking) text(document, 'run-kind', 'OriginMan · 参考轨迹仿真');
   drawCurve(document, run);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');

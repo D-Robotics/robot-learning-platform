@@ -118,6 +118,8 @@ try {
       'submission-journal',
     ].map((name) => 'plugins/rdk-robot-learning-platform/scripts/' + name + '.mjs'),
     'plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',
+    'plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json',
+    'plugins/rdk-robot-learning-platform/references/originman-reference-calibration.json',
   ]) {
     copyFile(file, path.join('dist-server', file));
   }

@@ -1,3 +1,8 @@
+import {
+  originmanReferenceCalibration,
+  ORIGINMAN_REFERENCE_ENGINE,
+  ORIGINMAN_REFERENCE_TASK,
+} from '../../shared/originman-reference-training.js';
 import type {
   Sim2RealCheckpointRef,
   Sim2RealModelManifest,
@@ -553,6 +558,73 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   };
 }
 
+function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanReference'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const { replay, video: safeVideo } = safeDanceMetrics(value) ?? {};
+  const rawVideo = (value as Record<string, unknown>).video as Record<string, unknown> | undefined;
+  const video =
+    safeVideo &&
+    rawVideo?.fps === 50 &&
+    typeof rawVideo.durationSeconds === 'number' &&
+    Number.isFinite(rawVideo.durationSeconds) &&
+    rawVideo.durationSeconds > 0 &&
+    rawVideo.durationSeconds <= 241
+      ? { ...safeVideo, fps: rawVideo.fps, durationSeconds: rawVideo.durationSeconds }
+      : undefined;
+  const limits = originmanReferenceCalibration.evaluation;
+  const {
+    framesExpected,
+    framesEvaluated,
+    trackingMaeRad,
+    maxTiltDeg,
+    finalYawDeg,
+    qualityGatePassed,
+    referenceSha256,
+    sceneSha256,
+  } = value as Record<string, unknown>;
+  if (
+    typeof framesExpected !== 'number' ||
+    !Number.isSafeInteger(framesExpected) ||
+    typeof framesEvaluated !== 'number' ||
+    !Number.isSafeInteger(framesEvaluated) ||
+    framesExpected < 50 ||
+    framesExpected > 12_000 ||
+    framesEvaluated < 1 ||
+    framesEvaluated > framesExpected ||
+    typeof trackingMaeRad !== 'number' ||
+    !Number.isFinite(trackingMaeRad) ||
+    trackingMaeRad < 0 ||
+    typeof maxTiltDeg !== 'number' ||
+    !Number.isFinite(maxTiltDeg) ||
+    maxTiltDeg < 0 ||
+    maxTiltDeg > 180 ||
+    typeof finalYawDeg !== 'number' ||
+    !Number.isFinite(finalYawDeg) ||
+    Math.abs(finalYawDeg) > 180 ||
+    typeof qualityGatePassed !== 'boolean' ||
+    typeof referenceSha256 !== 'string' ||
+    typeof sceneSha256 !== 'string' ||
+    ![referenceSha256, sceneSha256].every((digest) => /^[a-f0-9]{64}$/.test(digest))
+  )
+    return undefined;
+  return {
+    framesExpected,
+    framesEvaluated,
+    trackingMaeRad,
+    maxTiltDeg,
+    finalYawDeg,
+    qualityGatePassed:
+      qualityGatePassed &&
+      framesEvaluated === framesExpected &&
+      maxTiltDeg < limits.maxTiltDeg &&
+      Math.abs(finalYawDeg) < limits.maxAbsFinalYawDeg,
+    referenceSha256,
+    sceneSha256,
+    ...(replay && { replay }),
+    ...(video && { video }),
+  };
+}
+
 function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const source = value as Record<string, unknown>;
@@ -642,6 +714,9 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
     ...(originmanDance ? { originmanDance } : {}),
+    ...(engine === ORIGINMAN_REFERENCE_ENGINE
+      ? { originmanReference: safeReferenceMetrics(source.originmanReference) }
+      : {}),
     ...(bounded('trainingSteps', 1, 10_000_000) == null
       ? {}
       : { trainingSteps: bounded('trainingSteps', 1, 10_000_000) }),
@@ -810,7 +885,9 @@ function runnerPayload(
   const task =
     taskId === 'originman-dance' && training?.originmanDance
       ? { id: taskId, originmanDance: training.originmanDance }
-      : resolvedTaskPack(taskId);
+      : taskId === ORIGINMAN_REFERENCE_TASK
+        ? { id: taskId }
+        : resolvedTaskPack(taskId);
   return {
     accountId,
     schemaVersion: manifest.schemaVersion,

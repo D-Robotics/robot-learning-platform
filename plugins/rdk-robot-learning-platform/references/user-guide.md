@@ -1,6 +1,6 @@
 # RDK Robot Learning Platform 插件使用说明
 
-**版本：0.6.74** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
+**版本：0.6.88** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
 
 这是通用机器人学习平台的跨宿主插件，支持按机型和任务组织学习流程。OriginMan 舞蹈和受扰恢复是可选任务。
 
@@ -218,6 +218,7 @@ Skill 是按任务使用的操作说明，不是权限提升。实际工具、�
 | `rdk_originman_course_brief` / `rdk_originman_training_choice` | 课程预算/完成标准说明；手动高级训练预算选择。 |
 | `rdk_learning_guide` | 新手逐轮选任务、编舞、算力和预算，保留真机目标与已知选项。 |
 | `rdk_originman_dance_draft` / `rdk_originman_dance_train` | 整理有界舞段配置；校验后提交独立 PPO 仿真训练。 |
+| `rdk_originman_reference_track` | 打开 OriginMan 参考轨迹跟跳，导入 50 Hz NPZ / JSON 或加载示例；传原 Run ID 打开评测、回放和 ONNX 下载。 |
 | `rdk_workshop` | Workshop 开始、继续、查看结果统一入口；页面选择预算，不直接提交。 |
 | `rdk_development_targets` | 查看算力机和板卡，测试算力机或连接明确板卡。 |
 | `rdk_classroom_guide` / `rdk_robot_onboarding_guide` / `rdk_robot_acceptance_assess` | 课堂分步提问、新机器人指南和验收字段覆盖检查。 |

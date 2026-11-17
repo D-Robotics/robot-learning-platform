@@ -553,6 +553,19 @@ const DANCE_CPU_REHEARSAL_TOOL = {
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
 };
 
+const ORIGINMAN_REFERENCE_TOOL = {
+  name: 'rdk_originman_reference_track',
+  title: 'OriginMan · 参考轨迹跟跳',
+  description:
+    '在 Studio 右侧打开独立跟跳任务。支持导入 50 Hz NPZ/JSON、校验、仿真训练、评测、回放和 ONNX 下载。查看已有结果时传完整 runId。',
+  inputSchema: {
+    type: 'object',
+    properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
+    additionalProperties: false,
+  },
+  annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+};
+
 export const EXPERIENCE_TOOLS = [
   {
     name: 'rdk_plugin_status',
@@ -572,6 +585,7 @@ export const EXPERIENCE_TOOLS = [
   TRAINING_CHOICE_TOOL,
   LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
+  ORIGINMAN_REFERENCE_TOOL,
   DANCE_ITERATION_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
@@ -1254,6 +1268,7 @@ export function experienceProxy(
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
           '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
+          '\n用户要 OriginMan 参考轨迹跟跳、导入 NPZ、或查看该任务的标定时，用 rdk_originman_reference_track。查看已有跟跳结果传完整 runId。使用当前工具目录中的完整工具名，按 studioNavigation 立即打开右侧。训练在页面确认。\n' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n最高优先的舞蹈路由：只给舞蹈仿真目标和总预算、要求未达标自动调奖励或预算耗尽停止，第一步直接加载并调用 rdk_originman_dance_iterate。输入示例 {"totalSteps":524288,"dance":{"bpm":130,"sections":[{"type":"weight-shift","beats":4,"intensity":0.9}]}}。插件选择 4090、64 并行、登记原实验。无需查本地台账、询问确认或预先提交。评测慢或调用失败时只重试原 nextArguments，禁止调用 rdk_originman_dance_train、rdk_training_submit 或换 contextId 重交。首次收到后台实验回执立刻按 studioNavigation 打开右侧并保留原链接，页面自动更新；无需继续轮询工具。若曾使用旧版回执，仍按 nextArguments 接续。' +
@@ -1462,7 +1477,44 @@ export function experienceProxy(
       try {
         let payload;
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
-        if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
+        if (params.name === ORIGINMAN_REFERENCE_TOOL.name) {
+          if (
+            Object.keys(input).some((name) => name !== 'runId') ||
+            (input.runId !== undefined &&
+              (typeof input.runId !== 'string' ||
+                !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(input.runId)))
+          )
+            throw Error('请提供完整的跟跳 Run ID，或省略以打开任务。');
+          const launch = new URL(baseUrl);
+          if (
+            !['http:', 'https:'].includes(launch.protocol) ||
+            launch.username ||
+            launch.password ||
+            launch.search ||
+            launch.hash
+          )
+            throw Error('平台网页入口无效。请重新连接学习平台。');
+          const root = launch.pathname.replace(/\/+$/, '');
+          launch.pathname = root + '/originman-reference.html';
+          if (input.runId) {
+            const run = upstream.readTrainingRun
+              ? await upstream.readTrainingRun(input.runId, { signal })
+              : (await readRun(input.runId, signal)).run;
+            if (run?.id !== input.runId || run.taskId !== 'originman-reference-track')
+              throw Error('当前账号下没有匹配的 OriginMan 参考轨迹跟跳 Run。');
+            launch.pathname = root + '/originman-reference-run.html';
+            launch.searchParams.set('runId', input.runId);
+          }
+          const url = launch.href;
+          payload = {
+            taskId: 'originman-reference-track',
+            links: { workbench: url },
+            studioNavigation: { tool: 'studio_open_url', arguments: { url } },
+            studentReply: input.runId
+              ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
+              : '在右侧导入 NPZ 或加载示例摆臂。轨迹校验通过后，选择 Worker 并提交仿真训练。',
+          };
+        } else if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
           if (
