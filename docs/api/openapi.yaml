@@ -2466,10 +2466,56 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/StationSwitchState" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/desktop-relay/capabilities:
+    get:
+      tags: [devices]
+      summary: Read the Studio desktop connector protocol version
+      operationId: getDesktopRelayCapabilities
+      responses:
+        "200": { description: Supported connector protocol. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/desktop-relay/sessions:
+    post:
+      tags: [devices]
+      summary: Register an account-scoped Studio desktop connector and its devices
+      operationId: registerDesktopRelaySession
+      responses:
+        "200": { description: Newly created connector session and lease. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/desktop-relay/sessions/{sessionId}:
+    parameters:
+      - { name: sessionId, in: path, required: true, schema: { type: string } }
+    delete:
+      tags: [devices]
+      summary: Release the authenticated connector session
+      operationId: closeDesktopRelaySession
+      responses:
+        "200": { description: Connector closed. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/desktop-relay/sessions/{sessionId}/commands:
+    parameters:
+      - { name: sessionId, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [devices]
+      summary: Wait for an authorized request for this connector
+      operationId: pollDesktopRelayCommand
+      responses:
+        "200": { description: Pending request or an empty poll and renewed lease. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/desktop-relay/sessions/{sessionId}/results:
+    parameters:
+      - { name: sessionId, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [devices]
+      summary: Return an authorized request result
+      operationId: completeDesktopRelayCommand
+      responses:
+        "200": { description: Accepted result and renewed lease. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
   /api/v1/duck/device-connections:
     get:
       tags: [devices]
-      summary: List saved board connections and live tunnel flags
+      summary: List saved connections, tunnel flags and Studio device discovery
       operationId: listDeviceConnections
       description: >-
         Web-managed board connections (SSH coordinates). Each record reports
@@ -4153,12 +4199,34 @@ components:
         lastCheckMessage: { type: string }
     DeviceConnectionList:
       type: object
-      required: [ok, connections]
+      required: [ok, connections, studioDesktop, studioDevices]
       properties:
         ok: { type: boolean }
         connections:
           type: array
           items: { $ref: "#/components/schemas/DeviceConnection" }
+        studioDesktop:
+          type: object
+          required: [state]
+          properties:
+            state: { type: string, enum: [unconfigured, awaiting-host, unavailable, ready] }
+            code: { type: string }
+        studioDevices:
+          type: array
+          description: Visible Studio desktop devices and the caller's registered Local Bridge devices.
+          items:
+            type: object
+            required: [id, bridgeDeviceId, status]
+            properties:
+              id: { type: string }
+              bridgeDeviceId: { type: string }
+              bridgeId: { type: string }
+              provider: { type: string }
+              name: { type: string }
+              host: { type: string }
+              port: { type: integer }
+              username: { type: string }
+              status: { type: string }
         sshNote: { type: string }
     DeviceConnectionInput:
       type: object

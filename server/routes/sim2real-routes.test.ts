@@ -3449,6 +3449,66 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('returns both Studio discovery fields on each alias and hides other owners', async () => {
+    await fixture();
+    const dir = process.env.RDK_SIM2REAL_STORAGE_DIR!;
+    await fs.mkdir(dir, { recursive: true });
+    const device = {
+      host: '192.0.2.42',
+      username: 'robot',
+      status: 'connected',
+      lastCheckedAt: '2026-11-17T00:00:00.000Z',
+      connectionMode: 'bridge',
+      bridgeId: 'test-local-bridge',
+      bridgeTransport: 'ssh',
+      password: 'private-bridge-password',
+    };
+    await fs.writeFile(
+      path.join(dir, 'devices.json'),
+      JSON.stringify([
+        {
+          ...device,
+          id: 'alice-board',
+          bridgeDeviceId: 'alice-bridge-board',
+          bridgeOwnerKey: 'sso:alice:web',
+        },
+        {
+          ...device,
+          id: 'bob-board',
+          bridgeDeviceId: 'bob-bridge-board',
+          bridgeOwnerKey: 'sso:bob:web',
+        },
+      ]),
+    );
+    const auth: Sim2RealAuthPort = {
+      isMultiUserDeployment: () => true,
+      resolvePrincipal: (request) => {
+        const accountId = String(request.headers['x-test-account'] || '');
+        return accountId ? { accountId } : null;
+      },
+      resolveAccessToken: () => null,
+    };
+    for (const prefix of ['/api/sim2real', '/api/v1/duck']) {
+      const router = createSim2RealRouter({ auth }, { prefix });
+      const url = `${prefix}/device-connections`;
+      const response = await invoke(router, 'get', url, { headers: { 'x-test-account': 'alice' } });
+      expect(response.statusCode).toBe(200);
+      expect(response.body).toMatchObject({
+        studioDesktop: { state: 'unconfigured' },
+        studioDevices: [
+          {
+            id: 'alice-board',
+            bridgeDeviceId: 'alice-bridge-board',
+            provider: 'studio-local-bridge',
+            status: 'registered',
+          },
+        ],
+      });
+      expect(JSON.stringify(response.body)).not.toContain('private-bridge-password');
+      expect((await invoke(router, 'get', url)).statusCode).toBe(401);
+    }
+  });
+
   it('projects Local Bridge status and forwards only the browser session cookie', async () => {
     process.env.RDK_SIM2REAL_STUDIO_ORIGIN = 'https://studio.example.test';
     const originalFetch = globalThis.fetch;

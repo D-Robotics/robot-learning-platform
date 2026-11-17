@@ -66,6 +66,12 @@ scripts/deploy-sim2real-production.sh --skip-build   # 复用已有构建
 `/opt/sim2real-web/current` 软链切回上一
 `releases/robot-learning-*` 并重启两个服务（脚本失败时已自动执行）。
 
+Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/device-connections`，
+核对 `studioDesktop.state` 和当前账号的 `studioDevices`。设备列表同时读取
+`/api/v1/duck/local-bridge/status`，以区分正在连接和仅已登记的设备。
+若 19091 由独立发布的 CPU Worker 占用且同机的 `sim2real-cpu-worker.service` 已停用，
+使用 `DEPLOY_EXTERNAL_CPU_WORKER=1` 执行标准发布。发布会检查实际 Worker 的协议和健康状态。
+
 标准构建包含工作台内的 `#classroom` 原生课堂。选择 OriginMan 的受扰恢复任务可打开课堂；通用使用指引经图文手册的 OriginMan 章节打开八步课程。浏览器回归覆盖两个入口、课堂书签和两个窗口尺寸。
 
 课堂的 JS、WebGL 渲染器、MuJoCo 子进程和服务端接口由标准构建打包。发布服务器在切换前检查原生课堂节点、前端模块和运行代码。场景、教师参考和账号制品放在独立的运行数据目录。

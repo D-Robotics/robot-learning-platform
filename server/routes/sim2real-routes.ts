@@ -1,3 +1,10 @@
+import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
+import { desktopRelayBridgeStatus } from '../sim2real/studio-desktop-relay-status.js';
+import {
+  appendDesktopRelayDevices,
+  hasDesktopRelay,
+} from '../sim2real/studio-desktop-relay-devices.js';
+import { registerSim2RealDesktopRelayRoutes } from './sim2real-desktop-relay-routes.js';
 import { isDeepStrictEqual } from 'node:util';
 import {
   isOriginmanWorkshopEngine,
@@ -483,9 +490,7 @@ function studioBridgeDeviceProjection(
   };
 }
 
-function projectStudioBridgeStatus(
-  payload: Record<string, unknown>,
-): Record<string, unknown> | null {
+function projectStudioBridgeStatus(payload: Record<string, unknown>) {
   if (!Array.isArray(payload.bridges)) return null;
   const bridges = payload.bridges.slice(0, SIM2REAL_STUDIO_BRIDGE_MAX_COUNT).flatMap((value) => {
     const source = studioObject(value);
@@ -856,7 +861,119 @@ async function visibleDevices(
 ): Promise<OwnedDevice[]> {
   const devices = (await readDevices()) as OwnedDevice[];
   const key = ownerKey(owner);
-  return devices.filter((device) => !isForeignOwnedDevice(device, key, multiUser));
+  return appendDesktopRelayDevices(
+    devices.filter((device) => !isForeignOwnedDevice(device, key, multiUser)),
+    owner,
+  );
+}
+
+function projectRegisteredLocalBridgeDevices(
+  devices: readonly OwnedDevice[],
+  registryOwner: string | null,
+) {
+  if (!registryOwner) return [];
+  return devices.flatMap((device) => {
+    if (
+      device.bridgeOwnerKey !== registryOwner ||
+      device.connectionMode !== 'bridge' ||
+      device.bridgeId === 'studio-desktop'
+    )
+      return [];
+    const id = studioSafeId(device.id);
+    const projected = studioBridgeDeviceProjection(device);
+    return id && projected
+      ? [{ ...projected, id, provider: 'studio-local-bridge', status: 'registered' }]
+      : [];
+  });
+}
+
+async function registerStudioBridgeDevice(
+  registryOwner: string,
+  bridgeId: string,
+  bridgeDeviceId: string,
+  projected: NonNullable<ReturnType<typeof projectStudioConnect>>,
+) {
+  const { device } = projected;
+  return upsertBridgeDevice({
+    ownerKey: registryOwner,
+    bridgeId,
+    bridgeDeviceId,
+    studioDeviceId: projected.studioDeviceId,
+    name:
+      typeof device.name === 'string'
+        ? device.name
+        : typeof device.label === 'string'
+          ? device.label
+          : undefined,
+    host: String(device.host || '').trim(),
+    port: Number(device.port || 22),
+    username: typeof device.username === 'string' ? device.username : 'root',
+    transport:
+      device.transport === 'ssh' ||
+      device.transport === 'usb-ethernet' ||
+      device.transport === 'serial'
+        ? device.transport
+        : 'ssh',
+    boardPlatform: typeof device.boardPlatform === 'string' ? device.boardPlatform : undefined,
+    boardModel: typeof device.boardModel === 'string' ? device.boardModel : undefined,
+  });
+}
+
+const bridgeRegistrationsInFlight = new Set<string>();
+
+async function annotateRegisteredBridgeDevices(
+  bridges: NonNullable<ReturnType<typeof projectStudioBridgeStatus>>['bridges'],
+  registryOwner: string,
+  allowRegistration: boolean,
+  origin: string,
+  request: Request,
+) {
+  const registered = new Map<string, string>();
+  for (const device of await readDevices()) {
+    if (
+      device.bridgeOwnerKey === registryOwner &&
+      device.connectionMode === 'bridge' &&
+      device.bridgeDeviceId
+    )
+      registered.set(device.bridgeDeviceId, device.id);
+  }
+  for (const bridge of bridges) {
+    for (const device of bridge.devices) {
+      const bridgeDeviceId = studioSafeBridgeDeviceId(device.bridgeDeviceId);
+      if (!bridgeDeviceId) continue;
+      const known = registered.get(bridgeDeviceId);
+      if (known) {
+        device.registeredDeviceId = known;
+        continue;
+      }
+      if (!allowRegistration || !bridge.online || device.probeOk !== true || !device.host) continue;
+      const key = JSON.stringify([registryOwner, bridgeDeviceId]);
+      if (bridgeRegistrationsInFlight.has(key)) continue;
+      bridgeRegistrationsInFlight.add(key);
+      try {
+        const upstream = await fetchStudioBridgeJson(
+          origin,
+          `/api/local-bridge/devices/${encodeURIComponent(bridgeDeviceId)}/connect`,
+          request,
+          { method: 'POST', body: { bridgeId: bridge.bridgeId } },
+        );
+        const projected = upstream?.ok ? projectStudioConnect(upstream.payload) : null;
+        if (!projected) continue;
+        const stored = await registerStudioBridgeDevice(
+          registryOwner,
+          studioSafeId(projected.device.bridgeId) ?? bridge.bridgeId,
+          bridgeDeviceId,
+          projected,
+        );
+        registered.set(bridgeDeviceId, stored.id);
+        device.registeredDeviceId = stored.id;
+      } catch {
+        // Leave the manual connect action available if the upstream refuses or storage fails.
+      } finally {
+        bridgeRegistrationsInFlight.delete(key);
+      }
+    }
+  }
 }
 
 function findVisibleDevice(devices: readonly OwnedDevice[], id: string): OwnedDevice | null {
@@ -2049,7 +2166,7 @@ function mutationAccess(request: Request): MutationAccess {
   }
   // These paths can reach a board, a runner, or a deployment target.
   if (
-    /\/(?:deployments|telemetry|board-station|device-connections|local-bridge)(?:\/|$)/.test(
+    /\/(?:deployments|telemetry|board-station|device-connections|local-bridge|desktop-relay)(?:\/|$)/.test(
       pathname,
     )
   ) {
@@ -3113,6 +3230,7 @@ export function createSim2RealRouter(
       auth,
       requestOwner: (request, response) => requestOwner(request, response, auth),
       visibleDevices: visibleDevicesForAuth,
+      hasDesktopRelay,
       resolveDeviceAgentUrl: (deviceId, stationOwner) =>
         deviceConnectionAgentUrl(deviceId, stationOwner),
       getRun: (runId, owner) => getSim2RealRun(runId, owner),
@@ -3159,6 +3277,12 @@ export function createSim2RealRouter(
     { prefix },
   );
 
+  registerSim2RealDesktopRelayRoutes(
+    router,
+    { auth, requestOwner: (request, response) => requestOwner(request, response, auth) },
+    { prefix },
+  );
+
   // Web-managed board connections (Studio 网页版-style device management):
   // SSH coordinates + loopback tunnels + the board-side switch surface.
   registerSim2RealDeviceConnectionRoutes(
@@ -3166,6 +3290,11 @@ export function createSim2RealRouter(
     {
       auth,
       requestOwner: (request, response) => requestOwner(request, response, auth),
+      listRegisteredLocalBridgeDevices: async (owner) =>
+        projectRegisteredLocalBridgeDevices(
+          await visibleDevicesForAuth(owner),
+          ownerKey(owner) ?? (auth.isMultiUserDeployment() ? null : 'local:default'),
+        ),
     },
     { prefix },
   );
@@ -3177,7 +3306,44 @@ export function createSim2RealRouter(
     wrapAsync(async (request, response) => {
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
-      void owner;
+      const relayPresence = desktopRelayBridgeStatus(owner);
+      if (relayPresence) {
+        noStore(response);
+        response.json(relayPresence);
+        return;
+      }
+      const desktop = await studioDesktopBridge.catalog();
+      if (desktop.state !== 'unconfigured') {
+        noStore(response);
+        response.json({
+          available: true,
+          provider: 'studio-desktop',
+          state: desktop.state,
+          ...(desktop.code ? { code: desktop.code } : {}),
+          bridges:
+            desktop.state === 'ready'
+              ? [
+                  {
+                    bridgeId: 'studio-desktop',
+                    provider: 'studio-desktop',
+                    online: true,
+                    devices: desktop.devices.map((device) => ({
+                      id: device.bridgeDeviceId,
+                      bridgeDeviceId: device.bridgeDeviceId,
+                      platformDeviceId: device.id,
+                      name: device.name,
+                      host: device.host,
+                      port: device.port,
+                      username: device.username,
+                      status: device.status,
+                      transport: 'ssh',
+                    })),
+                  },
+                ]
+              : [],
+        });
+        return;
+      }
       const origin = configuredStudioOrigin();
       if (!origin) {
         // Standalone deployments have no Studio Bridge upstream. A feature
@@ -3199,6 +3365,16 @@ export function createSim2RealRouter(
         return;
       }
       noStore(response);
+      if (owner) {
+        const principal = auth.resolvePrincipal(request);
+        await annotateRegisteredBridgeDevices(
+          projected.bridges,
+          ownerKey(owner)!,
+          Boolean(principal && principalCan(principal, SIM2REAL_PERMISSIONS.operate)),
+          origin,
+          request,
+        );
+      }
       response.status(200).json(projected);
     }),
   );
@@ -3281,30 +3457,12 @@ export function createSim2RealRouter(
         return;
       }
       try {
-        const registered = await upsertBridgeDevice({
-          ownerKey: owner ? `sso:${owner}:web` : 'local:default',
+        const registered = await registerStudioBridgeDevice(
+          ownerKey(owner) ?? 'local:default',
           bridgeId,
           bridgeDeviceId,
-          studioDeviceId: projected.studioDeviceId,
-          name:
-            typeof device.name === 'string'
-              ? device.name
-              : typeof device.label === 'string'
-                ? device.label
-                : undefined,
-          host: String(device.host || '').trim(),
-          port: Number(device.port || 22),
-          username: typeof device.username === 'string' ? device.username : 'root',
-          transport:
-            device.transport === 'ssh' ||
-            device.transport === 'usb-ethernet' ||
-            device.transport === 'serial'
-              ? device.transport
-              : 'ssh',
-          boardPlatform:
-            typeof device.boardPlatform === 'string' ? device.boardPlatform : undefined,
-          boardModel: typeof device.boardModel === 'string' ? device.boardModel : undefined,
-        });
+          projected,
+        );
         // `upsertBridgeDevice` preserves legacy registry fields for a stable
         // reconnect. Project the returned record again before it crosses the
         // HTTP boundary so an older row containing credentials can never be

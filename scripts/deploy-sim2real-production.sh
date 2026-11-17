@@ -15,6 +15,7 @@
 #   DEPLOY_HOST=user@other-host scripts/...              # 覆盖目标主机
 #   DEPLOY_NODE_BIN=/opt/node-v24/bin/node scripts/...   # 服务端 Node 运行时
 #   DEPLOY_NPM_CLI=/opt/node-v24/lib/node_modules/npm/bin/npm-cli.js scripts/...
+#   DEPLOY_EXTERNAL_CPU_WORKER=1 scripts/...             # 19091 由独立运行的 Worker 提供
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-root@47.110.142.255}"
@@ -24,6 +25,8 @@ NPM_CLI="${DEPLOY_NPM_CLI:-}"
 WEB_UNIT=sim2real-web.service
 WORKER_UNIT=sim2real-mock-worker.service
 CPU_WORKER_UNIT=sim2real-cpu-worker.service
+EXTERNAL_CPU_WORKER="${DEPLOY_EXTERNAL_CPU_WORKER:-0}"
+case "$EXTERNAL_CPU_WORKER" in 0|1) ;; *) echo "Invalid DEPLOY_EXTERNAL_CPU_WORKER" >&2; exit 1 ;; esac
 remote_bash() {
   # ssh 会把 argv 拼成远端 shell 命令；显式转义每个参数才能保持边界。
   local remote_command='bash -s' argument escaped
@@ -224,13 +227,21 @@ select_deploy_units() {
     return 1
   fi
   case "$cpu_state" in
-    loaded) printf '%s %s %s\n' "$WEB_UNIT" "$WORKER_UNIT" "$CPU_WORKER_UNIT" ;;
+    loaded)
+      if [ "${EXTERNAL_CPU_WORKER:-0}" = 1 ]; then
+        if [ "$(read_cpu_activation_state)" != 0 ]; then
+          echo "FATAL: external CPU worker mode requires the release-managed CPU unit to be stopped" >&2
+          return 1
+        fi
+        printf '%s %s\n' "$WEB_UNIT" "$WORKER_UNIT"
+      else
+        printf '%s %s %s\n' "$WEB_UNIT" "$WORKER_UNIT" "$CPU_WORKER_UNIT"
+      fi
+      ;;
     not-found) printf '%s %s\n' "$WEB_UNIT" "$WORKER_UNIT" ;;
     *) echo "FATAL: optional CPU worker unit has an invalid load state" >&2; return 1 ;;
   esac
 }
-deploy_unit_names=$(select_deploy_units)
-read -r -a DEPLOY_UNITS <<< "$deploy_unit_names"
 read_cpu_activation_state() {
   local cpu_state
   if ! cpu_state=$(ssh -o BatchMode=yes "$HOST" systemctl show "$CPU_WORKER_UNIT" --property=ActiveState --value); then
@@ -243,6 +254,8 @@ read_cpu_activation_state() {
     *) echo "FATAL: CPU worker activation state is not stable" >&2; return 1 ;;
   esac
 }
+deploy_unit_names=$(select_deploy_units)
+read -r -a DEPLOY_UNITS <<< "$deploy_unit_names"
 CPU_WAS_ACTIVE=0
 for unit in "${DEPLOY_UNITS[@]}"; do
   if [ "$unit" = "$CPU_WORKER_UNIT" ]; then
@@ -355,7 +368,9 @@ then
 fi
 
 echo "== [7/7] 健康检查（失败自动回滚）=="
-if ! remote_bash "$NODE_BIN" "${DEPLOY_UNITS[@]}" <<'REMOTE'
+PROBE_UNITS=("${DEPLOY_UNITS[@]}")
+if [ "$EXTERNAL_CPU_WORKER" = 1 ]; then PROBE_UNITS+=(external-cpu-worker); fi
+if ! remote_bash "$NODE_BIN" "${PROBE_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
 NODE_BIN=$1; shift; UNITS=("$@")
 probe_cpu_worker() {
@@ -396,7 +411,7 @@ case "$worker" in
 esac
 for unit in "${UNITS[@]}"; do
   case "$unit" in
-    sim2real-cpu-worker.service) probe_cpu_worker ;;
+    sim2real-cpu-worker.service|external-cpu-worker) probe_cpu_worker ;;
   esac
 done
 echo "healthz=200 readyz=200 metrics=200 worker-healthz=$worker_health worker-rejected=$worker"

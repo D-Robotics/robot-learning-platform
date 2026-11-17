@@ -75,6 +75,27 @@ read_cpu_activation_state`;
   for (const state of ['activating', 'deactivating', 'reloading', 'unknown'])
     assert.notEqual(bash(activationBody, [], { MOCK_ACTIVE_STATE: state }).status, 0);
 
+  const externalSelection = `HOST=fixture; WEB_UNIT=sim2real-web.service; WORKER_UNIT=sim2real-mock-worker.service; CPU_WORKER_UNIT=sim2real-cpu-worker.service
+ssh() {
+  if [[ "$*" == *ActiveState* ]]; then printf '%s' "$MOCK_ACTIVE_STATE"; else printf '%s' "$MOCK_LOAD_STATE"; fi
+}
+${functionSource('read_cpu_activation_state')}
+${selectUnits}
+select_deploy_units`;
+  const external = {
+    EXTERNAL_CPU_WORKER: '1',
+    MOCK_LOAD_STATE: 'loaded',
+    MOCK_ACTIVE_STATE: 'inactive',
+  };
+  assert.equal(
+    bash(externalSelection, [], external).stdout.trim(),
+    'sim2real-web.service sim2real-mock-worker.service',
+  );
+  assert.notEqual(
+    bash(externalSelection, [], { ...external, MOCK_ACTIVE_STATE: 'active' }).status,
+    0,
+  );
+
   // A clean source overlay must ship new common helpers and retain configs,
   // while never replacing Linux dependency files with a developer's Mac venv.
   const engineRoot = path.join(scratch, 'engines');
@@ -352,9 +373,10 @@ ${remoteEntrySection}`,
   fs.rmSync(path.join(base, 'releases', 'previous', publicDir, 'index.html'));
   assert.equal(
     [...source.matchAll(/"\$\{DEPLOY_UNITS\[@\]\}" <<'REMOTE'/g)].length,
-    4,
-    'the detected unit array must reach entry checks, switch, rollback and probes',
+    3,
+    'the detected unit array must reach entry checks, switch and rollback',
   );
+  assert.match(source, /PROBE_UNITS=\("\$\{DEPLOY_UNITS\[@\]\}"\)/);
   for (const units of [twoUnits, threeUnits]) {
     const restartTrace = path.join(scratch, 'restart-trace');
     fs.writeFileSync(restartTrace, '');
@@ -461,6 +483,14 @@ esac
   ]) {
     assert.notEqual(bash(remoteBlocks[4], probeArgs, { ...probeEnv, ...env }).status, 0);
   }
+  assert.equal(bash(remoteBlocks[4], [...probeArgs, 'external-cpu-worker'], probeEnv).status, 0);
+  assert.notEqual(
+    bash(remoteBlocks[4], [...probeArgs, 'external-cpu-worker'], {
+      ...probeEnv,
+      CPU_HEALTH_CODE: '503',
+    }).status,
+    0,
+  );
   const cpuArgs = [process.execPath, ...threeUnits.split(' ')];
   const readyCpu = JSON.stringify({
     ok: true,
@@ -519,7 +549,7 @@ esac
     fs.writeFileSync(recoveryTrace, '');
     const failed = bash(
       `${remoteBash}
-HOST=fixture; BASE=/fixture; RELEASE=next; WEB_UNIT=web; WORKER_UNIT=worker; DEPLOY_UNITS=(web worker); NODE_BIN="${process.execPath}"
+HOST=fixture; BASE=/fixture; RELEASE=next; WEB_UNIT=web; WORKER_UNIT=worker; DEPLOY_UNITS=(web worker); EXTERNAL_CPU_WORKER=0; NODE_BIN="${process.execPath}"
 ssh() { cat >/dev/null; return 1; }
 rollback_path="$1"
 rollback() { printf 'rolled-back\\n' >> "$rollback_path"; }

@@ -2,8 +2,12 @@ import {
   boardAgentTokenConfigured,
   boardAgentTokenRequired,
   boardAgentUrl,
+  isWebCloudDeployment,
+  resolveStandaloneAuthMode,
   safeStudioOrigin,
 } from './standalone-adapters.js';
+import { studioDesktopRelay } from './studio-desktop-relay.js';
+import { isStudioDesktopDeviceId, studioDesktopBridge } from './studio-desktop-bridge.js';
 
 /**
  * Bounded HTTP client for the host-station (上位机) BoardAgent surface.
@@ -77,6 +81,7 @@ export interface StationAgentFetchOptions {
   baseUrl?: string;
   /** Cancellation of the owning Studio bridge stream. */
   signal?: AbortSignal;
+  desktopRelayOwner?: string;
   /** Bind a mutation to the selected device tunnel, without a bridge/global fallback. */
   deviceTunnelOnly?: boolean;
 }
@@ -188,10 +193,97 @@ async function boundedJsonObject(response: Response): Promise<Record<string, unk
  * for the whole exchange, so a stalled body is cut off like a stalled
  * connect. Transport failures (DNS, timeout, redirect, abort) return null.
  */
+/** Legacy memory leases are single-user only. An explicit relay scope, even empty,
+ * cannot choose this transport; a cloud/multi-user refusal must remain a refusal.
+ */
+function legacyDesktopAllowed(options: { deviceId?: string; desktopRelayOwner?: string }): boolean {
+  return (
+    !Object.prototype.hasOwnProperty.call(options, 'desktopRelayOwner') &&
+    isStudioDesktopDeviceId(options.deviceId) &&
+    resolveStandaloneAuthMode() === 'standalone' &&
+    !isWebCloudDeployment() &&
+    studioDesktopBridge.configured() &&
+    studioDesktopBridge.hasVerifiedLease()
+  );
+}
+function stationTimeout(pathname: string, value?: number): number {
+  return pathname === '/v1/station/policy/upload'
+    ? Math.min(Math.max(Number(value) || 120_000, 500), 180_000)
+    : Math.min(Math.max(Number(value) || 5000, 500), 15_000);
+}
+async function desktopAgentReply(pathname: string, options: StationAgentFetchOptions) {
+  const owner = options.desktopRelayOwner;
+  const id = options.deviceId;
+  if (
+    !id ||
+    !isStudioDesktopDeviceId(id) ||
+    typeof owner !== 'string' ||
+    !owner ||
+    owner.trim() !== owner
+  )
+    return null;
+  try {
+    if (!studioDesktopRelay.has(owner, id)) return null;
+    const token = String(process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN ?? '').trim();
+    return await studioDesktopRelay.request(
+      owner,
+      id,
+      {
+        method: options.method ?? 'GET',
+        path: pathname,
+        ...(options.body !== undefined ? { body: options.body } : {}),
+        ...(token ? { agentToken: token } : {}),
+      },
+      { timeoutMs: stationTimeout(pathname, options.timeoutMs), signal: options.signal },
+    );
+  } catch {
+    return null;
+  }
+}
+async function desktopAgentJson(
+  pathname: string,
+  options: StationAgentFetchOptions,
+): Promise<StationAgentJson | null> {
+  const reply = await desktopAgentReply(pathname, options);
+  if (
+    !reply ||
+    !('body' in reply) ||
+    !/^application\/json(?:\s*;|$)/i.test(reply.contentType) ||
+    Buffer.byteLength(reply.body) > MAX_STATION_JSON_BYTES
+  )
+    return null;
+  try {
+    // Reuse the same object-only streaming budget as direct BoardAgent responses.
+    const payload = await boundedJsonObject(
+      new Response(reply.body, { headers: { 'content-type': reply.contentType } }),
+    );
+    return { ok: reply.status >= 200 && reply.status < 300, status: reply.status, payload };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One bounded agent round-trip: connect, forward the bearer token, then read
+ * the body through the streaming budget above. The abort timer stays armed
+ * for the whole exchange, so a stalled body is cut off like a stalled
+ * connect. Transport failures (DNS, timeout, redirect, abort) return null.
+ */
 async function stationAgentJson(
   pathname: string,
   options: StationAgentFetchOptions = {},
 ): Promise<StationAgentJson | null> {
+  if (!options.deviceTunnelOnly && isStudioDesktopDeviceId(options.deviceId)) {
+    // Reserved local-board IDs never fall back to direct/legacy transports after relay refusal.
+    if (!legacyDesktopAllowed(options)) return desktopAgentJson(pathname, options);
+    return studioDesktopBridge.agent(options.deviceId!, pathname, {
+      method: options.method,
+      body: options.body,
+      timeoutMs: options.timeoutMs,
+      signal: options.signal,
+      agentToken: process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN,
+    });
+  }
   const tunnel = loopbackBaseUrlOverride(options.baseUrl);
   if (options.deviceTunnelOnly && !tunnel) return null;
   const baseUrl = tunnel ?? boardAgentUrl();
@@ -526,10 +618,84 @@ export async function stationAgentFetchStream(
     lifetimeMs?: number;
     cookieHeader?: string;
     deviceId?: string;
+    desktopRelayOwner?: string;
+    signal?: AbortSignal;
     /** Loopback tunnel URL for a web-managed per-device connection. */
     baseUrl?: string;
   } = {},
 ): Promise<ReadableStream<Uint8Array>> {
+  if (isStudioDesktopDeviceId(options.deviceId)) {
+    // Account relay exposes bounded JSON/snapshots, never a hidden legacy streaming fallback.
+    if (!legacyDesktopAllowed(options)) throw new Error('station desktop relay stream unavailable');
+    if (!['/v1/station/status/stream', '/v1/station/camera.mjpeg'].includes(pathname)) {
+      throw new Error('invalid desktop station stream path');
+    }
+    const deviceId = options.deviceId!;
+    const abort = new AbortController();
+    const signal = options.signal ? AbortSignal.any([abort.signal, options.signal]) : abort.signal;
+    const deadline = Date.now() + Math.min(Math.max(options.lifetimeMs ?? 900000, 1000), 3600000);
+    const encoder = new TextEncoder();
+    const camera = pathname === '/v1/station/camera.mjpeg';
+    const read = async () => {
+      const request = {
+        timeoutMs: options.timeoutMs,
+        agentToken: process.env.RDK_SIM2REAL_BOARD_AGENT_TOKEN,
+        signal,
+      };
+      if (camera) {
+        const frame = await studioDesktopBridge.snapshot(deviceId, request);
+        if (!frame) throw new Error('desktop camera unavailable');
+        return [
+          encoder.encode(
+            `--rdk-board-station-frame\r\ncontent-type: image/jpeg\r\ncontent-length: ${frame.byteLength}\r\n\r\n`,
+          ),
+          frame,
+          encoder.encode('\r\n'),
+        ];
+      }
+      const result = await studioDesktopBridge.agent(deviceId, '/v1/station/status', request);
+      if (!result?.ok) throw new Error('desktop station unavailable');
+      return [encoder.encode(`${JSON.stringify(result.payload)}\n`)];
+    };
+    // Probe before returning headers, so an unavailable camera remains an HTTP error.
+    let pending: Uint8Array[] | null = await read();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let wake: (() => void) | undefined;
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (signal.aborted) return;
+        if (Date.now() >= deadline) {
+          controller.close();
+          abort.abort();
+          return;
+        }
+        try {
+          if (!pending) {
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+              timer = setTimeout(resolve, camera ? 500 : 1000);
+            });
+            if (signal.aborted) return;
+            pending = await read();
+          }
+          if (signal.aborted) return;
+          for (const chunk of pending) controller.enqueue(chunk);
+          pending = null;
+        } catch (error) {
+          if (!signal.aborted) controller.error(error);
+          abort.abort();
+        } finally {
+          if (timer) clearTimeout(timer);
+          wake = undefined;
+        }
+      },
+      cancel() {
+        abort.abort();
+        if (timer) clearTimeout(timer);
+        wake?.();
+      },
+    });
+  }
   // A connected device can have its own SSH loopback tunnel. Prefer that
   // explicitly supplied URL, while retaining the process-wide BoardAgent
   // endpoint for legacy deployments and the Studio bridge fallback.
