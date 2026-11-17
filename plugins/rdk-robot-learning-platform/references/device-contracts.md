@@ -18,7 +18,7 @@
 
 ## OriginMan 舞蹈 CPU 验收
 
-在 Studio 或 Qoder 指定 OriginMan 舞蹈 v2 的完整 Run ID，以及设备管理中已接通的 X5 设备 ID，调用 `rdk_originman_dance_cpu_rehearse({runId, deviceId})`。平台按 Run 读取原始 ONNX，只向指定设备的隧道发送 SHA-256 已核验的字节。板端需要新版 BoardAgent 以及其 Python 中的 NumPy 和 ONNX Runtime。
+在 Studio 或 Qoder 调用 `rdk_originman_dance_cpu_rehearse({runId, deviceId})`。完整 `runId` 为必填。入口先按该 ID 读取原始 Run、实际采样步数和 ONNX。省略 `deviceId` 时只核对原 Run 和在线设备，列出当前缺项并停止。提供设备 ID 后，平台仅在确认所选设备是已接通的 X5 时请求板端验收，由设备隧道转发校验过 SHA-256 的原始 ONNX。板端需要新版 BoardAgent 以及其 Python 中的 NumPy 和 ONNX Runtime。
 
 回执包含 78 维观测布局、18 路仿真关节输出顺序、50 Hz 合成观测循环的推理耗时和超期次数。暂存文件和推理会话随本次调用清理。实体传感器布局、舵机映射和完整控制周期均需另行验收，发布资格沿用原有门禁。
 

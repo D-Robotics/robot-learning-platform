@@ -536,14 +536,17 @@ const DANCE_REPLAY_READ_TOOL = {
 const DANCE_CPU_REHEARSAL_TOOL = {
   name: 'rdk_originman_dance_cpu_rehearse',
   description:
-    '对指定 OriginMan 舞蹈 v2 Run 和已连接 RDK X5 执行零致动 CPU 验收。原始 ONNX 临时暂存、校验 SHA-256、加载并运行 50 Hz 合成观测循环。报告仿真动作顺序和实际推理耗时。执行后清理临时文件，不写舵机指令。',
+    'OriginMan 舞蹈 X5 CPU 零致动验收。先按完整 Run ID 读取原始训练记录、实际采样步数和 ONNX，再核对目标设备。没有 X5 或未传 deviceId 时只查询并给出缺项，不暂存、不推理。明确选择已连接 X5 后才执行合成观测循环，不写舵机指令。',
   inputSchema: {
     type: 'object',
     properties: {
       runId: { type: 'string', description: '本次 OriginMan 舞蹈训练 Run 的完整 ID' },
-      deviceId: { type: 'string', description: '用户指定的已登记 X5 设备 ID' },
+      deviceId: {
+        type: 'string',
+        description: '可选。省略时只核对原 Run 与设备，不选用默认设备。',
+      },
     },
-    required: ['runId', 'deviceId'],
+    required: ['runId'],
     additionalProperties: false,
   },
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
@@ -1257,6 +1260,7 @@ export function experienceProxy(
           '\n' +
           '\n提交 OriginMan 舞蹈或收到一键仿真验收请求后，沿原 runId 调用 rdk_originman_dance_acceptance。每次待运行回执继续传 nextArguments，终态自动同源评测；验收出判定后按 studioNavigation 打开 Studio 右侧。比较两条记录用 rdk_originman_dance_compare。' +
           WORKSPACE_EVIDENCE_INSTRUCTIONS +
+          '\n用户要求 OriginMan 现有 Run 的 X5 CPU 零致动验收时，按完整 Run ID 直接调用 rdk_originman_dance_cpu_rehearse。Studio 的工具名可能带 MCP 连接前缀，应通过实际工具目录定位。用户未指定设备时只传 runId。步数一律按回执 run.trainingSteps；收到 stopWorkflow=true 就展示 studentReply 并停住。' +
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
           '\n' +
           STUDIO_WORKSHOP_NAVIGATION +
@@ -1450,27 +1454,35 @@ export function experienceProxy(
         } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
           if (
             typeof input.runId !== 'string' ||
-            !/^[\w.-]{1,120}$/.test(input.runId) ||
-            typeof input.deviceId !== 'string' ||
-            !input.deviceId.trim() ||
-            input.deviceId.length > 200 ||
+            !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(input.runId) ||
+            (input.deviceId !== undefined &&
+              (typeof input.deviceId !== 'string' ||
+                !input.deviceId.trim() ||
+                input.deviceId.length > 200)) ||
             Object.keys(input).some((key) => key !== 'deviceId' && key !== 'runId')
           )
-            throw Error('请选择 OriginMan 舞蹈的完整 Run ID 和已连接的 X5 设备 ID。');
+            throw Error('请提供 OriginMan 舞蹈的完整 Run ID。已经选定 X5 时可带设备 ID。');
           if (!upstream.rehearseOriginmanDanceCpu)
             throw Error('请先连接机器人学习平台，再执行 X5 CPU 验收。');
           payload = await upstream.rehearseOriginmanDanceCpu(
-            { runId: input.runId, deviceId: input.deviceId.trim() },
+            { runId: input.runId, ...(input.deviceId && { deviceId: input.deviceId.trim() }) },
             { signal },
           );
-          const cadence =
-            payload.timing?.syntheticCyclePassed === true
-              ? '本次合成观测循环按 50 Hz 完成。'
-              : '本次合成观测循环未守住 50 Hz，请看时序明细。';
-          payload.studentReply =
-            '原始 ONNX 已在 X5 CPU 暂存、校验并加载，完成 78 维输入到 18 路动作输出的零致动推理。' +
-            cadence +
-            '真实 IMU、舵机映射和整机控制周期仍待验证。';
+          const steps = payload.run.trainingSteps;
+          const runSummary = `原 Run ${payload.runId}，${steps === null ? '实际采样步数待核对' : `实际采样 ${steps.toLocaleString('en-US')} 步`}。`;
+          if (payload.phase === 'preflight') {
+            payload.studentReply = `${runSummary}${payload.nextAction} 本次停在前置检查。`;
+          } else {
+            const cadence =
+              payload.timing?.syntheticCyclePassed === true
+                ? '本次合成观测循环按 50 Hz 完成。'
+                : '本次合成观测循环未守住 50 Hz，请看时序明细。';
+            payload.studentReply =
+              runSummary +
+              '原始 ONNX 已在 X5 CPU 暂存、校验并加载，完成 78 维输入到 18 路动作输出的零致动推理。' +
+              cadence +
+              '真实 IMU、舵机映射和整机控制周期仍待验证。';
+          }
         } else if (params.name === DANCE_REPLAY_READ_TOOL.name) {
           payload = await readDanceReplay(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_ITERATION_TOOL.name) {

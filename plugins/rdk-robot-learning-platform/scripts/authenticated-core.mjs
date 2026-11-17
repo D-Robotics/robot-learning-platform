@@ -420,16 +420,100 @@ export async function connectAuthenticatedCore({
     },
     async rehearseOriginmanDanceCpu({ runId, deviceId }, { signal } = {}) {
       const accountId = await verifiedWorkspaceAccount();
-      return readWorkspaceJson(
+      const requestSignal = AbortSignal.any([
+        AbortSignal.timeout(30_000),
+        ...(signal ? [signal] : []),
+      ]);
+      const read = (route, options) => readWorkspaceJson(route, requestSignal, accountId, options);
+      const { run } = await read('/runs/' + encodeURIComponent(runId));
+      if (run?.id !== runId)
+        throw new PluginRequestError('WORKSPACE_EVIDENCE_MISMATCH', '平台未确认指定的原 Run。', {
+          httpStatus: 502,
+        });
+      const steps = run.metrics?.trainingSteps;
+      const status = {
+        runId,
+        run: {
+          id: run.id,
+          status: run.status,
+          trainingSteps: Number.isSafeInteger(steps) && steps > 0 ? steps : null,
+          qualityGatePassed: run.metrics?.originmanDance?.qualityGatePassed ?? null,
+          artifact: {
+            format: run.artifact?.format ?? null,
+            sha256: run.artifact?.sha256 ?? null,
+            deployable: run.artifact?.deployable ?? null,
+          },
+        },
+        motionAuthorized: false,
+        authorizesDeployment: false,
+      };
+      const blocked = (blocker, nextAction) => ({
+        ...status,
+        phase: 'preflight',
+        status: 'blocked',
+        blocker,
+        nextAction,
+        stopWorkflow: true,
+      });
+      if (
+        run.status !== 'completed' ||
+        run.mock === true ||
+        run.contractId !== 'custom-policy-originman-dance-v2' ||
+        run.artifact?.format !== 'onnx' ||
+        !/^[a-f0-9]{64}$/.test(run.artifact?.sha256 ?? '')
+      )
+        return blocked(
+          'run-not-ready',
+          '请核对原 Run 是否已完成并生成 OriginMan 舞蹈 v2 的原始 ONNX。',
+        );
+
+      const { devices } = await read('/board-station/devices');
+      if (!Array.isArray(devices))
+        throw new PluginRequestError('WORKSPACE_INVALID_RESPONSE', '平台未返回可核对的设备清单。', {
+          httpStatus: 502,
+        });
+      const eligible = (device) =>
+        device?.boardPlatform === 'rdk-x5' && device.status === 'connected';
+      const device = deviceId && devices.find((item) => item?.id === deviceId);
+      if (!deviceId && !devices.some(eligible))
+        return blocked(
+          'x5-not-connected',
+          '当前没有已接通的 RDK X5。请在设备管理接通实体 X5，确认设备隧道与新版 BoardAgent 可用，再用真实设备 ID 复测同一 Run。',
+        );
+      if (!deviceId)
+        return blocked(
+          'x5-device-id-required',
+          '请指定一台已接通的 RDK X5 设备 ID，再复测同一 Run。',
+        );
+      if (!eligible(device))
+        return blocked(
+          'x5-device-unavailable',
+          '指定设备未登记为已接通的 RDK X5。请在设备管理核对原设备及隧道状态。',
+        );
+
+      const receipt = await read(
         '/board-station/originman-dance-cpu-rehearsal?' + new URLSearchParams({ deviceId }),
-        AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
-        accountId,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ runId }),
         },
       );
+      if (
+        receipt.runId !== runId ||
+        receipt.deviceId !== deviceId ||
+        receipt.sha256 !== run.artifact.sha256 ||
+        receipt.staged !== true ||
+        receipt.loaded !== true
+      )
+        throw new PluginRequestError(
+          'WORKSPACE_EVIDENCE_MISMATCH',
+          '板端回执与指定原 Run 或设备不一致。',
+          {
+            httpStatus: 502,
+          },
+        );
+      return { ...receipt, ...status, phase: 'rehearsal' };
     },
     async verifyPolicyDownload(runId, sha256, { signal } = {}) {
       const response = await fetchPlatform(

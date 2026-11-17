@@ -9,7 +9,7 @@ async function fixture(t, fetchImpl, cookie = async () => 'rdk_sso_web_session=f
     audience: 'https://studio.example/robotics-learning',
     mode: 'browser-login',
     cookie,
-    status: async () => ({ authenticated: true }),
+    status: async () => ({ authenticated: true, accountId: 'fixture-owner' }),
     invalidate: async () => invalidations++,
   };
   const core = await connectAuthenticatedCore({
@@ -233,4 +233,73 @@ test('telemetry summaries use the authenticated compact route for the exact Run'
   const replay = await f.core.readTelemetrySummary('rdk_runs_replay', { runId: 'run-42' });
   assert.equal(replay.frameCount, 1540);
   assert.equal(replay.frames, undefined);
+});
+
+test('OriginMan CPU preflight uses actual steps from the exact Run and never chooses a board', async (t) => {
+  const runId = 'originman-formal-run';
+  const sha256 = 'a'.repeat(64);
+  const connected = { id: 'x5-ready', status: 'connected', boardPlatform: 'rdk-x5' };
+  const disconnected = { id: 'x5-offline', status: 'disconnected', boardPlatform: 'rdk-x5' };
+  const run = {
+    id: runId,
+    status: 'completed',
+    contractId: 'custom-policy-originman-dance-v2',
+    training: { originmanDance: { trainingSteps: 8192 } },
+    metrics: { trainingSteps: 503808, originmanDance: { qualityGatePassed: true } },
+    artifact: { format: 'onnx', sha256, deployable: false },
+  };
+  const calls = [];
+  let devices = [disconnected];
+  let upstreamRun = run;
+  const f = await fixture(t, async (url, options) => {
+    const u = new URL(url);
+    calls.push([options.method, u.pathname, u.search]);
+    if (u.pathname.endsWith('/runs/' + runId)) return Response.json({ ok: true, run: upstreamRun });
+    if (u.pathname.endsWith('/board-station/devices')) return Response.json({ ok: true, devices });
+    assert.equal(u.searchParams.get('deviceId'), connected.id);
+    assert.deepEqual(JSON.parse(options.body), { runId });
+    return Response.json({
+      ok: true,
+      runId,
+      deviceId: connected.id,
+      sha256,
+      staged: true,
+      loaded: true,
+    });
+  });
+  const noDevice = await f.core.rehearseOriginmanDanceCpu({ runId });
+  assert.equal(noDevice.run.trainingSteps, 503808);
+  assert.equal(noDevice.run.artifact.sha256, sha256);
+  assert.equal(noDevice.blocker, 'x5-not-connected');
+  assert.equal(noDevice.stopWorkflow, true);
+  assert.equal(noDevice.motionAuthorized, false);
+
+  devices = [disconnected, connected];
+  assert.equal(
+    (await f.core.rehearseOriginmanDanceCpu({ runId })).blocker,
+    'x5-device-id-required',
+  );
+  assert.equal(
+    (await f.core.rehearseOriginmanDanceCpu({ runId, deviceId: disconnected.id })).blocker,
+    'x5-device-unavailable',
+  );
+  assert.deepEqual(
+    calls.map(([method]) => method),
+    Array(6).fill('GET'),
+  );
+
+  upstreamRun = { ...run, id: 'other-run' };
+  await assert.rejects(f.core.rehearseOriginmanDanceCpu({ runId, deviceId: connected.id }), {
+    code: 'WORKSPACE_EVIDENCE_MISMATCH',
+  });
+  assert.equal(calls.length, 7);
+  upstreamRun = run;
+  const receipt = await f.core.rehearseOriginmanDanceCpu({ runId, deviceId: connected.id });
+  assert.equal(receipt.phase, 'rehearsal');
+  assert.equal(receipt.run.trainingSteps, 503808);
+  assert.equal(receipt.sha256, sha256);
+  assert.deepEqual(
+    calls.map(([method]) => method),
+    [...Array(9).fill('GET'), 'POST'],
+  );
 });
