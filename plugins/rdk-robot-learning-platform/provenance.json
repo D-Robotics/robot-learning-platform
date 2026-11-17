@@ -27,7 +27,7 @@
     "scripts/course-setup.mjs": "5b3606ed3d38c930213260a0103a3fd76db680af435fb96f735f3bee32014fb9",
     "scripts/originman-dance-config.mjs": "5558d3b2358a5c10ce20920ae5aff7da8554503b8d0c13adf05b632a851e6cd4",
     "scripts/dance-training.mjs": "64f6d40dd312410f6ce12d7076dced6c12eaddc4bc355ba6b580b346a808abc0",
-    "scripts/submission-journal.mjs": "4c79c69e220a0af8de0833f0ebffbdcc67efa67563daf969643a1e5dfa0e56ee",
+    "scripts/submission-journal.mjs": "3a860e2075ced99dca2cf95a2bd7bcab17248b14ddf264b942cb8342fcbc044f",
     "scripts/install-host.mjs": "df396ad0d26f76e51548175dd1cff00f2c9bde00a38de35d6130c138e418c104",
     "scripts/studio-login-patch.mjs": "5246de8eba671df99171037460efcfd44087896fcf163583be81a5813fb16899",
     "windows-binding.mjs": "2bd5a6f09a491d5d2c3caaffb64dd56a18c2ce7f699bd4c77360d0300d5d4eb5",
@@ -48,7 +48,7 @@
     "mcp/bundle.mjs": "512c385b487a2e2baef3cb9b0a690b9b4ee7c2521984dd876309beff16da606c",
     "mcp/source-checkout.example.json": "cd8a9a7c47436adec2dff557c059c982bbcea560683bf6de828b99dd8680e63d",
     "scripts/start-core-mcp.mjs": "8a194ecf0b7189bbcfdd5781096a119aca9b9056cb17545ef449e95b89781f53",
-    "scripts/dance-iteration.mjs": "dc28852b77e849213cfb7e1732029e53f683c5427be0042b2566b8b18ec9a8a9"
+    "scripts/dance-iteration.mjs": "6438e96b50f5c8dd6695805d7bc5aefc9b1fbaa902cde48dd682f29171ed380c"
   },
   "uiBuild": {
     "bundler": "esbuild",
