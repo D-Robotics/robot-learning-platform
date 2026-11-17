@@ -740,6 +740,36 @@ describe('Sim2Real HTTP routes', () => {
     expect(JSON.stringify(response.body)).not.toContain('integrations');
   });
 
+  it('counts old active runs beyond the 200-row list for the current owner', async () => {
+    const router = await fixture();
+    const modelId = BUILTIN_MICRODUCK_MODEL.id;
+    await createSim2RealRun({ modelId, backend: 'contract', status: 'completed', summary: 'seed' });
+    const file = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'sim2real.json');
+    const ledger = JSON.parse(await fs.readFile(file, 'utf8'));
+    const [seed] = ledger.runs;
+    ledger.runs = [
+      { ...seed, id: 'foreign-run', owner: 'other-owner', status: 'queued' },
+      ...Array.from({ length: 200 }, (_, i) => ({
+        ...seed,
+        id: 'recent-' + i,
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, 0, 200 - i)).toISOString(),
+      })),
+      { ...seed, id: 'older-active', status: 'running', createdAt: '2025-01-01T00:00:00Z' },
+    ];
+    await fs.writeFile(file, JSON.stringify(ledger));
+
+    const response = await invoke(router, 'get', '/api/sim2real/workspace-summary');
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({
+      runCountScope: 'owner-ledger',
+      counts: { runs: 201, activeRuns: 1, registeredArtifacts: 0, evaluations: 0 },
+      runStatuses: { ready: 0, queued: 0, running: 1, completed: 200, blocked: 0, failed: 0 },
+      latest: { run: { id: 'recent-0' } },
+    });
+    const list = await invoke(router, 'get', '/api/sim2real/runs');
+    expect(list.body).toMatchObject({ available: 200 });
+  });
+
   it('validates and registers metadata, then records a contract-only run', async () => {
     const router = await fixture();
     const manifest = userManifest();

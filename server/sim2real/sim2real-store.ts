@@ -2624,6 +2624,27 @@ export async function listSim2RealRuns(owner?: string): Promise<Sim2RealRunRecor
     .map((item) => copy(withoutRunPrivate(item)));
 }
 
+export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
+  const ledger = await readLedger();
+  const statuses = { ready: 0, queued: 0, running: 0, completed: 0, blocked: 0, failed: 0 };
+  let runs = 0;
+  let latest: StoredRun | undefined;
+  for (const run of ledger.runs) {
+    if (!ownerMatches(run, owner)) continue;
+    runs += 1;
+    if (Object.hasOwn(statuses, run.status)) statuses[run.status] += 1;
+    if (!latest || run.createdAt.localeCompare(latest.createdAt) > 0) latest = run;
+  }
+  return {
+    runs,
+    activeRuns: statuses.queued + statuses.running,
+    statuses,
+    latest: latest ? copy(withoutRunPrivate(latest)) : undefined,
+    registeredArtifacts: ledger.artifacts.filter((item) => ownerMatches(item, owner)).length,
+    evaluations: ledger.evaluations.filter((item) => ownerMatches(item, owner)).length,
+  };
+}
+
 export async function getSim2RealRun(
   id: string,
   owner?: string,

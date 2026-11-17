@@ -40,6 +40,7 @@ const routes = {
   '/workspace-summary': {
     generatedAt: '2026-11-12T00:14:00Z',
     runCountScope: 'owner-ledger',
+    runStatuses: { completed: 200, running: 1 },
     counts: {
       runs: 201,
       activeRuns: 1,
@@ -164,6 +165,7 @@ test('账号全貌、旧活跃 Run、训练产出和最近失败部署可在一�
   assert.equal(evidence.summary.runCountScope, 'owner-ledger');
   assert.equal(evidence.summary.counts.runs, 201);
   assert.equal(evidence.summary.counts.activeRuns, 1);
+  assert.deepEqual(evidence.summary.runStatuses, { running: 1, completed: 200 });
   assert.equal(evidence.summary.counts.registeredArtifacts, 3);
   assert.equal(evidence.projects.items[0].id, 'project-dance');
   assert.equal(evidence.models.items[0].builtin, false);
@@ -238,6 +240,21 @@ const scenarios = [
 ];
 for (const [question, args, check] of scenarios)
   test(question, async (t) => check(await (await fixture(t)).inspect(args)));
+
+test('指定 SSH 桥接设备时查询完整设备 ID', async (t) => {
+  const deviceId = 'bridge-ssh:root-192.0.2.10:22';
+  const route = '/board-station/health?deviceId=' + encodeURIComponent(deviceId);
+  const { inspect, calls } = await fixture(t, {
+    [route]: { device: { id: deviceId, status: 'connected' }, agent: { state: 'ready' } },
+  });
+
+  assert.deepEqual((await inspect({ scope: 'devices', deviceId })).devices, {
+    status: 'read',
+    device: { id: deviceId, status: 'connected' },
+    agent: { state: 'ready' },
+  });
+  assert.deepEqual(calls, [route]);
+});
 
 test('旧平台返回 200 条时标为窗口统计，老设备记录可查询', async (t) => {
   const { inspect, calls } = await fixture(t, {

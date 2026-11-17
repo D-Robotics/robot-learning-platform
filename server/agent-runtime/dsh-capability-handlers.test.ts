@@ -68,6 +68,14 @@ describe('DSH capability handlers', () => {
   it('covers workspace catalog reads and keeps request filters explicit', async () => {
     const { fetchImpl, calls } = fakeLoopback([
       () => ({ status: 200, body: { counts: { projects: 2 }, latest: { run: null } } }),
+      () => ({
+        status: 200,
+        body: {
+          counts: { runs: 201, activeRuns: 1 },
+          runCountScope: 'owner-ledger',
+          runStatuses: { completed: 200, running: 1 },
+        },
+      }),
       () => ({ status: 200, body: { projects: [{ id: 'p1', name: '导航', slug: 'nav' }] } }),
       () => ({ status: 200, body: { datasets: [{ id: 'd1', name: '轨迹', status: 'ready' }] } }),
       () => ({ status: 200, body: { runs: [{ id: 'r1', status: 'completed' }] } }),
@@ -77,6 +85,12 @@ describe('DSH capability handlers', () => {
 
     await expect(handlers.rdk_workspace_summary({}, exec)).resolves.toMatchObject({
       counts: { projects: 2 },
+      runCountScope: 'recent-window',
+    });
+    await expect(handlers.rdk_workspace_summary({}, exec)).resolves.toMatchObject({
+      counts: { runs: 201, activeRuns: 1 },
+      runCountScope: 'owner-ledger',
+      runStatuses: { completed: 200, running: 1 },
     });
     await expect(handlers.rdk_projects_list({}, exec)).resolves.toEqual({
       projects: [{ id: 'p1', name: '导航', slug: 'nav', description: null }],
