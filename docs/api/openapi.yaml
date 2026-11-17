@@ -530,6 +530,31 @@ paths:
         "200": { description: Latest goal snapshot. }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/dance-goals/{id}/continue:
+    post:
+      tags: [runs]
+      summary: Continue the current account's dance goal after its last failed round
+      operationId: continueDanceGoal
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [afterRunId]
+              properties:
+                afterRunId: { type: string }
+                automatic: { type: boolean }
+      responses:
+        "200": { description: Original continuation reused after a retry. }
+        "202": { description: Continuation scheduled. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: The specified round is no longer eligible for continuation. }
   /api/v1/duck/runs:
     get:
       tags: [runs]
