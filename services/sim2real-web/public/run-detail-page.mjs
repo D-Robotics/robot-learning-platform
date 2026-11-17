@@ -128,6 +128,7 @@ function drawCurve(document, run) {
   const axis = document.createElementNS(namespace, 'path');
   axis.setAttribute('d', 'M56 24V204H686');
   axis.setAttribute('class', 'reward-axis');
+  axis.setAttribute('fill', 'none');
   const line = document.createElementNS(namespace, 'polyline');
   line.setAttribute('points', coordinates);
   line.setAttribute('class', 'reward-line');

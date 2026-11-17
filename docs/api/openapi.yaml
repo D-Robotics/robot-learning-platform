@@ -257,6 +257,50 @@ paths:
       responses:
         "200": { description: Available manifests for recovery and dance }
         "401": { description: Sign in required }
+  /api/v1/duck/originman-reference:
+    get:
+      tags: [workspace]
+      operationId: getOriginManReferenceTracking
+      summary: Read the reference-tracking calibration, example trajectory, and compatible account workers
+      responses:
+        "200": { description: Calibration, example, and eligible worker summaries }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/originman-reference/validate:
+    post:
+      tags: [workspace]
+      operationId: validateOriginManReferenceTrajectory
+      summary: Check the reference format and motion limits without starting a run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trajectory]
+              properties:
+                trajectory: { $ref: "#/components/schemas/OriginmanReferenceTrajectory" }
+      responses:
+        "200": { description: Valid frame count, duration in seconds, and frame rate }
+        "400": { description: Unsupported frequency, joint order, motion limits, or invalid trajectory data }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/originman-reference/model:
+    post:
+      tags: [workspace]
+      operationId: prepareOriginManReferenceModel
+      summary: Find or register the account's simulation-only reference-tracking policy contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [computeResourceId]
+              properties:
+                computeResourceId: { type: string }
+      responses:
+        "200": { description: Model ID, with no training submitted }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Missing compatible worker or conflicting model contract }
   /api/v1/duck/training-plans:
     get:
       tags: [workspace]
@@ -3437,6 +3481,38 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    OriginmanReferenceTrajectory:
+      type: object
+      required: [schemaVersion, fps, joint_names, joint_pos, joint_vel]
+      properties:
+        schemaVersion: { type: integer, const: 1 }
+        fps: { type: integer, const: 50 }
+        joint_names:
+          type: array
+          minItems: 20
+          maxItems: 20
+          items: { type: string }
+          description: The fixed OriginMan reference joint order supplied in the example.
+        joint_pos:
+          type: array
+          minItems: 50
+          maxItems: 12000
+          description: Joint offsets from standing pose in radians.
+          items:
+            type: array
+            minItems: 20
+            maxItems: 20
+            items: { type: number, minimum: -2.09, maximum: 2.09 }
+        joint_vel:
+          type: array
+          minItems: 50
+          maxItems: 12000
+          description: Frame-aligned joint velocity in radians per second.
+          items:
+            type: array
+            minItems: 20
+            maxItems: 20
+            items: { type: number, minimum: -6, maximum: 6 }
     TrainingPlanWrite:
       type: object
       required: [name, config]
