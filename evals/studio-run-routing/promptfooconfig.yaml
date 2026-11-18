@@ -1,0 +1,12 @@
+description: Studio checks retention and download across two natural-language Run queries
+prompts:
+  - '查一下 Run {{runId}} 的策略留存和 ONNX 下载链接。'
+providers:
+  - file://provider.mjs
+tests:
+  - vars:
+      followup: '再确认一下刚才那条 Run，策略已经留存了吗？把下载链接也给我。'
+      runId: 'd05dae16-7135-4df7-b39a-72a25b280a4f'
+    assert:
+      - type: javascript
+        value: file://assert-routing.mjs

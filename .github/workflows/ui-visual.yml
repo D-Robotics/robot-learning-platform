@@ -51,7 +51,11 @@ jobs:
         run: npm run build
       - name: Start the Sim2Real service
         run: |
-          npm run dev:sim2real > /tmp/sim2real.log 2>&1 &
+          UI_SCRATCH=$(mktemp -d)
+          RDK_SIM2REAL_STORAGE_DIR="$UI_SCRATCH/storage" \
+            RDK_SIM2REAL_DEPLOYMENT=local RDK_SIM2REAL_SSO_REQUIRED=0 RDK_SIM2REAL_SSO_ENABLED=0 \
+            RDK_SIM2REAL_REQUIRE_MICRODUCK=0 \
+            node dist-server/services/sim2real-web/server.js > /tmp/sim2real.log 2>&1 &
           for i in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:18102/ > /dev/null; then exit 0; fi
             sleep 1
@@ -65,6 +69,18 @@ jobs:
         env:
           RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18102/
         run: node services/sim2real-web/ui-workbench-path.spec.mjs
+      - name: Run the OriginMan release journey
+        env:
+          RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18102/
+          RDK_ORIGINMAN_UI_EVIDENCE: ${{ runner.temp }}/originman-ui
+        run: node services/sim2real-web/ui-originman-release.spec.mjs
+      - name: Upload the OriginMan browser failure trace
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: originman-ui
+          path: ${{ runner.temp }}/originman-ui/
+          if-no-files-found: ignore
       - name: Start the mock worker and a fresh journey service
         run: |
           JOURNEY_SCRATCH=$(mktemp -d)

@@ -117,6 +117,7 @@ import {
 } from './runtime-config.js';
 
 import { createUsageManualRouter } from './usage-manual.js';
+import { createRunQuery, parseRunQuery } from './run-query.js';
 
 export { redactInternalError } from '../../server/sim2real/http-helpers.js';
 export { normalizeMicroduckRedirect } from './runtime-config.js';
@@ -762,6 +763,7 @@ async function proxyMicroduck(request: express.Request, response: express.Respon
 
 export function createSim2RealWebApp(): Express {
   const app = express();
+  const runQuery = createRunQuery();
   app.disable('x-powered-by');
   if (parseTrustProxyFlag(process.env.EXPRESS_TRUST_PROXY)) app.set('trust proxy', 1);
 
@@ -1231,8 +1233,18 @@ export function createSim2RealWebApp(): Express {
       });
       return;
     }
+    // Reuse the authenticated, owner-scoped session for the latest confirmed Run.
+    const multiUser = studioSsoAuth.isMultiUserDeployment();
+    const ownerScope = dshOwnerScope(principal, multiUser);
+    const publicSessionId = sessionId || `sim2real-${randomUUID()}`;
+    const backendSessionId = scopedDshSessionId(publicSessionId, ownerScope);
+    const sessionLockKey = `${ownerScope}:${backendSessionId}`;
+    const query = request.body?.image === undefined ? parseRunQuery(prompt) : null;
     const runtime = app.locals.dshRuntime;
-    if (!runtime) {
+    if (!runtime && !query) {
+      if (sessionId) {
+        await withDshSessionLock(sessionLockKey, async () => runQuery.forget(sessionLockKey));
+      }
       response.status(503).json({
         ok: false,
         error: 'DSH_RUNTIME_DISABLED',
@@ -1276,10 +1288,6 @@ export function createSim2RealWebApp(): Express {
       // The browser sees an opaque per-conversation id. In shared deployments
       // the durable DSH id is owner-scoped, so knowing another user's local
       // storage value cannot open that user's transcript or tool context.
-      const ownerScope = dshOwnerScope(principal, studioSsoAuth.isMultiUserDeployment());
-      const publicSessionId = sessionId || `sim2real-${randomUUID()}`;
-      const backendSessionId = scopedDshSessionId(publicSessionId, ownerScope);
-      const sessionLockKey = `${ownerScope}:${backendSessionId}`;
       // Forward the caller's session to tool executions for this turn. In
       // single-user mode the loopback routes accept the request directly;
       // in shared deployments the forwarded cookie/authorization keeps RBAC
@@ -1321,7 +1329,26 @@ export function createSim2RealWebApp(): Express {
         // Writes to the dead socket are discarded instead of crashing.
         response.on('error', () => {});
       }
-      const result = await withDshSessionLock(sessionLockKey, () => {
+      const result = await withDshSessionLock(sessionLockKey, async () => {
+        if (query) {
+          const accountId = principal?.accountId?.trim() ?? '';
+          const evidence = { reasoning: '', events: [] };
+          if (multiUser && !/^[^\u0000-\u001f\u007f/]{1,160}$/.test(accountId)) {
+            return { ...evidence, text: '当前登录账号标识无效，请重新登录。', toolTrail: [] };
+          }
+          return {
+            ...evidence,
+            ...(await runQuery.answer(
+              query,
+              sessionLockKey,
+              multiUser ? accountId : undefined,
+              accountId || 'local-dev',
+              publicPath,
+              requestAbort.signal,
+            )),
+          };
+        }
+        runQuery.forget(sessionLockKey);
         const work = () =>
           askDsh(runtime, turnPrompt, {
             ...(model ? { model } : {}),
@@ -1329,18 +1356,17 @@ export function createSim2RealWebApp(): Express {
             signal: requestAbort.signal,
             ...(image ? { image } : {}),
           });
-        return channel ? channel.withAuth(forwarded, work) : work();
+        const reply = await (channel ? channel.withAuth(forwarded, work) : work());
+        return {
+          text: publicDshText(reply.text),
+          reasoning: publicDshReasoning(reply.reasoning),
+          toolTrail: publicDshToolTrail(reply.toolTrail),
+          events: publicDshEventTail(reply.events),
+          ...(reply.usage ? { usage: reply.usage } : {}),
+          ...(reply.imageAccepted ? { imageAccepted: reply.imageAccepted } : {}),
+        };
       });
-      const replyPayload = {
-        ok: true,
-        sessionId: publicSessionId,
-        text: publicDshText(result.text),
-        reasoning: publicDshReasoning(result.reasoning),
-        toolTrail: publicDshToolTrail(result.toolTrail),
-        events: publicDshEventTail(result.events),
-        ...(result.usage ? { usage: result.usage } : {}),
-        ...(result.imageAccepted ? { imageAccepted: result.imageAccepted } : {}),
-      };
+      const replyPayload = { ok: true, sessionId: publicSessionId, ...result };
       if (turnRecord) completeDshTurn(turnRecord, replyPayload);
       response.json(replyPayload);
     } catch (error) {
