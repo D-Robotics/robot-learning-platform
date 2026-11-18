@@ -47,6 +47,7 @@ const CONTROL_CHAR_SANITIZER_FILES = [
   'server/sim2real/standalone-adapters.ts',
   'server/sim2real/board-station-proxy.ts',
   'server/sim2real/studio-cookie-auth.ts',
+  'server/sim2real/studio-device-session.ts',
   'server/sim2real/studio-login-relay.ts',
   'server/sim2real/telemetry-attestation.ts',
   'server/sim2real/trusted-proxy-auth.ts',
@@ -124,6 +125,8 @@ export default tseslint.config(
       'services/sim2real-web/public/index.html',
       // Vendored upstream build output.
       'services/mujoco-web/static/**',
+      // Reviewed dependency sources retain upstream lint directives and style.
+      'vendor/picomatch/**',
     ],
   },
   {

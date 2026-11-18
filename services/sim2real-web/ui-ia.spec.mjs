@@ -406,6 +406,15 @@ assert.match(
   /data-view-section="classroom"[\s\S]*?id="originman-classroom-slot"[\s\S]*?id="originman-sim-canvas"[\s\S]*?id="originman-round-comparison"/,
   'the in-workbench classroom ships with its native simulator and evidence panel',
 );
+assert.equal(
+  [
+    ...html.matchAll(
+      /class="nav-subitem"[^>]*data-view-target="simulate"[^>]*data-flow-child="simulate"/g,
+    ),
+  ].length,
+  1,
+  'all robot profiles retain one shared sidebar simulation entry',
+);
 for (const destination of [
   'simulate/simulate',
   'train/prepare',

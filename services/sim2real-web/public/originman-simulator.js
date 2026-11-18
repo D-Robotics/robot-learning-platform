@@ -410,6 +410,7 @@
       controls();
     }
     window.addEventListener('keyup', event => {
+      if (typeof event.key !== 'string') return;
       if (!heldKeys.delete(event.key.toLowerCase())) return;
       if (link.isEnabled()) clearDrive();
       controls();
@@ -418,6 +419,7 @@
     window.addEventListener('blur',clearDrive);
     document.addEventListener('visibilitychange',()=>{if(document.hidden)clearDrive();});
     canvas.addEventListener('keydown',event=>{
+      if (typeof event.key !== 'string') return;
       const key = event.key.toLowerCase();
       if (Object.hasOwn(driveKeys,key) && !event.ctrlKey && !event.metaKey && !event.altKey) {
         event.preventDefault();

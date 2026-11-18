@@ -2,7 +2,7 @@
   "name": "@d-robotics/robot-learning-platform",
   "version": "0.1.0",
   "private": false,
-  "description": "RDK-X5 × MicroDuck robot learning platform for browser simulation, RL training, model artifacts, Sim2Real evaluation, and deployment.",
+  "description": "RDK-X5 \u00d7 MicroDuck robot learning platform for browser simulation, RL training, model artifacts, Sim2Real evaluation, and deployment.",
   "homepage": "https://github.com/D-Robotics/robot-learning-platform#readme",
   "repository": {
     "type": "git",
@@ -32,7 +32,8 @@
     "sharp": "0.35.5",
     "smol-toml": "1.9.0",
     "source-map-js": "1.2.2",
-    "minimatch": "^11.0.7"
+    "minimatch": "^11.0.7",
+    "picomatch": "$picomatch"
   },
   "scripts": {
     "setup": "node scripts/setup-local.mjs",
@@ -85,7 +86,7 @@
     "verify:task-pack": "node scripts/verify-task-pack.mjs",
     "verify:recorder": "node services/mujoco-web/microduck-community-overlay.test.mjs",
     "verify:deployment": "node scripts/verify-deployment-assets.mjs",
-    "verify:security": "node scripts/verify-release-security.mjs",
+    "verify:security": "npm run verify:dependency-security && node scripts/verify-release-security.mjs",
     "verify:examples": "node scripts/verify-examples.mjs",
     "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs",
     "verify:board-agent": "node services/sim2real-web/local-board-agent.test.mjs",
@@ -167,7 +168,8 @@
     "verify:plugin:contracts": "node --test --test-concurrency=1 scripts/originman-dance-config.test.mjs scripts/package-platform-plugin.test.mjs scripts/plugin-playback-plan.test.mjs scripts/plugin-workshop-entry.test.mjs scripts/plugin-training-choice.test.mjs scripts/plugin-course-compatibility.test.mjs scripts/plugin-mcp-app.test.mjs scripts/plugin-ui-build.test.mjs scripts/plugin-learner-reply.test.mjs scripts/plugin-qoder-import.test.mjs scripts/experiment-overlay.test.mjs scripts/originman-evaluation-read.test.mjs scripts/plugin-studio-patch.test.mjs scripts/plugin-install.test.mjs scripts/plugin-proxy.test.mjs scripts/plugin-workspace-evidence.test.mjs scripts/plugin-windows.test.mjs scripts/plugin-auth.test.mjs scripts/plugin-short-training.test.mjs scripts/plugin-experience.test.mjs scripts/plugin-workflow.test.mjs scripts/export-studio-plugin.test.mjs scripts/verify-platform-plugin-journey.test.mjs scripts/lib/browser-bc-acceptance.test.mjs",
     "verify:plugin:workshop": "node scripts/verify-workshop-distribution.mjs",
     "verify:plugin:experience": "node --test scripts/plugin-experience.test.mjs scripts/plugin-workflow.test.mjs && node --import tsx/esm --test scripts/plugin-experience-integration.test.mjs",
-    "verify:plugin:experiments": "node --test scripts/plugin-experiment.test.mjs"
+    "verify:plugin:experiments": "node --test scripts/plugin-experiment.test.mjs",
+    "verify:dependency-security": "node --test scripts/picomatch-security.test.mjs"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",
@@ -280,6 +282,7 @@
     "tsx": "^4.19.2",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.0",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.3",
+    "picomatch": "file:vendor/picomatch"
   }
 }

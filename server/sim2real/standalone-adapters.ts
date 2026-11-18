@@ -8,6 +8,7 @@ import type { Sim2RealAuthPort } from './sim2real-auth.js';
 import { principalCan, SIM2REAL_PERMISSIONS } from './sim2real-rbac.js';
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
 import { activeTunnelAgentUrl, setTunnelDataDirResolver } from './board-tunnel-manager.js';
+import { studioDeviceSessionId } from './studio-device-session.js';
 
 import {
   isStudioDesktopDeviceId,
@@ -1170,9 +1171,6 @@ export const runOnDevice = async (
   // Studio's exec endpoint looks up the native registered id, while the raw
   // discovery id remains the owner-bound reconnect key. Legacy rows retain
   // their historical target when no native id was stored.
-  const studioTargetId = String(
-    bridgeTarget?.studioDeviceId ?? bridgeTarget?.bridgeDeviceId ?? '',
-  ).trim();
   if (bridgeTarget?.bridgeId === 'studio-desktop') {
     const result = await studioDesktopBridge.agent(
       id,
@@ -1211,6 +1209,10 @@ export const runOnDevice = async (
     cookie.length <= MAX_BOARD_AGENT_COOKIE_CHARS && !/[\u0000-\u001f\u007f]/.test(cookie)
       ? cookie
       : '';
+  const studioTargetId = bridgeTarget
+    ? await studioDeviceSessionId(bridgeTarget, studioOrigin, safeCookie, options.abortSignal)
+    : '';
+  if (bridgeTarget && !studioTargetId) return null;
   if (studioTargetId && safeCookie && studioOrigin) {
     const timeoutMs = adapterTimeout(options.timeoutMs);
     const controller = new AbortController();

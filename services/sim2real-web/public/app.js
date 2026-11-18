@@ -141,7 +141,7 @@ function readProductPreference() {
     if (params.get('demo') === '1') return 'microduck';
     const requested = params.get('robot');
     if (Object.hasOwn(PRODUCT_PROFILES, requested)) return requested;
-    if (params.get('workshop') === 'originman' || window.location.hash === '#classroom') return 'originman';
+    if (params.get('workshop') === 'originman' || window.location.hash.split('/')[0] === '#classroom') return 'originman';
     const value = window.localStorage?.getItem('rdk-duck-lab-product');
     return value && PRODUCT_PROFILES[value] ? value : 'microduck';
   } catch {
@@ -2273,14 +2273,19 @@ function renderFlowBanner() {
   banner.hidden = false;
   setText('flow-context-kicker', ctx.kicker);
   setText('flow-context-title', ctx.title);
-  setText('flow-context-description', ctx.description);
+  setText('flow-context-description', document.body.dataset.flowChild === 'simulate'
+    ? `运行 ${selectedProductProfile().displayName} 场景，录制可回放轨迹。`
+    : ctx.description);
 }
 
 let originmanClassroom;
 
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
-  const enteringClassroom = view === 'classroom' && state.productId === 'originman';
-  const wanted = enteringClassroom || WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  // OriginMan's existing scene lives in the classroom section. Every shared
+  // simulation entry (sidebar, bookmark and shortcut) must resolve to it.
+  const originmanSimulation = view === 'simulate' && state.productId === 'originman';
+  const enteringClassroom = (view === 'classroom' || originmanSimulation) && state.productId === 'originman';
+  const wanted = enteringClassroom ? 'classroom' : WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
@@ -2382,6 +2387,7 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   }
   // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
   // 避免后台空转。
+  if (originmanSimulation) setFlowChild('simulate', { updateHash, focus: false });
   syncScopedPolls();
   // 窄屏下从抽屉里点了一个目的地就收起抽屉，否则正文仍被盖住。
   closeSidebarDrawer({ restoreFocus: false });
@@ -11035,7 +11041,8 @@ async function stationInit() {
 // 服务器与板卡确实网络可达的独立部署使用。
 
 function stationDeviceRow(connection) {
-  const live = connection.tunnelActive === true;
+  const tunnelActive = connection.tunnelActive === true;
+  const verified = tunnelActive && connection.lastCheckOk === true;
   const item = document.createElement('div');
   item.className = 'station-device-item';
   item.dataset.connectionId = connection.id;
@@ -11060,11 +11067,13 @@ function stationDeviceRow(connection) {
   // The station telemetry stream and the SSH tunnel are independent paths:
   // a live board status must not be presented as an SSH connection, and an
   // untested SSH tunnel must not contradict a visible LIVE telemetry card.
-  badge.textContent = live ? 'SSH 已连接' : 'SSH 未验证';
-  badge.classList.add(live ? 'live' : 'down');
+  badge.textContent = verified ? 'SSH 已验证'
+    : connection.lastCheckOk === false ? 'SSH 检查失败'
+    : tunnelActive ? 'SSH 待验证' : 'SSH 未连接';
+  badge.classList.add(verified ? 'live' : 'down');
   const connectBtn = item.querySelector('.station-device-connect');
-  connectBtn.textContent = live ? '断开' : '连接';
-  connectBtn.dataset.action = live ? 'disconnect' : 'connect';
+  connectBtn.textContent = tunnelActive ? '断开' : '连接';
+  connectBtn.dataset.action = tunnelActive ? 'disconnect' : 'connect';
   return item;
 }
 
@@ -12035,7 +12044,13 @@ function wireEvents() {
       history.replaceState(history.state, '', url);
     }
     state.productId = next;
-    if (next !== 'originman' && document.body.dataset.activeView === 'classroom') setView('overview');
+    const activeView = document.body.dataset.activeView;
+    const sharedSimulation = activeView === 'simulate' ||
+      (activeView === 'classroom' && document.body.dataset.flowChild === 'simulate');
+    if (sharedSimulation) {
+      setView('simulate');
+      setFlowChild('simulate', { focus: false });
+    } else if (next !== 'originman' && activeView === 'classroom') setView('overview');
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
     // model for the newly selected product; otherwise return to the account
