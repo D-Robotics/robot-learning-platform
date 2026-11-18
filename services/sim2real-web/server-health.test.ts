@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,6 +19,8 @@ import {
   SIM2REAL_HTTP_MAX_REQUESTS_PER_SOCKET,
   SIM2REAL_HTTP_REQUEST_TIMEOUT_MS,
 } from './server.js';
+import { BUILTIN_MICRODUCK_MODEL } from '../../shared/sim2real.js';
+import { createSim2RealRun } from '../../server/sim2real/sim2real-store.js';
 import { flushSim2RealAudit } from '../../server/sim2real/audit-log.js';
 import { askDsh as mockedAskDsh, DshAgentFailure } from '../../server/agent-runtime/dsh-runtime.js';
 
@@ -171,6 +174,93 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     const disabled = await post({ message: 'hello', model: 'deepseek-chat' });
     expect(disabled.status).toBe(503);
     expect(await disabled.json()).toMatchObject({ error: 'DSH_RUNTIME_DISABLED' });
+  });
+
+  it('answers two Run queries in the platform without DSH and verifies the current worker bytes on each turn', async () => {
+    const { baseUrl } = await fixture();
+    const bytes = Buffer.from('isolated policy fixture');
+    const sha = createHash('sha256').update(bytes).digest('hex');
+    let readable = true;
+    const reads: { path: string | undefined; owner: string | string[] | undefined }[] = [];
+    const worker = http.createServer((request, response) => {
+      reads.push({ path: request.url, owner: request.headers['x-sim2real-account'] });
+      if (!readable) {
+        response.writeHead(404).end();
+        return;
+      }
+      response.writeHead(200, { 'content-length': bytes.length, 'x-artifact-sha256': sha });
+      response.end(bytes);
+    });
+    upstreamServers.push(worker);
+    await new Promise<void>((resolve) => worker.listen(0, '127.0.0.1', resolve));
+    process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = `http://127.0.0.1:${(worker.address() as AddressInfo).port}/train`;
+    const run = await createSim2RealRun({
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'completed',
+      summary: 'fixture',
+      mock: false,
+      externalRunId: 'originman-readonly-fixture',
+      artifact: {
+        artifactId: 'fixture-policy',
+        artifactRef: 'policy.onnx',
+        kind: 'compiled',
+        format: 'onnx',
+        sha256: sha,
+        sizeBytes: bytes.length,
+        deployable: false,
+      },
+    });
+    const post = async (message: string, sessionId?: string) => {
+      const response = await fetch(`${baseUrl}/api/sim2real/dsh/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ message, ...(sessionId ? { sessionId } : {}) }),
+      });
+      return { status: response.status, ...(await response.json()) };
+    };
+    const followup = '再确认一下刚才那条 Run，策略已经留存了吗？把下载链接也给我。';
+    const first = await post(`查一下 Run ${run.id} 的策略留存和 ONNX 下载链接。只查已有结果。`);
+    expect(first).toMatchObject({
+      status: 200,
+      ok: true,
+      text: expect.stringContaining('平台留存状态未确认'),
+      policyDownload: `/api/v1/duck/runs/${run.id}/artifact`,
+      toolTrail: [{ name: 'platform_run_lookup', step: 1, ok: true }],
+    });
+    expect(first.text).toContain(run.id);
+    const second = await post(followup, first.sessionId);
+    expect(second).toMatchObject({
+      status: 200,
+      sessionId: first.sessionId,
+      policyDownload: first.policyDownload,
+    });
+    expect(second.text).toContain(run.id);
+    expect(reads).toEqual(
+      Array(2).fill({ path: '/runs/originman-readonly-fixture/artifact', owner: 'local-dev' }),
+    );
+    const downloaded = await fetch(baseUrl + second.policyDownload);
+    expect(downloaded.status).toBe(200);
+    expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(bytes);
+
+    expect(await post(followup, 'sim2real-other-test')).toMatchObject({
+      status: 200,
+      text: expect.stringContaining('没有刚刚确认的 Run'),
+      toolTrail: [],
+    });
+    readable = false;
+    const unavailable = await post(followup, first.sessionId);
+    expect(unavailable.text).toContain('无法从执行端取回制品字节');
+    expect(unavailable.policyDownload).toBeUndefined();
+    expect(reads).toHaveLength(4);
+
+    const mixed = await post(`查一下 Run ${run.id} 的策略留存，重新提交训练。`, first.sessionId);
+    expect(mixed.status).toBe(503);
+    expect(await post(followup, first.sessionId)).toMatchObject({
+      text: expect.stringContaining('没有刚刚确认的 Run'),
+    });
+    expect(reads).toHaveLength(4);
+    await flushSim2RealAudit();
   });
 
   it('surfaces a DSH turn failure as a stable 502 with its operator hint instead of a silent fallback', async () => {

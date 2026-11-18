@@ -426,8 +426,9 @@ test('experience MCP preserves upstream tools, results and errors and exposes gu
   const init = await proxy('initialize');
   assert.equal(init.serverInfo.name, 'original');
   assert.ok(init.instructions.startsWith('original'));
-  assert.match(init.instructions, /每轮按需登记/);
-  assert.match(init.instructions, /mcp__rdk-robot-learning-platform__rdk_training_wait/);
+  assert.match(init.instructions, /在当前轮按需登记后重新查询/);
+  assert.match(init.instructions, /mcp__rdk-robot-learning-platform__rdk_training_status/);
+  assert.match(init.instructions, /只有用户明确要求等待正在运行的任务时才用 rdk_training_wait/);
   assert.match(init.instructions, /artifactRetention、links.policyDownload/);
   assert.match(init.instructions, /当前进度→本次结果→下一步/);
   assert.match(init.instructions, /仍可只读查询原Run/);

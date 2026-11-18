@@ -743,6 +743,7 @@ const DSH_TOOL_LABELS = {
   rdk_board_health: '读取板端健康',
   rdk_training_submit: '提交训练',
   rdk_training_status: '查询训练状态',
+  platform_run_lookup: '平台实时查询 Run',
   rdk_simulator_open: '打开仿真',
   rdk_evaluation_summarize: '汇总评测',
   rdk_deployment_preflight: '部署预检',
@@ -798,10 +799,17 @@ function renderDshReply(dsh) {
   // The workspace-evidence hint only fits turns where tools actually ran; a
   // plain prose reply (self-introduction, capability tour) has no evidence to
   // check and the boilerplate only adds noise.
-  provenance.textContent = dsh.toolTrail?.length
+  const liveRunQuery = dsh.toolTrail?.some((step) => step.name === 'platform_run_lookup');
+  provenance.textContent = liveRunQuery ? '平台实时查询' : dsh.toolTrail?.length
     ? `Agent 生成 · 依据见工具调用与执行证据${usageLabel}`
     : `Agent 生成${usageLabel}`;
   node?.append(provenance);
+  if (node && liveRunQuery && typeof dsh.policyDownload === 'string' && /^\/(?:[a-z0-9_-]+\/)*api\/v1\/duck\/runs\/[a-f0-9-]{8,36}\/artifact$/i.test(dsh.policyDownload)) {
+    const download = document.createElement('a');
+    download.href = dsh.policyDownload;
+    download.textContent = '下载本轮策略（ONNX）';
+    node.append(download);
+  }
   const trail = renderDshToolTrail(dsh.toolTrail);
   if (trail) node?.append(trail);
   const reasoning = renderDshReasoning(dsh.reasoning);

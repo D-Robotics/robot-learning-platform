@@ -23,7 +23,7 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "b8c9531415d202ce167e026020a7521bb941e2e4c192539ba5990fa195ad2d1e",
-    "scripts/experience-mcp.mjs": "8c04a6eef204ec6c5b5efb4994b99a83949bce6c9d88d5f0bd9823d61c5699c2",
+    "scripts/experience-mcp.mjs": "a69869309043d6c20dbaa12c283de5c080c07384a815a6c86254dd6592ea68b2",
     "scripts/workflow-inspection.mjs": "e0b17b6039d55e49d693e01d069ce79f5439ddefab6144f38108fca15dd34493",
     "scripts/workspace-evidence.mjs": "99d06f8020fa16636c9b15447b12bc0852853b1e71ac3fba70f2a474a8f84a0b",
     "scripts/experiment-context.mjs": "59bd3dc740d3229c6c8a1567f3275bc8bfa1a9af8b40a616a7fc1027bd25ce87",
