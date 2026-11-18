@@ -133,7 +133,7 @@ describe('response compression middleware', () => {
     expect(revalidated.body.length).toBe(0);
     expect(revalidated.headers['content-encoding']).toBeUndefined();
     expect(revalidated.headers['content-length']).toBeUndefined();
-    expect(revalidated.headers['cache-control']).toBe('public, max-age=0');
+    expect(revalidated.headers['cache-control']).toBe('no-cache');
     expect(String(revalidated.headers.vary)).toMatch(/accept-encoding/i);
     const stale = await httpGet(base + '/theme-boot.js', 'gzip', {
       'if-none-match': '"stale-etag"',
@@ -141,6 +141,31 @@ describe('response compression middleware', () => {
     expect(stale.status).toBe(200);
     expect(stale.headers['content-encoding']).toBe('gzip');
   });
+
+  it.each(['app.js', 'experiment-page.mjs', 'app.css'])(
+    'revalidates versioned workbench asset %s identically with and without gzip',
+    async (file) => {
+      const base = await startApp(
+        express.static(PUBLIC_ROOT, {
+          setHeaders: (response) => response.setHeader('Cache-Control', 'no-cache'),
+        }),
+      );
+      const url = `${base}/${file}?v=release-86`;
+      const plain = await httpGet(url, 'identity');
+      const compressed = await httpGet(url, 'gzip');
+      expect(plain.status).toBe(200);
+      expect(compressed.status).toBe(200);
+      expect(compressed.headers['cache-control']).toBe(plain.headers['cache-control']);
+      expect(compressed.headers['cache-control']).toBe('no-cache');
+      expect(zlib.gunzipSync(compressed.body)).toEqual(plain.body);
+      const cached = await httpGet(url, 'gzip', {
+        'if-none-match': String(compressed.headers.etag),
+      });
+      expect(cached.status).toBe(304);
+      expect(cached.body.length).toBe(0);
+      expect(cached.headers['cache-control']).toBe('no-cache');
+    },
+  );
 
   it('compresses a JSON response for gzip-capable clients', async () => {
     const base = await startApp(express.json());
