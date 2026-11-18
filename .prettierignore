@@ -43,3 +43,6 @@ plugins/rdk-robot-learning-platform/mcp/retained-core.mjs
 
 # Generated MCP App HTML embeds the exact bundled JS and is checksum-verified.
 plugins/rdk-robot-learning-platform/ui/experiment.html
+
+# Reviewed upstream dependency fork: retain upstream source bytes.
+vendor/picomatch/

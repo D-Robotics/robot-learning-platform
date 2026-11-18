@@ -125,6 +125,8 @@ export default tseslint.config(
       'services/sim2real-web/public/index.html',
       // Vendored upstream build output.
       'services/mujoco-web/static/**',
+      // Reviewed dependency sources retain upstream lint directives and style.
+      'vendor/picomatch/**',
     ],
   },
   {
