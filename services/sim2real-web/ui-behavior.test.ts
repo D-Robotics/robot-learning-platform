@@ -203,6 +203,7 @@ async function boot(
     stationStream?: () => Response | Promise<Response>;
     devices?: unknown[];
     localBridgeStatus?: unknown;
+    sshConnections?: unknown[];
     pairingCommand?: string;
     /** Frames the replay endpoint returns; drives the aligned camera frame tests. */
     replayFrames?: unknown[];
@@ -332,6 +333,8 @@ async function boot(
         });
       } else if (url.includes('/board-station/status/stream') && options.stationStream) {
         return options.stationStream();
+      } else if (url.endsWith('/device-connections') && options.sshConnections) {
+        payload = { connections: options.sshConnections };
       } else if (url.includes('/local-bridge/status') && options.localBridgeStatus) {
         payload = options.localBridgeStatus;
       } else if (url.includes('/local-bridge/pairing-code') && options.pairingCommand) {
@@ -473,6 +476,30 @@ async function boot(
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
+  it('shows an SSH probe failure even when the tunnel can still be disconnected', async () => {
+    const { window } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/#station/devices',
+      sshConnections: [
+        {
+          id: 'ssh-failed',
+          label: 'Probe failed',
+          host: 'board.example.test',
+          port: 22,
+          agentPort: 19100,
+          username: 'root',
+          tunnelActive: true,
+          lastCheckOk: false,
+          lastCheckedAt: '2026-09-10T00:00:00.000Z',
+          lastCheckMessage: 'Connection timed out',
+        },
+      ],
+    });
+    const row = window.document.querySelector('[data-connection-id="ssh-failed"]');
+    expect(row?.querySelector('.station-device-badge')?.textContent).toBe('SSH 检查失败');
+    expect(row?.querySelector('.station-device-badge')?.classList.contains('live')).toBe(false);
+    expect(row?.querySelector('[data-action="disconnect"]')?.textContent).toBe('断开');
+  });
+
   it.each(['?robot=originman#simulate/simulate', '#classroom/simulate'])(
     'opens the actual OriginMan scene from %s without submitting a run',
     async (location) => {

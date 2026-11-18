@@ -11041,7 +11041,8 @@ async function stationInit() {
 // 服务器与板卡确实网络可达的独立部署使用。
 
 function stationDeviceRow(connection) {
-  const live = connection.tunnelActive === true;
+  const tunnelActive = connection.tunnelActive === true;
+  const verified = tunnelActive && connection.lastCheckOk === true;
   const item = document.createElement('div');
   item.className = 'station-device-item';
   item.dataset.connectionId = connection.id;
@@ -11066,11 +11067,13 @@ function stationDeviceRow(connection) {
   // The station telemetry stream and the SSH tunnel are independent paths:
   // a live board status must not be presented as an SSH connection, and an
   // untested SSH tunnel must not contradict a visible LIVE telemetry card.
-  badge.textContent = live ? 'SSH 已连接' : 'SSH 未验证';
-  badge.classList.add(live ? 'live' : 'down');
+  badge.textContent = verified ? 'SSH 已验证'
+    : connection.lastCheckOk === false ? 'SSH 检查失败'
+    : tunnelActive ? 'SSH 待验证' : 'SSH 未连接';
+  badge.classList.add(verified ? 'live' : 'down');
   const connectBtn = item.querySelector('.station-device-connect');
-  connectBtn.textContent = live ? '断开' : '连接';
-  connectBtn.dataset.action = live ? 'disconnect' : 'connect';
+  connectBtn.textContent = tunnelActive ? '断开' : '连接';
+  connectBtn.dataset.action = tunnelActive ? 'disconnect' : 'connect';
   return item;
 }
 
