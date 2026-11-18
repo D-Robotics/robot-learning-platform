@@ -80,6 +80,13 @@ export async function connectAuthenticatedCore({
   const auth = authentication ?? createPluginAuth({ env, fetchImpl, cacheDirectory });
   let bridgeSession = null;
   let connectingBoard = null;
+  const recordingTools = new Set([
+    'rdk_recordings_list',
+    'rdk_recording_read',
+    'rdk_recording_create',
+    'rdk_recording_append',
+  ]);
+  let recordingSupport;
   const secret = randomBytes(32).toString('hex');
   const digest = (s) => createHash('sha256').update(s).digest();
   const sendFailure = (res, error) => {
@@ -127,6 +134,30 @@ export async function connectAuthenticatedCore({
     }
     return response;
   };
+  async function supportsRecordings(signal) {
+    try {
+      signal?.throwIfAborted();
+      const cookie = await auth.cookie();
+      if (recordingSupport?.cookie === cookie && recordingSupport.expiresAt > Date.now())
+        return recordingSupport.supported;
+      const response = await fetchPlatform('/api/sim2real/recordings', {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        signal: AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(1000)]),
+      });
+      await response.body?.cancel();
+      signal?.throwIfAborted();
+      // Only an explicit collection-route 404 proves this optional API is absent.
+      // Auth failures, transient transport errors and 5xx keep their normal meaning.
+      const supported = response.status === 404 ? false : response.ok ? true : undefined;
+      if (supported !== undefined && (await auth.cookie()) === cookie)
+        recordingSupport = { cookie, supported, expiresAt: Date.now() + 60000 };
+      return supported;
+    } catch {
+      signal?.throwIfAborted();
+      return undefined;
+    }
+  }
   async function verifiedWorkspaceAccount() {
     const session = await auth.status();
     if (session.authenticated === true && session.accountId) return session.accountId;
@@ -1110,6 +1141,19 @@ export async function connectAuthenticatedCore({
       return upstream.notify(method, params);
     },
     async request(method, params, options) {
+      if (
+        method === 'tools/call' &&
+        recordingTools.has(params.name) &&
+        (await supportsRecordings(options?.signal)) === false
+      )
+        return apiResult(
+          {
+            ok: false,
+            error: 'PLATFORM_FEATURE_UNAVAILABLE',
+            message: '当前平台未提供状态录制接口；可使用仿真轨迹录制与下载。没有执行写入。',
+          },
+          true,
+        );
       if (method === 'tools/call' && params.name === 'rdk_device_connect') {
         try {
           const connected = await connectBoard(params.arguments?.connectionId, options?.signal);
@@ -1142,18 +1186,23 @@ export async function connectAuthenticatedCore({
       }
       const result = await upstream.request(method, params, options);
       if (method === 'tools/list' && Array.isArray(result.tools)) {
+        const supported = result.tools.some((tool) => recordingTools.has(tool.name))
+          ? await supportsRecordings(options?.signal)
+          : undefined;
         return {
           ...result,
-          tools: result.tools.map((tool) =>
-            tool.name === 'rdk_device_connect'
-              ? {
-                  ...tool,
-                  description:
-                    '连接并验证已发现的目标板卡。connectionId 使用 rdk_device_discover 返回的完整平台设备 ID。Local Bridge 连接保留当前账号的设备会话，通过 Studio 原有验证，不加载或启动策略。' +
-                    tool.description,
-                }
-              : tool,
-          ),
+          tools: result.tools
+            .filter((tool) => supported !== false || !recordingTools.has(tool.name))
+            .map((tool) =>
+              tool.name === 'rdk_device_connect'
+                ? {
+                    ...tool,
+                    description:
+                      '连接并验证已发现的目标板卡。connectionId 使用 rdk_device_discover 返回的完整平台设备 ID。Local Bridge 连接保留当前账号的设备会话，通过 Studio 原有验证，不加载或启动策略。' +
+                      tool.description,
+                  }
+                : tool,
+            ),
         };
       }
       // Older retained cores omit the platform's structured pre-engine diagnostic.

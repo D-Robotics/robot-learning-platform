@@ -504,24 +504,37 @@ describe('Sim2Real workbench DOM behavior', () => {
     },
   );
 
-  it('resolves simulation again when switching robots and keeps the classroom mounted only once', async () => {
+  it.each(['microduck', 'originbot'])(
+    'resolves simulation after switching from OriginMan to %s and back',
+    async (product) => {
+      const mount = vi.fn(() => ({ refresh: vi.fn() }));
+      const { window, errors } = await boot({
+        url: 'http://127.0.0.1:3000/sim2real/?robot=originman#simulate/simulate',
+        originmanMount: mount,
+      });
+      const select = window.document.querySelector<HTMLSelectElement>('#product-select')!;
+      const panel = window.document.querySelector<HTMLDetailsElement>('#originman-workshop')!;
+      for (const next of [product, 'originman']) {
+        select.value = next;
+        select.dispatchEvent(new window.Event('change', { bubbles: true }));
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(panel.hidden).toBe(next !== 'originman');
+        expect(
+          window.document.querySelector<HTMLElement>('[data-view-section="simulate"]')?.hidden,
+        ).toBe(next === 'originman');
+      }
+      expect(mount).toHaveBeenCalledOnce();
+      expect(errors).toEqual([]);
+    },
+  );
+
+  it('reuses the OriginMan classroom when navigating away from and back to simulation', async () => {
     const mount = vi.fn(() => ({ refresh: vi.fn() }));
     const { window, errors } = await boot({
-      url: 'http://127.0.0.1:3000/sim2real/#simulate/simulate',
+      url: 'http://127.0.0.1:3000/sim2real/?robot=originman#simulate/simulate',
       originmanMount: mount,
     });
-    const select = window.document.querySelector<HTMLSelectElement>('#product-select')!;
     const panel = window.document.querySelector<HTMLDetailsElement>('#originman-workshop')!;
-    for (const product of ['originman', 'microduck', 'originbot', 'originman']) {
-      select.value = product;
-      select.dispatchEvent(new window.Event('change', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(panel.hidden).toBe(product !== 'originman');
-      expect(
-        window.document.querySelector<HTMLElement>('[data-view-section="simulate"]')?.hidden,
-      ).toBe(product === 'originman');
-    }
-    expect(mount).toHaveBeenCalledOnce();
     window.document
       .querySelector<HTMLButtonElement>('.sidebar [data-flow-child="configure"]')
       ?.click();

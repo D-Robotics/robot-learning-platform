@@ -2,7 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { connectAuthenticatedCore } from '../plugins/rdk-robot-learning-platform/scripts/authenticated-core.mjs';
 
-async function fixture(t, fetchImpl, cookie = async () => 'rdk_sso_web_session=fixture-verified') {
+async function fixture(
+  t,
+  fetchImpl,
+  cookie = async () => 'rdk_sso_web_session=fixture-verified',
+  upstreamRequest = async () => ({}),
+) {
   let childEnv,
     invalidations = 0;
   const auth = {
@@ -17,7 +22,7 @@ async function fixture(t, fetchImpl, cookie = async () => 'rdk_sso_web_session=f
     fetchImpl,
     connect: (options) => {
       childEnv = options.env;
-      return { request: async () => ({}), notify() {}, close: async () => {} };
+      return { request: upstreamRequest, notify() {}, close: async () => {} };
     },
   });
   t.after(() => core.close());
@@ -399,4 +404,85 @@ test('Bridge connection rejects wrong device receipts and never installs their c
   assert.equal(result.structuredContent.error, 'STUDIO_BRIDGE_SESSION_UNCONFIRMED');
   assert.equal(calls, 1);
   await f.request('/api/v1/duck/board-station/status?deviceId=bridge-target');
+});
+
+const recordingTools = [
+  'rdk_recordings_list',
+  'rdk_recording_read',
+  'rdk_recording_create',
+  'rdk_recording_append',
+];
+test('unsupported recording APIs are absent from the catalog and direct calls never dispatch a write', async (t) => {
+  let businessCalls = 0;
+  const f = await fixture(
+    t,
+    async (url, init) => {
+      assert.equal(new URL(url).pathname, '/robotics-learning/api/sim2real/recordings');
+      assert.equal(init.method, 'GET');
+      return Response.json({ error: 'NOT_FOUND' }, { status: 404 });
+    },
+    undefined,
+    async (method) => {
+      if (method === 'tools/list')
+        return {
+          tools: [...recordingTools, 'rdk_runs_list'].map((name) => ({ name })),
+          nextCursor: 'opaque-next',
+        };
+      businessCalls++;
+      throw Error('unsupported business call must not be forwarded');
+    },
+  );
+  const list = await f.core.request('tools/list', {});
+  assert.deepEqual(
+    list.tools.map((tool) => tool.name),
+    ['rdk_runs_list'],
+  );
+  assert.equal(list.nextCursor, 'opaque-next');
+  const rejected = await f.core.request('tools/call', {
+    name: 'rdk_recording_create',
+    arguments: { name: 'no-write' },
+  });
+  assert.equal(rejected.isError, true);
+  assert.equal(rejected.structuredContent.error, 'PLATFORM_FEATURE_UNAVAILABLE');
+  assert.equal(businessCalls, 0);
+});
+test('recording support stays available when implemented and is scoped to the current account cookie', async (t) => {
+  let cookie = 'rdk_sso_web_session=account-a';
+  const seen = [];
+  const f = await fixture(
+    t,
+    async (_url, init) => {
+      seen.push(init.headers.cookie);
+      return init.headers.cookie.endsWith('account-a')
+        ? Response.json({}, { status: 404 })
+        : Response.json({ recordings: [] });
+    },
+    async () => cookie,
+    async () => ({ tools: recordingTools.map((name) => ({ name })) }),
+  );
+  assert.deepEqual((await f.core.request('tools/list', {})).tools, []);
+  cookie = 'rdk_sso_web_session=account-b';
+  assert.deepEqual(
+    (await f.core.request('tools/list', {})).tools.map((tool) => tool.name),
+    recordingTools,
+  );
+  assert.deepEqual(seen, ['rdk_sso_web_session=account-a', 'rdk_sso_web_session=account-b']);
+});
+test('network and permission failures do not masquerade as unsupported recording APIs', async (t) => {
+  for (const failure of ['network', 403, 503]) {
+    const f = await fixture(
+      t,
+      async () => {
+        if (failure === 'network') throw TypeError('fetch failed');
+        return Response.json({ error: 'UNAVAILABLE' }, { status: failure });
+      },
+      undefined,
+      async () => ({ tools: recordingTools.map((name) => ({ name })) }),
+    );
+    assert.deepEqual(
+      (await f.core.request('tools/list', {})).tools.map((tool) => tool.name),
+      recordingTools,
+    );
+    assert.equal(f.invalidations(), 0);
+  }
 });
