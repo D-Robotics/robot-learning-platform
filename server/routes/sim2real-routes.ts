@@ -380,6 +380,7 @@ interface StudioBridgeJsonResponse {
   status: number;
   ok: boolean;
   payload: Record<string, unknown>;
+  deviceCookies: string[];
 }
 
 /**
@@ -440,7 +441,16 @@ async function fetchStudioBridgeJson(
     }
     const payload = studioObject(parsed);
     if (!payload) return null;
-    return { status: upstream.status, ok: upstream.ok, payload };
+    const deviceCookies = (upstream.headers.getSetCookie?.() ?? []).filter(
+      (cookie) =>
+        cookie.length <= 4096 &&
+        /^rdk_studio_devices=[^;\s]+;/.test(cookie) &&
+        !/[\u0000-\u001f\u007f]/.test(cookie) &&
+        /;\s*HttpOnly(?:;|$)/i.test(cookie) &&
+        /;\s*Secure(?:;|$)/i.test(cookie) &&
+        !/;\s*Domain=/i.test(cookie),
+    );
+    return { status: upstream.status, ok: upstream.ok, payload, deviceCookies };
   } catch {
     // Do not expose fetch/redirect/proxy text to the browser.  Cancellation is
     // best-effort because a custom test adapter may not implement body.cancel.
@@ -3474,6 +3484,7 @@ export function createSim2RealRouter(
         }
         projected.response.device = publicDevice;
         noStore(response);
+        for (const cookie of upstream.deviceCookies) response.append('Set-Cookie', cookie);
         response.status(200).json(projected.response);
       } catch {
         noStore(response);

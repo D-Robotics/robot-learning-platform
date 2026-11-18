@@ -78,6 +78,8 @@ export async function connectAuthenticatedCore({
   connect = connectMcp,
 } = {}) {
   const auth = authentication ?? createPluginAuth({ env, fetchImpl, cacheDirectory });
+  let bridgeSession = null;
+  let connectingBoard = null;
   const secret = randomBytes(32).toString('hex');
   const digest = (s) => createHash('sha256').update(s).digest();
   const sendFailure = (res, error) => {
@@ -102,9 +104,16 @@ export async function connectAuthenticatedCore({
         if (!sessionProbe || error.needsLogin !== true) throw error;
       }
     }
+    if (bridgeSession && bridgeSession.accountCookie !== cookie) bridgeSession = null;
+    const boardRoute =
+      /^\/api\/(?:v1\/duck|sim2real)\/(?:board-station|deployments|local-bridge)(?:[/?]|$)/.test(
+        pathname,
+      );
+    const requestCookie =
+      cookie && boardRoute && bridgeSession ? `${cookie}; ${bridgeSession.deviceCookie}` : cookie;
     const response = await fetchImpl(auth.audience + pathname, {
       ...options,
-      headers: { ...options.headers, ...(cookie ? { cookie } : {}) },
+      headers: { ...options.headers, ...(requestCookie ? { cookie: requestCookie } : {}) },
       redirect: 'error',
       signal: AbortSignal.any([
         ...(options.signal ? [options.signal] : []),
@@ -112,6 +121,7 @@ export async function connectAuthenticatedCore({
       ]),
     });
     if (response.status === 401) {
+      bridgeSession = null;
       if (cookie) await auth.invalidate(cookie);
       throw loginRequired();
     }
@@ -181,6 +191,96 @@ export async function connectAuthenticatedCore({
     structuredContent: value,
     content: [{ type: 'text', text: JSON.stringify(value) }],
   });
+  async function connectBoard(connectionId, signal) {
+    if (typeof connectionId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(connectionId))
+      throw new PluginRequestError(
+        'DSH_CAPABILITY_REJECTED',
+        '请提供设备发现返回的完整 connectionId。',
+        { httpStatus: 400 },
+      );
+    const accountId = await verifiedWorkspaceAccount();
+    const catalog = await readWorkspaceJson('/device-connections', signal, accountId);
+    const device = catalog.studioDevices?.find(
+      (item) => item.id === connectionId && item.provider === 'studio-local-bridge',
+    );
+    if (!device) return null;
+    const runConnect = async () => {
+      const presence = await readWorkspaceJson('/local-bridge/status', signal, accountId);
+      const matches = (presence.bridges ?? []).flatMap((bridge) =>
+        bridge.online === true
+          ? (bridge.devices ?? [])
+              .filter(
+                (entry) =>
+                  entry.bridgeDeviceId === device.bridgeDeviceId && entry.host === device.host,
+              )
+              .map(() => bridge)
+          : [],
+      );
+      if (matches.length !== 1)
+        throw new PluginRequestError(
+          'STUDIO_BRIDGE_DEVICE_UNAVAILABLE',
+          '当前账号下未找到唯一在线的目标 Bridge 设备。',
+          { httpStatus: 409 },
+        );
+      const accountCookie = await auth.cookie({ accountId });
+      const response = await fetchPlatform(
+        '/api/v1/duck/local-bridge/devices/' +
+          encodeURIComponent(device.bridgeDeviceId) +
+          '/connect',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ bridgeId: matches[0].bridgeId }),
+          signal,
+        },
+        accountId,
+      );
+      if (!response.ok)
+        throw await boardConnectionError(response, 'Studio 未通过目标设备连接验证。');
+      const result = await response.json();
+      const deviceCookies = (response.headers.getSetCookie?.() ?? []).filter(
+        (value) =>
+          value.length <= 4096 &&
+          /^rdk_studio_devices=[^;\s]+;/.test(value) &&
+          !/[\u0000-\u001f\u007f]/.test(value) &&
+          /;\s*HttpOnly(?:;|$)/i.test(value) &&
+          /;\s*Secure(?:;|$)/i.test(value) &&
+          !/;\s*Domain=/i.test(value),
+      );
+      if (
+        result.ok !== true ||
+        result.device?.id !== connectionId ||
+        result.device?.host !== device.host ||
+        deviceCookies.length !== 1
+      )
+        throw new PluginRequestError(
+          'STUDIO_BRIDGE_SESSION_UNCONFIRMED',
+          'Studio 尚未返回这台板卡的已验证设备会话。',
+          { httpStatus: 502 },
+        );
+      if ((await auth.cookie({ accountId })) !== accountCookie)
+        throw new PluginRequestError(
+          'AUTH_OPERATION_SUPERSEDED',
+          '登录会话已变化，请重新连接设备。',
+          { httpStatus: 409 },
+        );
+      bridgeSession = { accountCookie, deviceCookie: deviceCookies[0].split(';')[0] };
+      return {
+        connectionId,
+        transport: 'studio-local-bridge',
+        sessionBound: true,
+        verification: 'studio-connect',
+        motionStarted: false,
+      };
+    };
+    const pending = (connectingBoard ?? Promise.resolve()).catch(() => {}).then(runConnect);
+    connectingBoard = pending;
+    try {
+      return await pending;
+    } finally {
+      if (connectingBoard === pending) connectingBoard = null;
+    }
+  }
   async function computeTool(name, args, signal) {
     const validId =
       typeof args.computeResourceId === 'string' &&
@@ -1010,6 +1110,15 @@ export async function connectAuthenticatedCore({
       return upstream.notify(method, params);
     },
     async request(method, params, options) {
+      if (method === 'tools/call' && params.name === 'rdk_device_connect') {
+        try {
+          const connected = await connectBoard(params.arguments?.connectionId, options?.signal);
+          if (connected) return apiResult(connected);
+        } catch (error) {
+          options?.signal?.throwIfAborted();
+          return apiResult(publicFailure(error), true);
+        }
+      }
       if (
         method === 'tools/call' &&
         ([
@@ -1032,6 +1141,21 @@ export async function connectAuthenticatedCore({
         }
       }
       const result = await upstream.request(method, params, options);
+      if (method === 'tools/list' && Array.isArray(result.tools)) {
+        return {
+          ...result,
+          tools: result.tools.map((tool) =>
+            tool.name === 'rdk_device_connect'
+              ? {
+                  ...tool,
+                  description:
+                    '连接并验证已发现的目标板卡。connectionId 使用 rdk_device_discover 返回的完整平台设备 ID。Local Bridge 连接保留当前账号的设备会话，通过 Studio 原有验证，不加载或启动策略。' +
+                    tool.description,
+                }
+              : tool,
+          ),
+        };
+      }
       // Older retained cores omit the platform's structured pre-engine diagnostic.
       // Enrich only failed empty logs through the same owner-authorized read API.
       if (method === 'tools/call' && params.name === 'rdk_run_logs' && !result.isError) {
@@ -1144,6 +1268,7 @@ export async function connectAuthenticatedCore({
     async close() {
       if (closed) return;
       closed = true;
+      bridgeSession = null;
       try {
         await upstream.close();
       } finally {

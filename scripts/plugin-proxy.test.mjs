@@ -303,3 +303,100 @@ test('OriginMan CPU preflight uses actual steps from the exact Run and never cho
     [...Array(9).fill('GET'), 'POST'],
   );
 });
+
+test('explicit Local Bridge connect retains only its verified session for board requests', async (t) => {
+  const device = {
+    id: 'bridge-target',
+    provider: 'studio-local-bridge',
+    bridgeDeviceId: 'ssh:operator@edge.example:22',
+    host: 'edge.example',
+  };
+  let accountCookie = 'rdk_sso_web_session=owner-one';
+  const seen = [];
+  const f = await fixture(
+    t,
+    async (url, options) => {
+      const u = new URL(url);
+      seen.push({ path: u.pathname, cookie: options.headers.cookie, method: options.method });
+      if (u.pathname.endsWith('/device-connections'))
+        return Response.json({ ok: true, connections: [], studioDevices: [device] });
+      if (u.pathname.endsWith('/local-bridge/status'))
+        return Response.json({
+          ok: true,
+          bridges: [{ bridgeId: 'bridge-one', online: true, devices: [device] }],
+        });
+      if (u.pathname.endsWith('/connect')) {
+        assert.equal(options.method, 'POST');
+        assert.deepEqual(JSON.parse(options.body), { bridgeId: 'bridge-one' });
+        const headers = new Headers();
+        headers.append(
+          'set-cookie',
+          'rdk_studio_devices=signed-device-session; Path=/; HttpOnly; Secure; SameSite=Lax',
+        );
+        headers.append(
+          'set-cookie',
+          'rdk_sso_web_session=must-not-be-retained; Path=/; Secure; HttpOnly',
+        );
+        return Response.json(
+          { ok: true, device: { id: device.id, host: device.host } },
+          { headers },
+        );
+      }
+      return Response.json({ ok: true });
+    },
+    async () => accountCookie,
+  );
+  const result = await f.core.request('tools/call', {
+    name: 'rdk_device_connect',
+    arguments: { connectionId: device.id },
+  });
+  assert.equal(result.structuredContent.sessionBound, true);
+  assert.doesNotMatch(
+    JSON.stringify(result),
+    /signed-device-session|owner-one|must-not-be-retained/,
+  );
+  await f.request('/api/v1/duck/board-station/status?deviceId=bridge-target');
+  await f.request('/api/v1/duck/models');
+  assert.equal(seen.at(-2).cookie, accountCookie + '; rdk_studio_devices=signed-device-session');
+  assert.equal(seen.at(-1).cookie, accountCookie);
+  accountCookie = 'rdk_sso_web_session=owner-two';
+  await f.request('/api/v1/duck/board-station/status?deviceId=bridge-target');
+  assert.equal(seen.at(-1).cookie, accountCookie);
+});
+
+test('Bridge connection rejects wrong device receipts and never installs their cookie', async (t) => {
+  const device = {
+    id: 'bridge-target',
+    provider: 'studio-local-bridge',
+    bridgeDeviceId: 'ssh:operator@edge.example:22',
+    host: 'edge.example',
+  };
+  let calls = 0;
+  const f = await fixture(t, async (url, options) => {
+    const p = new URL(url).pathname;
+    if (p.endsWith('/device-connections'))
+      return Response.json({ ok: true, connections: [], studioDevices: [device] });
+    if (p.endsWith('/local-bridge/status'))
+      return Response.json({
+        ok: true,
+        bridges: [{ bridgeId: 'bridge-one', online: true, devices: [device] }],
+      });
+    if (p.endsWith('/connect')) {
+      calls++;
+      return Response.json(
+        { ok: true, device: { id: 'another-board', host: device.host } },
+        { headers: { 'set-cookie': 'rdk_studio_devices=wrong-session; Path=/; HttpOnly; Secure' } },
+      );
+    }
+    assert.doesNotMatch(options.headers.cookie, /wrong-session/);
+    return Response.json({ ok: true });
+  });
+  const result = await f.core.request('tools/call', {
+    name: 'rdk_device_connect',
+    arguments: { connectionId: device.id },
+  });
+  assert.equal(result.isError, true);
+  assert.equal(result.structuredContent.error, 'STUDIO_BRIDGE_SESSION_UNCONFIRMED');
+  assert.equal(calls, 1);
+  await f.request('/api/v1/duck/board-station/status?deviceId=bridge-target');
+});

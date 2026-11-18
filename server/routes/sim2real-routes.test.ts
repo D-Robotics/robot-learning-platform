@@ -226,6 +226,12 @@ function responseRecorder(
       response.headers[name.toLowerCase()] = String(value);
       return response;
     },
+    append(name: string, value: string) {
+      response.headers[name.toLowerCase()] = [response.headers[name.toLowerCase()], value]
+        .filter(Boolean)
+        .join(', ');
+      return response;
+    },
     json(payload: unknown) {
       response.body = payload;
       resolve(response as RecordedResponse);
@@ -3641,7 +3647,14 @@ describe('Sim2Real HTTP routes', () => {
           },
           secret: 'do-not-forward',
         }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'set-cookie':
+              'rdk_studio_devices=verified-session; Path=/; HttpOnly; Secure; SameSite=Lax',
+          },
+        },
       );
     }) as typeof fetch;
     try {
@@ -3697,6 +3710,9 @@ describe('Sim2Real HTTP routes', () => {
         },
       );
       expect(connected.statusCode).toBe(200);
+      expect(connected.headers['set-cookie']).toBe(
+        'rdk_studio_devices=verified-session; Path=/; HttpOnly; Secure; SameSite=Lax',
+      );
       expect(connected.body).toMatchObject({
         ok: true,
         device: {

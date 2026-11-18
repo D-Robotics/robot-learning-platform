@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import { type Request, type Response, type Router } from 'express';
 
 import { sendApiError, wrapAsync } from '../sim2real/http-helpers.js';
-import { isBoardAgentConfigured } from '../sim2real/standalone-adapters.js';
+import { isBoardAgentConfigured, safeStudioOrigin } from '../sim2real/standalone-adapters.js';
+import { studioDeviceSessionId } from '../sim2real/studio-device-session.js';
 import {
   stationSwitchEnabled,
   setStationSwitch,
@@ -500,11 +501,28 @@ export function registerSim2RealBoardStationRoutes(
     }
     // Studio exec uses its native registration ID, while the raw Bridge ID
     // identifies the discovered connection. Preserve older registry fallbacks.
-    (request as Request & { __stationDeviceId?: string }).__stationDeviceId = String(
+    const nativeDeviceId =
       device.bridgeId === 'studio-desktop' || device.bridgeId === 'studio-desktop-relay'
         ? device.id
-        : (device.studioDeviceId ?? device.bridgeDeviceId ?? device.id),
-    ).trim();
+        : await studioDeviceSessionId(
+            device,
+            safeStudioOrigin(
+              process.env.RDK_SIM2REAL_STUDIO_ORIGIN || process.env.RDK_SIM2REAL_STUDIO_EXEC_ORIGIN,
+            ),
+            String(request.headers.cookie ?? ''),
+          );
+    if (!nativeDeviceId) {
+      noStore(response);
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_STUDIO_BOARD_SESSION_REQUIRED',
+        '当前会话尚未连接并验证这台板卡，请重新连接目标设备。',
+        { retryable: true },
+      );
+      return null;
+    }
+    (request as Request & { __stationDeviceId?: string }).__stationDeviceId = nativeDeviceId;
     if (multiUser && owner) desktopRelayOwners.set(request, owner);
     // Device connections own a loopback-only SSH tunnel. Carry its URL on the
     // request so JSON and streaming station calls select the same device;

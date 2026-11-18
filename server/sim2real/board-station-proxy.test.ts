@@ -282,6 +282,18 @@ describe('Studio bridge without curl uses bounded Python stdlib requests', () =>
     expect(executions).toHaveLength(0);
     expect(fetch).not.toHaveBeenCalled();
   });
+
+  it.each(['/v1/onboarding/preflight', '/v1/station/policy/files'])(
+    'forwards the read-only prerequisite %s and refuses writes to it',
+    async (endpoint) => {
+      await expect(stationAgentFetch(endpoint, bridgeOptions)).resolves.toMatchObject({ ok: true });
+      const calls = executions.length;
+      await expect(
+        stationAgentFetch(endpoint, { ...bridgeOptions, method: 'POST' }),
+      ).resolves.toBeNull();
+      expect(executions).toHaveLength(calls);
+    },
+  );
 });
 
 describe('board-station proxy bounded body handling', () => {
