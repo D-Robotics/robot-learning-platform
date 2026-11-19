@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.92",
+  "version": "0.6.93",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan 舞蹈和受扰恢复是可选任务。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -48,7 +48,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "cb5351d709446b7f4530874a45b048a79b39a0949955994a77b5250dae3aa5a8",
+    "ui/experiment.html": "1dfe4a476a1655f8488d8ac42fc78313d7c464a13dfe30a873d4e4140386bb03",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5",
     "scripts/compute-onboarding.mjs": "41416cea1c8c823c60d6dd6cb96a9b2d2764019a2243a189765830c0dc075e05"
   },
@@ -62,7 +62,7 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "7cac7223d9281df768fab7d8e8100a9e62fe57a265b6ed00eeaccba6417d7868",
-      "plugins/rdk-robot-learning-platform/plugin.json": "1e35a0ce4f32e83ac4c8315d568e1e09ce4c51528150c2c0b605027229c3c862",
+      "plugins/rdk-robot-learning-platform/plugin.json": "e5f30f6a215ff08fca6b660e34a9e50d8edbb6841a98f8c0c1bdeab02ddd1d75",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
       "services/sim2real-web/public/experiment.css": "400f00c7d2e86d0f71362c2e6ccded0a5f143058ade9267fd6887ef06e4d6bea",
