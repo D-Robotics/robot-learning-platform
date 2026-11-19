@@ -176,7 +176,7 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(await disabled.json()).toMatchObject({ error: 'DSH_RUNTIME_DISABLED' });
   });
 
-  it('answers two Run queries in the platform without DSH and verifies the current worker bytes on each turn', async () => {
+  it('checks worker-only policies live and serves verified retained policies with the worker offline', async () => {
     const { baseUrl } = await fixture();
     const bytes = Buffer.from('isolated policy fixture');
     const sha = createHash('sha256').update(bytes).digest('hex');
@@ -224,7 +224,7 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(first).toMatchObject({
       status: 200,
       ok: true,
-      text: expect.stringContaining('平台留存状态未确认'),
+      text: expect.stringContaining('平台尚未留存这份 ONNX'),
       policyDownload: `/api/v1/duck/runs/${run.id}/artifact`,
       toolTrail: [{ name: 'platform_run_lookup', step: 1, ok: true }],
     });
@@ -241,6 +241,7 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     );
     const downloaded = await fetch(baseUrl + second.policyDownload);
     expect(downloaded.status).toBe(200);
+    expect(downloaded.headers.get('x-artifact-source')).toBe('worker');
     expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(bytes);
 
     expect(await post(followup, 'sim2real-other-test')).toMatchObject({
@@ -254,12 +255,48 @@ describe('standalone Sim2Real health and optional simulator surface', () => {
     expect(unavailable.policyDownload).toBeUndefined();
     expect(reads).toHaveLength(4);
 
+    const archiveRoot = path.join(process.env.RDK_SIM2REAL_STORAGE_DIR!, 'policy-artifacts');
+    const archiveFile = async (ownerKey: string) => {
+      const dir = path.join(archiveRoot, createHash('sha256').update(ownerKey).digest('hex'));
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      return path.join(dir, `${sha}.onnx`);
+    };
+    const detail = async () => (await fetch(`${baseUrl}/api/v1/duck/runs/${run.id}`)).json();
+    await fs.writeFile(await archiveFile('account:unrelated'), bytes, { mode: 0o600 });
+    expect((await detail()).artifactRetention).toEqual({ state: 'not-retained', sha256: sha });
+
+    const retainedFile = await archiveFile('local-workspace');
+    await fs.writeFile(retainedFile, Buffer.alloc(bytes.length), { mode: 0o600 });
+    const corrupt = await post(followup, first.sessionId);
+    expect(corrupt.text).toContain('平台留存状态暂无法核验');
+    expect(corrupt.policyDownload).toBeUndefined();
+    expect((await detail()).artifactRetention).toEqual({ state: 'unavailable', sha256: sha });
+    expect(reads).toHaveLength(5);
+
+    await fs.writeFile(retainedFile, bytes, { mode: 0o600 });
+    const retained = await post(`查一下 Run ${run.id} 的策略留存。`);
+    const retainedFollowup = await post(followup, retained.sessionId);
+    for (const reply of [retained, retainedFollowup]) {
+      expect(reply.text).toContain('平台已留存这份 ONNX');
+      expect(reply.policyDownload).toBe(first.policyDownload);
+    }
+    expect((await detail()).artifactRetention).toEqual({
+      state: 'retained',
+      sha256: sha,
+      bytes: bytes.length,
+    });
+    const retainedDownload = await fetch(baseUrl + retained.policyDownload);
+    expect(retainedDownload.status).toBe(200);
+    expect(retainedDownload.headers.get('x-artifact-source')).toBe('platform-retained');
+    expect(Buffer.from(await retainedDownload.arrayBuffer())).toEqual(bytes);
+    expect(reads).toHaveLength(5);
+
     const mixed = await post(`查一下 Run ${run.id} 的策略留存，重新提交训练。`, first.sessionId);
     expect(mixed.status).toBe(503);
     expect(await post(followup, first.sessionId)).toMatchObject({
       text: expect.stringContaining('没有刚刚确认的 Run'),
     });
-    expect(reads).toHaveLength(4);
+    expect(reads).toHaveLength(5);
     await flushSim2RealAudit();
   });
 

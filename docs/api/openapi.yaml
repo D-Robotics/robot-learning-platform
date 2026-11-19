@@ -633,7 +633,8 @@ paths:
         Accepts a full Run ID or a case-insensitive hexadecimal Run ID prefix of
         at least eight characters. Prefix resolution uses the current account's
         full run ledger. The response includes the canonical run.id for replay
-        and artifact requests. Refreshes remote status when applicable.
+        and artifact requests. Refreshes remote status when applicable and reports
+        whether the platform can verify a retained ONNX copy.
       operationId: getRun
       responses:
         "200":
@@ -648,10 +649,14 @@ paths:
     get:
       tags: [runs]
       summary: Download the digest-verified ONNX policy for a completed local Run
+      description: Prefers the verified copy held by the platform for the current account, with a worker fallback.
       operationId: getRunArtifact
       responses:
         "200":
           description: ONNX policy bytes.
+          headers:
+            X-Artifact-Sha256: { schema: { type: string, pattern: "^[a-f0-9]{64}$" } }
+            X-Artifact-Source: { schema: { type: string, enum: [platform-retained, worker] } }
           content: { application/octet-stream: { schema: { type: string, format: binary } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -4972,7 +4977,18 @@ components:
     RunResponse:
       type: object
       required: [ok, run]
-      properties: { ok: { const: true }, run: { $ref: "#/components/schemas/Run" }, idempotentReplay: { type: boolean }, reconciled: { type: boolean } }
+      properties:
+        ok: { const: true }
+        run: { $ref: "#/components/schemas/Run" }
+        idempotentReplay: { type: boolean }
+        reconciled: { type: boolean }
+        artifactRetention:
+          type: object
+          required: [state]
+          properties:
+            state: { type: string, enum: [retained, not-retained, not-applicable, unavailable] }
+            sha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+            bytes: { type: integer, minimum: 1 }
     TelemetryResponse:
       type: object
       required: [ok]
