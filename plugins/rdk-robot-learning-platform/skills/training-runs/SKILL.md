@@ -120,3 +120,12 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 用户明确要求给定目标后自动训练时，先直接调用 `rdk_originman_dance_iterate`，参数是 `totalSteps`（总步数）和 `dance`（`bpm`、`sections`，每段含 `type`、`beats`、`intensity`）。插件选择 4090 和 64 并行，从零开启原实验。独立评测超时就续查同一个 Run；所有错误都沿自动迭代入口修正，禁止改走单轮提交。无需学员提供已有 Run。已有 Run 续训仍支持 `goal: "original-quality-gate"`、`runId` 和 `additionalSteps`。两种模式均使用 64 并行，按真实采样批次计入预算；立即原样传回每次的 `nextArguments` 继续调用，通常只含 `resumeContextId` 和 `pollAfter`。首轮回执没有 Run 或链接时也自动接续。每轮无需确认。独立评测核对原策略与各节拍门槛，首轮快检未达标且预算足够时，先在同等步数下做单个奖励参数对照。后续以既有成绩最好的配置为基线，再分配步数或试新的奖励参数；达标、预算不足或证据阻塞时停止。按 `studioNavigation` 在右侧显示每轮参数、独立评测、回放和策略下载。插件持久保存初始实验和剩余预算。需要恢复时沿用原实验标识，预算和编舞由插件读取。此模式只执行仿真。
 
 后台实验回执含 `background: true` 时，立即用 `studioNavigation` 打开右侧并保留原实验链接。右侧自动更新轮次、预算和制品；Studio 退出后平台仍会继续。用户回来后优先打开原实验链接，查询使用原实验标识。
+
+## 登记已有 Worker
+
+用户已有 Worker 并要求登记开发机时，调用 `rdk_development_targets`，传
+`action:"register-compute"` 和本机私有 JSON 配置文件的绝对路径 `connectionFile`。
+配置包含 `name`、`runnerUrl`、`runnerToken`，可选 `maxConcurrentJobs`。
+POSIX 文件须属于当前用户且权限为 0600。凭据通过本机文件提供，不向对话索取 token。
+工具会登记资源并测试连接，测试失败时沿用返回的资源 ID 检查。
+此入口要求已部署的 Worker，SSH 自动安装仍需另行完成。
