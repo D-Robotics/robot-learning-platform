@@ -106,6 +106,11 @@ try {
     );
   }
 
+  copyTreeFiltered(
+    'services/sim2real-web/worker-bootstrap',
+    path.join('dist-server', 'services/sim2real-web/worker-bootstrap'),
+  );
+
   // Share the portable dance state machine with the platform background worker.
   for (const file of [
     'server/sim2real/dance-goals.mjs',

@@ -128,4 +128,17 @@ MCP 无训练取消/续训专用工具。用户取消时停止继续提交和轮
 配置包含 `name`、`runnerUrl`、`runnerToken`，可选 `maxConcurrentJobs`。
 POSIX 文件须属于当前用户且权限为 0600。凭据通过本机文件提供，不向对话索取 token。
 工具会登记资源并测试连接，测试失败时沿用返回的资源 ID 检查。
-此入口要求已部署的 Worker，SSH 自动安装仍需另行完成。
+已有 Worker 沿用此入口，不重新安装。
+
+## 通过 Studio SSH 自动安装 Worker
+
+用户要求部署 Worker 或登记尚未安装 Worker 的开发机时：
+
+1. 调用 `rdk_development_targets`，传 `action:"list-ssh"`。按当前账号已共享的 Studio Local Bridge 设备名称匹配唯一 ID，不在对话索取 SSH 密码或私钥。
+2. 明确目标设备、算力名称和平台可访问的 `runnerUrl`（以 `/train` 结尾），再调用同一工具的 `action:"deploy-compute"`，传 `targetId`、`name`、`runnerUrl`，可选 `port`（默认 19091）。复用 Studio 已有 SSH。公网 URL 必须为 HTTPS；HTTP 仅适用于平台允许的本地地址。安装不创建公网隧道、TLS 代理或开放防火墙。
+3. 安装会在远端后台继续。保留返回的 `deploymentId`，按 `nextArguments` 使用 `action:"deployment-status"` 查询；插件重启后仍可查询原部署。启动回执不明确时也查询原 ID，不重新选择机器。重复相同部署参数只恢复同一部署。
+4. 就绪后自动登记并测试同一个算力 ID。`connected:false` 只表示安装/登记完成而网络测试未通过，沿用原资源修复网络。失败、离线和缺失状态不得宣称训练成功。
+
+当前自动准备 Linux x64/arm64 的 Node、独立 Python venv 和 **starter-ppo CPU** 依赖，不自动配置 CUDA 或 OriginMan 舞蹈环境。开发机需要 Python 3（支持 venv）、OpenSSL 和依赖下载网络；安装目录为用户私有目录。可用时使用用户 systemd 服务，否则使用独立后台进程。后者退出后需要在开发机恢复 Worker，不能宣称具备开机自启。
+
+服务端须配置正式 HTTPS `RDK_SIM2REAL_PUBLIC_ORIGIN`（或 `RDK_STUDIO_WEB_PUBLIC_ORIGIN`），挂载路径用 `RDK_SIM2REAL_PUBLIC_BASE_PATH`（默认 `/robotics-learning`）。Worker 只下载摘要绑定的公共源码包；凭据留在开发机私有文件，经加密回执交给平台，不进入对话。
