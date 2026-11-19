@@ -95,20 +95,23 @@ export function createRunQuery() {
       const policyDownload = result?.ok
         ? publicPath('/api/v1/duck/runs/' + encodeURIComponent(run.id) + '/artifact')
         : undefined;
-      const retention = (run as typeof run & { artifactRetention?: { state?: unknown } })
-        .artifactRetention?.state;
-      const retentionText =
-        retention === 'retained'
-          ? '平台留存记录显示已留存。'
-          : retention === 'not-retained'
-            ? '平台留存记录显示尚未留存。'
-            : '平台留存状态未确认。';
       const text = [`Run \`${run.id}\` · ${status}。`];
-      if (result)
+      if (result) {
+        const retentionText = {
+          retained: '平台已留存这份 ONNX，摘要核验通过。',
+          'not-retained': '平台尚未留存这份 ONNX。',
+          'not-applicable': '此 Run 不适用平台 ONNX 留存。',
+          unavailable: '平台留存状态暂无法核验。',
+        }[result.retention.state];
         text.push(
           retentionText,
-          result.ok ? '已实时核验执行端 ONNX 的摘要，可以下载。' : result.message,
+          result.ok
+            ? result.source === 'platform-retained'
+              ? '可从平台留存副本下载。'
+              : '已实时核验执行端 ONNX 的摘要，可以下载。'
+            : result.message,
         );
+      }
       return {
         text: text.join('\n'),
         toolTrail: [trail],

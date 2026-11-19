@@ -1,13 +1,14 @@
 import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
 import { fetchLocalRunArtifact } from './local-runner.js';
+import { readPolicyArtifact } from './policy-artifact-store.js';
 import { getSim2RealComputeResourceSecret } from './sim2real-store.js';
 
-export async function resolveRunPolicyDownload(
-  run: Sim2RealRunRecord,
-  owner: string | undefined,
-  accountId: string,
-  timeoutMs?: number,
-) {
+export type RunPolicyRetention =
+  | { state: 'not-applicable' }
+  | { state: 'not-retained' | 'unavailable'; sha256: string }
+  | { state: 'retained'; sha256: string; bytes: number };
+
+function validateRunPolicy(run: Sim2RealRunRecord) {
   if (run.backend !== 'local' || !run.externalRunId)
     return {
       ok: false,
@@ -22,13 +23,57 @@ export async function resolveRunPolicyDownload(
       code: 'SIM2REAL_RUN_NOT_COMPLETED',
       message: '只有已完成的真实运行才能下载制品。',
     } as const;
-  const artifact = run.artifact;
-  if (artifact?.format?.toLowerCase() !== 'onnx' || !/^[a-f0-9]{64}$/.test(artifact.sha256 ?? ''))
+  const sha256 = run.artifact?.sha256 ?? '';
+  if (run.artifact?.format?.toLowerCase() !== 'onnx' || !/^[a-f0-9]{64}$/.test(sha256))
     return {
       ok: false,
       status: 409,
       code: 'SIM2REAL_ARTIFACT_NOT_DOWNLOADABLE',
       message: '该运行没有可下载的 ONNX 制品记录。',
+    } as const;
+  return { ok: true, sha256, externalRunId: run.externalRunId } as const;
+}
+
+async function readRunPolicyArchive(
+  run: Sim2RealRunRecord,
+  owner: string | undefined,
+  sha256: string,
+): Promise<{ retention: RunPolicyRetention; bytes?: Buffer }> {
+  if (run.relayAgentUrl) return { retention: { state: 'not-applicable' } };
+  const stored = await readPolicyArtifact(sha256, owner);
+  return stored.state === 'retained'
+    ? { retention: { state: 'retained', sha256, bytes: stored.bytes.length }, bytes: stored.bytes }
+    : { retention: { state: stored.state, sha256 } };
+}
+
+export async function getRunPolicyRetention(
+  run: Sim2RealRunRecord,
+  owner: string | undefined,
+): Promise<RunPolicyRetention> {
+  const policy = validateRunPolicy(run);
+  return policy.ok
+    ? (await readRunPolicyArchive(run, owner, policy.sha256)).retention
+    : { state: 'not-applicable' };
+}
+
+/** The caller must resolve the Run under the authenticated owner before reading bytes. */
+export async function resolveRunPolicyDownload(
+  run: Sim2RealRunRecord,
+  owner: string | undefined,
+  accountId: string,
+  timeoutMs?: number,
+) {
+  const policy = validateRunPolicy(run);
+  if (!policy.ok) return { ...policy, retention: { state: 'not-applicable' } } as const;
+
+  const { retention, bytes } = await readRunPolicyArchive(run, owner, policy.sha256);
+  if (bytes)
+    return {
+      ok: true,
+      bytes,
+      sha256: policy.sha256,
+      source: 'platform-retained',
+      retention,
     } as const;
   const resource = run.computeResourceId
     ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
@@ -37,7 +82,7 @@ export async function resolveRunPolicyDownload(
     accountId && (!run.computeResourceId || resource)
       ? await fetchLocalRunArtifact({
           accountId,
-          externalRunId: run.externalRunId,
+          externalRunId: policy.externalRunId,
           timeoutMs,
           ...(resource
             ? { runnerUrl: resource.resource.runnerUrl, runnerToken: resource.runnerToken ?? '' }
@@ -50,13 +95,15 @@ export async function resolveRunPolicyDownload(
       status: 502,
       code: 'SIM2REAL_ARTIFACT_FETCH_FAILED',
       message: '无法从执行端取回制品字节。',
+      retention,
     } as const;
-  if (fetched.sha256 !== artifact.sha256)
+  if (fetched.sha256 !== policy.sha256)
     return {
       ok: false,
       status: 409,
       code: 'SIM2REAL_ARTIFACT_DIGEST_MISMATCH',
       message: '制品摘要与台账记录不一致，已拒绝下发。',
+      retention,
     } as const;
-  return { ok: true, ...fetched } as const;
+  return { ok: true, ...fetched, source: 'worker', retention } as const;
 }

@@ -29,7 +29,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { resolveRunPolicyDownload } from '../sim2real/run-policy.js';
+import { getRunPolicyRetention, resolveRunPolicyDownload } from '../sim2real/run-policy.js';
 import type { Device } from '../../shared/types.js';
 import type {
   Sim2RealDeploymentMode,
@@ -3695,6 +3695,7 @@ export function createSim2RealRouter(
       const available = video && (await readSim2RealDanceVideo(video.sha256, video.sizeBytes));
       response.json({
         ok: true,
+        artifactRetention: await getRunPolicyRetention(current, owner),
         run: available
           ? {
               ...current,
@@ -3871,6 +3872,7 @@ export function createSim2RealRouter(
       }
       response.setHeader('Content-Type', 'application/octet-stream');
       response.setHeader('X-Artifact-Sha256', fetched.sha256);
+      response.setHeader('X-Artifact-Source', fetched.source);
       response.setHeader('Cache-Control', 'no-store');
       response.setHeader('Content-Disposition', `attachment; filename="policy-${run.id}.onnx"`);
       response.end(fetched.bytes);
