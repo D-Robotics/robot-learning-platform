@@ -89,6 +89,37 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 
 发布验收使用隔离台账和 Worker 目录。点击两个入口后，在课堂加载一条已完成的受扰恢复 Run，核对 Run ID 与策略摘要，实际施加扰动并播放同源回放至结束。可用 `scripts/verify-originman-classroom.mjs` 重跑真实服务端链路。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供隔离实例及已校验的实验凭据。
 
+## Studio SSH 安装训练 Worker
+
+标准构建会打包 Worker 安装器、源码下载路由和账号隔离的部署记录，插件提供
+`rdk_development_targets` 的 `list-ssh`、`deploy-compute`、`deployment-status`。
+现有 Worker 仍用 `register-compute`，不重复安装。安装复用用户已连接并共享的
+Studio Local Bridge SSH，不需要平台另存 SSH 密钥。
+
+配置正式 HTTPS `RDK_SIM2REAL_PUBLIC_ORIGIN` 或 `RDK_STUDIO_WEB_PUBLIC_ORIGIN`；
+`RDK_SIM2REAL_PUBLIC_BASE_PATH` 默认为 `/robotics-learning`。下载路由公开提供
+摘要绑定的源码，不含登录态或 Worker token。部署记录在独立存储目录的
+`compute-ssh/` 下，以私有权限保存，恢复时必须保留；账号只能查询自己的部署。
+
+自动安装目前准备 starter-ppo CPU，不包含 CUDA 和 OriginMan 舞蹈环境。
+开发机需要 Linux、Python venv、OpenSSL 和依赖下载网络。平台仍须能访问用户提供的
+Worker `/train` 地址；公网要求 HTTPS，安装不自动创建 TLS 代理、隧道或防火墙规则。
+健康检查通过只说明 Worker 可用，不代表训练质量或实体部署许可。
+
+在独立 Linux 验收机上，干净安装构建后可运行：
+
+```bash
+npm ci
+npm run build
+RDK_SSH_ACCEPTANCE=1 node scripts/accept-studio-ssh-worker.mjs
+```
+
+此验收使用合成 Studio 会话和执行适配器，真实执行固定 SSH 安装程序，安装独立 venv，
+验证插件重启续查、凭据加密、原资源登记及健康检查，跑一次 CPU 训练并核对 ONNX 摘要。
+需要空闲本地端口 18881 和依赖下载网络；结果保存在当前目录的
+`acceptance-report.json`。结束时仅停止本次拥有的 Worker，私有安装目录和隔离台账留作证据。
+它不替代真实 Studio SSH 连接、GPU 或真实开发机部署验收。
+
 ## 认证配置（studio-cookie 嫁接 · web-cloud 部署）
 
 `/sim2real` 挂在 `rdkstudio.d-robotics.cc` 同域路径下，认证**嫁接 Studio 的

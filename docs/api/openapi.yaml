@@ -2653,6 +2653,62 @@ paths:
         "401": { $ref: "#/components/responses/AuthRequired" }
         "409": { description: Tunnel down, motion window active, or the board refused the restart. }
         "502": { description: Board agent unreachable; env untouched. }
+  /api/v1/duck/compute-ssh/bundles/{sha}:
+    get:
+      tags: [compute]
+      summary: Download an immutable source bundle for Studio SSH Worker installation
+      operationId: downloadComputeSshBundle
+      parameters:
+        - { name: sha, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Digest-bound gzip source archive, containing no credentials. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/compute-ssh/deployments:
+    post:
+      tags: [compute]
+      summary: Install a starter PPO CPU Worker through an existing owner-scoped Studio SSH connection
+      operationId: startComputeSshDeployment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [deviceId, name, runnerUrl]
+              properties:
+                deviceId: { type: string }
+                name: { type: string, maxLength: 120 }
+                runnerUrl: { type: string }
+                port: { type: integer, minimum: 1024, maximum: 65535, default: 19091 }
+      responses:
+        "202": { description: Installation started or original source-bound installation reused. }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/compute-ssh/deployments/{deploymentId}:
+    get:
+      tags: [compute]
+      summary: Resolve the original deployment and Studio device for the current account
+      operationId: getComputeSshDeployment
+      parameters:
+        - { name: deploymentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Public deployment identity, excluding SSH and Worker credentials. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/compute-ssh/deployments/{deploymentId}/poll:
+    post:
+      tags: [compute]
+      summary: Poll the original remote installation and register its Worker once ready
+      operationId: pollComputeSshDeployment
+      parameters:
+        - { name: deploymentId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200": { description: Original installation state or account-owned compute resource ID. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: An existing resource has conflicting credentials or is ambiguous. }
   /api/v1/duck/compute-resources:
     get:
       tags: [workspace]

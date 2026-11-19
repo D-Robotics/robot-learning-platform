@@ -113,7 +113,7 @@ export async function connectAuthenticatedCore({
     }
     if (bridgeSession && bridgeSession.accountCookie !== cookie) bridgeSession = null;
     const boardRoute =
-      /^\/api\/(?:v1\/duck|sim2real)\/(?:board-station|deployments|local-bridge)(?:[/?]|$)/.test(
+      /^\/api\/(?:v1\/duck|sim2real)\/(?:board-station|deployments|local-bridge|compute-ssh)(?:[/?]|$)/.test(
         pathname,
       );
     const requestCookie =
@@ -963,7 +963,91 @@ export async function connectAuthenticatedCore({
         );
       return value;
     },
-    async developmentTarget(operation, { accountId, targetId, input, signal } = {}) {
+    async developmentTarget(operation, { accountId, targetId, input, deploymentId, signal } = {}) {
+      if (['ssh-devices', 'deploy-compute', 'deployment-status'].includes(operation)) {
+        if (!accountId) throw Error('请先连接学习平台账号。');
+        let route;
+        let body;
+        if (operation === 'ssh-devices') {
+          const presence = await fetchPlatform(
+            '/api/v1/duck/local-bridge/status',
+            { signal },
+            accountId,
+          );
+          if (!presence.ok)
+            throw new PluginRequestError(
+              'COMPUTE_SSH_DISCOVERY_UNAVAILABLE',
+              'Studio 设备发现暂不可用。',
+              { httpStatus: presence.status },
+            );
+          await presence.body?.cancel();
+          route = '/api/v1/duck/device-connections';
+        } else if (operation === 'deploy-compute') {
+          if (!input || typeof input.deviceId !== 'string') throw Error('请指定 Studio 设备。');
+          const connected = await connectBoard(input.deviceId, signal);
+          if (!connected)
+            throw new PluginRequestError(
+              'COMPUTE_SSH_STUDIO_CONNECTION_REQUIRED',
+              '当前设备尚未接入 Studio Local Bridge。',
+              { httpStatus: 409 },
+            );
+          route = '/api/v1/duck/compute-ssh/deployments';
+          body = input;
+        } else {
+          if (!/^[a-f0-9]{64}$/.test(deploymentId ?? '')) throw Error('部署标识无效。');
+          const original = await fetchPlatform(
+            '/api/v1/duck/compute-ssh/deployments/' + deploymentId,
+            { signal },
+            accountId,
+          );
+          const record = await original.json().catch(() => null);
+          if (
+            !original.ok ||
+            record?.deploymentId !== deploymentId ||
+            typeof record.deviceId !== 'string'
+          )
+            throw new PluginRequestError(
+              'COMPUTE_SSH_DEPLOYMENT_NOT_FOUND',
+              '当前账号找不到原部署。',
+              { httpStatus: original.status },
+            );
+          if (!(await connectBoard(record.deviceId, signal)))
+            throw new PluginRequestError(
+              'COMPUTE_SSH_STUDIO_CONNECTION_REQUIRED',
+              '原开发机尚未接通 Studio。',
+              { httpStatus: 409 },
+            );
+          route = '/api/v1/duck/compute-ssh/deployments/' + deploymentId + '/poll';
+          body = {};
+        }
+        const response = await fetchPlatform(
+          route,
+          {
+            method: body === undefined ? 'GET' : 'POST',
+            headers: {
+              accept: 'application/json',
+              ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+            },
+            ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+            signal,
+          },
+          accountId,
+        );
+        const value = await response.json().catch(() => null);
+        if (!response.ok || value?.ok !== true) {
+          const originalId = response.headers.get('x-rdk-compute-deployment-id');
+          if (operation === 'deploy-compute' && /^[a-f0-9]{64}$/.test(originalId ?? ''))
+            return { ok: true, deploymentId: originalId, state: 'unconfirmed' };
+          throw new PluginRequestError(
+            typeof value?.error === 'string' && /^COMPUTE_SSH_[A-Z_]+$/.test(value.error)
+              ? value.error
+              : 'COMPUTE_SSH_UNAVAILABLE',
+            'Studio SSH 部署尚未完成，请保留原部署标识并检查连接与平台配置。',
+            { httpStatus: response.status },
+          );
+        }
+        return value;
+      }
       if (
         !accountId ||
         !['compute', 'boards', 'test-compute', 'connect-board', 'register-compute'].includes(

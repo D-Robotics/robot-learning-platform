@@ -1,3 +1,4 @@
+import { registerComputeSshRoutes } from './sim2real-compute-ssh-routes.js';
 import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
 import { desktopRelayBridgeStatus } from '../sim2real/studio-desktop-relay-status.js';
 import {
@@ -2177,7 +2178,7 @@ function mutationAccess(request: Request): MutationAccess {
   }
   // These paths can reach a board, a runner, or a deployment target.
   if (
-    /\/(?:deployments|telemetry|board-station|device-connections|local-bridge|desktop-relay)(?:\/|$)/.test(
+    /\/(?:deployments|telemetry|board-station|device-connections|local-bridge|desktop-relay|compute-ssh)(?:\/|$)/.test(
       pathname,
     )
   ) {
@@ -3292,6 +3293,86 @@ export function createSim2RealRouter(
     router,
     { auth, requestOwner: (request, response) => requestOwner(request, response, auth) },
     { prefix },
+  );
+
+  registerComputeSshRoutes(
+    router,
+    {
+      owner: (request, response) => requestOwner(request, response, auth),
+      device: async (request, response, owner, id) => {
+        const device = (await visibleDevicesForAuth(owner)).find((item) => item.id === id);
+        if (
+          !device ||
+          !requestOwnsDevice(
+            request,
+            device,
+            owner ? `sso:${owner}:web` : null,
+            auth.isMultiUserDeployment(),
+          )
+        ) {
+          sendApiError(
+            response,
+            404,
+            'SIM2REAL_DEVICE_NOT_FOUND',
+            '当前账号找不到这台 Studio 设备。',
+            { retryable: false },
+          );
+          return null;
+        }
+        if (device.connectionMode !== 'bridge' || device.bridgeId === 'studio-desktop') {
+          sendApiError(
+            response,
+            409,
+            'COMPUTE_SSH_STUDIO_CONNECTION_REQUIRED',
+            '请先在 Studio 连接并共享这台开发机。',
+            { retryable: false },
+          );
+          return null;
+        }
+        return device;
+      },
+      execute: async (request, response, device, command) => {
+        if (!deps.runOnDevice) {
+          sendApiError(
+            response,
+            503,
+            'COMPUTE_SSH_RUNNER_UNAVAILABLE',
+            'Studio SSH 执行适配器尚未接入。',
+            { retryable: false },
+          );
+          return null;
+        }
+        const result = await deps.runOnDevice(request, response, device.id, [command], {
+          usePool: true,
+          timeoutMs: 45000,
+          stdoutCharLimit: 8000,
+          bridgeDeviceId: device.bridgeDeviceId,
+          bridgeOwnerKey: device.bridgeOwnerKey,
+        });
+        if (!result) {
+          if (!response.headersSent)
+            sendApiError(
+              response,
+              502,
+              'COMPUTE_SSH_CONNECTION_UNAVAILABLE',
+              'Studio 尚未确认开发机 SSH 连接。请查询原部署状态后恢复。',
+              { retryable: true },
+            );
+          return null;
+        }
+        return result.output;
+      },
+      bundleOrigin: () => {
+        const raw =
+          process.env.RDK_SIM2REAL_PUBLIC_ORIGIN || process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN;
+        const origin = raw ? safeStudioOrigin(raw) : null;
+        if (!origin?.startsWith('https://')) return null;
+        const base = process.env.RDK_SIM2REAL_PUBLIC_BASE_PATH ?? '/robotics-learning';
+        if (!/^\/(?:[A-Za-z0-9_-]+\/?)*$/.test(base)) return null;
+        return origin + base.replace(/\/$/, '');
+      },
+    },
+    prefix,
   );
 
   // Web-managed board connections (Studio 网页版-style device management):

@@ -1,15 +1,24 @@
-import { registerExistingWorker } from './compute-onboarding.mjs';
+import { registerExistingWorker, deployStudioWorker } from './compute-onboarding.mjs';
 
 export const DEVELOPMENT_TARGET_TOOL = {
   name: 'rdk_development_targets',
   description:
-    '列出当前学习平台账号的算力机和 RDK 板卡。算力机会显示最近一次健康检查报告的引擎；舞蹈训练优先选择支持 originman-dance-ppo 的机器。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。已有 Worker 用 register-compute 和本机私有 connectionFile 登记并测试，配置和 token 不放进聊天。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
+    '列出当前学习平台账号的算力机和 RDK 板卡。算力机会显示最近一次健康检查报告的引擎；舞蹈训练优先选择支持 originman-dance-ppo 的机器。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。复用 Studio SSH 用 list-ssh 查看设备，用户明确要求安装后用 deploy-compute，原部署进度用 deployment-status。自动准备 Node 和 starter-ppo CPU Worker，需要 Linux、Python venv 和 OpenSSL。已有 Worker 用 register-compute 和本机私有 connectionFile 登记并测试，配置和 token 不放进聊天。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
   inputSchema: {
     type: 'object',
     properties: {
       action: {
         type: 'string',
-        enum: ['list', 'list-compute', 'test-compute', 'connect-board', 'register-compute'],
+        enum: [
+          'list',
+          'list-compute',
+          'test-compute',
+          'connect-board',
+          'register-compute',
+          'list-ssh',
+          'deploy-compute',
+          'deployment-status',
+        ],
       },
       engine: { type: 'string', pattern: '^[a-z][a-z0-9-]{1,31}$' },
       local: { type: 'boolean' },
@@ -18,6 +27,13 @@ export const DEVELOPMENT_TARGET_TOOL = {
         description:
           '已有 Worker 的本机私有 JSON 配置文件绝对路径，包含 name、runnerUrl 和 runnerToken。',
       },
+      deploymentId: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+      name: { type: 'string', minLength: 1, maxLength: 120 },
+      runnerUrl: {
+        type: 'string',
+        description: '平台可访问的 Worker /train 地址，公网使用 HTTPS。',
+      },
+      port: { type: 'integer', minimum: 1024, maximum: 65535 },
       targetId: { type: 'string', minLength: 1, maxLength: 160 },
     },
     additionalProperties: false,
@@ -26,6 +42,10 @@ export const DEVELOPMENT_TARGET_TOOL = {
 };
 
 export async function developmentTargets(args, { authentication, request, baseUrl } = {}) {
+  if (['list-ssh', 'deploy-compute', 'deployment-status'].includes(args?.action)) {
+    if (!authentication || !request) throw Error('请使用已连接平台的完整插件。');
+    return deployStudioWorker(args, { authentication, request });
+  }
   if (args?.action === 'register-compute') {
     if (
       Object.keys(args).some((key) => !['action', 'connectionFile'].includes(key)) ||
