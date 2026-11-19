@@ -963,19 +963,32 @@ export async function connectAuthenticatedCore({
         );
       return value;
     },
-    async developmentTarget(operation, { accountId, targetId, signal } = {}) {
-      if (!accountId || !['compute', 'boards', 'test-compute', 'connect-board'].includes(operation))
+    async developmentTarget(operation, { accountId, targetId, input, signal } = {}) {
+      if (
+        !accountId ||
+        !['compute', 'boards', 'test-compute', 'connect-board', 'register-compute'].includes(
+          operation,
+        )
+      )
         throw Error('请选择当前账号下的明确设备。');
-      const write = operation === 'test-compute' || operation === 'connect-board';
-      if (write && (typeof targetId !== 'string' || !targetId.trim() || targetId.length > 160))
+      const register = operation === 'register-compute';
+      const write = register || operation === 'test-compute' || operation === 'connect-board';
+      if (
+        write &&
+        !register &&
+        (typeof targetId !== 'string' || !targetId.trim() || targetId.length > 160)
+      )
         throw Error('设备标识无效。');
       const path =
-        operation === 'compute' || operation === 'test-compute'
+        operation === 'compute' || operation === 'test-compute' || register
           ? '/api/sim2real/compute-resources'
           : '/api/sim2real/device-connections';
-      const suffix = write
-        ? '/' + encodeURIComponent(targetId) + (operation === 'test-compute' ? '/test' : '/connect')
-        : '';
+      const suffix =
+        write && !register
+          ? '/' +
+            encodeURIComponent(targetId) +
+            (operation === 'test-compute' ? '/test' : '/connect')
+          : '';
       const response = await fetchPlatform(
         path + suffix,
         {
@@ -984,7 +997,7 @@ export async function connectAuthenticatedCore({
             accept: 'application/json',
             ...(write ? { 'content-type': 'application/json' } : {}),
           },
-          ...(write ? { body: '{}' } : {}),
+          ...(write ? { body: register ? JSON.stringify(input) : '{}' } : {}),
           signal,
         },
         accountId,

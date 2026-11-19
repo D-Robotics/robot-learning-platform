@@ -505,6 +505,7 @@ const loadedSources = Object.fromEntries(
     'dance-iteration.mjs',
     'workshop-entry.mjs',
     'development-targets.mjs',
+    'compute-onboarding.mjs',
     'playback-plan.mjs',
   ].map((name) => [
     'scripts/' + name,

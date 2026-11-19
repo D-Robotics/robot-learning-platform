@@ -1,13 +1,23 @@
+import { registerExistingWorker } from './compute-onboarding.mjs';
+
 export const DEVELOPMENT_TARGET_TOOL = {
   name: 'rdk_development_targets',
   description:
-    '列出当前学习平台账号的算力机和 RDK 板卡。算力机会显示最近一次健康检查报告的引擎；舞蹈训练优先选择支持 originman-dance-ppo 的机器。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
+    '列出当前学习平台账号的算力机和 RDK 板卡。算力机会显示最近一次健康检查报告的引擎；舞蹈训练优先选择支持 originman-dance-ppo 的机器。明确要求检查某台算力机时用 test-compute，明确要求连接某台板卡时用 connect-board。先从对应列表匹配唯一目标，再传准确的 targetId。算力机用于训练，板卡连接仅打开 SSH 隧道并探测 BoardAgent。已有 Worker 用 register-compute 和本机私有 connectionFile 登记并测试，配置和 token 不放进聊天。要换算力机跑 Workshop，用 rdk_workshop 新建实验。',
   inputSchema: {
     type: 'object',
     properties: {
-      action: { type: 'string', enum: ['list', 'list-compute', 'test-compute', 'connect-board'] },
+      action: {
+        type: 'string',
+        enum: ['list', 'list-compute', 'test-compute', 'connect-board', 'register-compute'],
+      },
       engine: { type: 'string', pattern: '^[a-z][a-z0-9-]{1,31}$' },
       local: { type: 'boolean' },
+      connectionFile: {
+        type: 'string',
+        description:
+          '已有 Worker 的本机私有 JSON 配置文件绝对路径，包含 name、runnerUrl 和 runnerToken。',
+      },
       targetId: { type: 'string', minLength: 1, maxLength: 160 },
     },
     additionalProperties: false,
@@ -16,6 +26,16 @@ export const DEVELOPMENT_TARGET_TOOL = {
 };
 
 export async function developmentTargets(args, { authentication, request, baseUrl } = {}) {
+  if (args?.action === 'register-compute') {
+    if (
+      Object.keys(args).some((key) => !['action', 'connectionFile'].includes(key)) ||
+      typeof args.connectionFile !== 'string' ||
+      !authentication ||
+      !request
+    )
+      throw Error('登记已有 Worker 时仅传私有配置文件的绝对路径。');
+    return registerExistingWorker(args.connectionFile, { authentication, request });
+  }
   const { action = 'list', targetId, engine, local } = args;
   if (
     Array.isArray(args) ||
