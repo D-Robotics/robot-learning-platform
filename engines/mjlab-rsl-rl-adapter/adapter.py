@@ -279,7 +279,7 @@ def safe_slug(value, fallback):
 # contract. Both branches MUST honor observation_size / action_size /
 # control loop; a mismatch is a policy-contract violation.
 # ---------------------------------------------------------------------------
-class GoalNavVecEnv(VecEnv):
+class GoalNavVecEnv(VecEnv if HAVE_RSL_RL else object):
     """rsl_rl VecEnv wrapper over the platform's vectorized GoalNavEnv.
 
     This is the kinematic fallback backend. It exists so the adapter runs a
