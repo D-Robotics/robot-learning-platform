@@ -323,18 +323,73 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
   const actionSelect = workspace.window.document.querySelector('[data-dance-type]');
   assert.deepEqual(
     Array.from(actionSelect.options, (option) => option.value),
-    ORIGINMAN_DANCE_SECTION_TYPES,
+    ['', ...ORIGINMAN_DANCE_SECTION_TYPES],
   );
   assert.deepEqual(
     JSON.parse(JSON.stringify(planner.dance().sections)),
     training.originmanDance.sections,
   );
   assert.equal(planner.dance().bpm, 120);
+  assert.equal(planner.dance().compositionMode, 'custom');
   assert.equal(planner.danceNumEnvs(), 4);
   assert.equal(
     workspace.window.document.getElementById('training-plan-save').textContent,
     '保存为新方案',
   );
+});
+
+test('preset and custom compositions keep independent drafts and can reorder all selected actions', (t) => {
+  const workspace = new JSDOM(
+    fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'),
+    {
+      url: 'https://platform.test/robotics-learning/?robot=originman#train/configure',
+      runScripts: 'outside-only',
+    },
+  );
+  t.after(() => workspace.window.close());
+  workspace.window.eval(
+    fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'),
+  );
+  const planner = workspace.window.TrainingPlans.mount({
+    request: async () => ({ plans: [] }),
+    readContext: () => ({ productId: 'originman' }),
+    refreshControls() {},
+  });
+  const { document, Event } = workspace.window;
+  const input = (element, value) => {
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const mode = document.getElementById('originman-training-goal');
+  const preset = document.getElementById('originman-dance-preset');
+  const title = document.getElementById('originman-dance-title');
+  const add = document.getElementById('originman-dance-add');
+  const rows = document.getElementById('originman-dance-sections');
+  input(preset, 'rhythm-and-pose');
+  assert.equal(planner.dance().compositionMode, 'preset');
+  assert.equal(planner.dance().sections.length, 4);
+  input(mode, 'originman-dance-custom');
+  assert.equal(title.value, '');
+  assert.equal(rows.childElementCount, 0);
+  assert.equal(planner.dance(), null);
+  input(title, '自编开场');
+  add.click();
+  assert.equal(planner.dance(), null);
+  input(rows.lastElementChild.querySelector('[data-dance-type]'), 'single-arm-wave');
+  add.click();
+  input(rows.lastElementChild.querySelector('[data-dance-type]'), 'side-tap');
+  rows.lastElementChild.querySelector('[data-dance-up]').click();
+  assert.deepEqual(
+    Array.from(planner.dance().sections, ({ type }) => type),
+    ['side-tap', 'single-arm-wave'],
+  );
+  input(mode, 'originman-dance');
+  assert.equal(planner.dance().sections.length, 4);
+  input(mode, 'originman-dance-custom');
+  assert.equal(planner.dance().title, '自编开场');
+  assert.equal(planner.dance().compositionMode, 'custom');
+  for (const row of Array.from(rows.children)) row.querySelector('[data-dance-remove]').click();
+  assert.equal(planner.dance(), null);
 });
 
 test('dance reference page and replay assets cover every supported action', (t) => {

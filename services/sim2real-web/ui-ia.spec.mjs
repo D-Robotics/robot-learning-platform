@@ -41,7 +41,8 @@ const markupSummary = assertMarkupInvariants(html);
 
 assert.match(html, /<option value="dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
 assert.match(html, /<option value="originman">OriginMan · 人形机器人<\/option>/);
-assert.match(html, /<option value="originman-dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
+assert.match(html, /<option value="originman-dance" selected>预置舞蹈<\/option>/);
+assert.match(html, /<option value="originman-dance-custom">动作组自由编排<\/option>/);
 assert.match(app, /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/);
 
 // ---- accessibility anchors ----

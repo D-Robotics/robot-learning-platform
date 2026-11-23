@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=3"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=4"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -77,6 +77,7 @@
               <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
             </details>
             <p>标准与长训每 32,768 步评测一次 checkpoint。完整度、峰值倾角和末尾偏航同时达标时提前结束。</p>
+            <p id="reference-screen-blocker" role="status" hidden>当前轨迹未通过所选 Worker 的物理筛查。请调整轨迹或重新筛查后再提交。</p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>
         </section>

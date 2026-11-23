@@ -161,8 +161,10 @@ function renderDance(document, run) {
   if (!isDance) return;
   const danceTitle = config?.title ?? run.label ?? 'OriginMan · 强化学习舞蹈';
   text(document, 'dance-title', danceTitle);
+  const mode = config?.compositionMode === 'preset' ? '预置舞蹈 · '
+    : config?.compositionMode === 'custom' ? '动作组自由编排 · ' : '';
   text(document, 'dance-meta', config
-    ? `${config.bpm} BPM · ${config.sections?.reduce((sum, item) => sum + Number(item.beats || 0), 0) ?? 0} 拍 · ${config.sections?.length ?? 0} 段`
+    ? `${mode}${config.bpm} BPM · ${config.sections?.reduce((sum, item) => sum + Number(item.beats || 0), 0) ?? 0} 拍 · ${config.sections?.length ?? 0} 段`
     : '本次舞蹈配置未随运行记录返回。');
   const body = document.getElementById('dance-sections');
   if (body) {
@@ -354,6 +356,8 @@ function renderRun(document, location, run, runId) {
   }
   download.hidden = !canDownload;
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
+  const logs = document.getElementById('run-logs');
+  if (logs) logs.hidden = !tracking || run.backend !== 'local' || run.mock === true || !run.externalRunId;
   const hardware = document.getElementById('run-hardware-readiness');
   if (hardware) {
     hardware.hidden = !(isDance || tracking) || run.status !== 'completed';
@@ -474,6 +478,25 @@ export async function startRunDetail({
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
+  const logsButton = document.getElementById('run-logs-load');
+  const loadLogs = async () => {
+    logsButton.disabled = true;
+    text(document, 'run-logs-output', '正在读取本轮日志…');
+    try {
+      const url = new URL(`./api/sim2real/runs/${encodeURIComponent(runId)}/logs`, location.href);
+      const response = await fetchImpl(url.href, { credentials: 'same-origin', cache: 'no-store' });
+      const result = await response.json();
+      if (!response.ok || result.runId !== runId || !Array.isArray(result.lines)) {
+        throw Error(result.error?.message || '暂时无法读取本轮日志。');
+      }
+      text(document, 'run-logs-output', result.lines.map((line) => line.text).join('\n') || '暂时没有可读取的日志。');
+    } catch (cause) {
+      text(document, 'run-logs-output', cause.message || '暂时无法读取本轮日志。');
+    } finally {
+      logsButton.disabled = false;
+    }
+  };
+  logsButton?.addEventListener('click', loadLogs);
   const schedule = () => {
     if (disposed || !active || timer !== null || document.visibilityState === 'hidden') return;
     timer = setTimeoutImpl(() => {
@@ -534,6 +557,7 @@ export async function startRunDetail({
       if (timer !== null) clearTimeoutImpl(timer);
       timer = null;
       document.removeEventListener('visibilitychange', onVisibility);
+      logsButton?.removeEventListener('click', loadLogs);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },
   };

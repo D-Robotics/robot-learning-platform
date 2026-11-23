@@ -27,6 +27,8 @@ let calibration;
 let clips = [];
 let speed = 1;
 let trajectory;
+let trajectoryDigest;
+const failedScreenings = new Set();
 let attempt;
 let preparing = false;
 let checking = false;
@@ -61,7 +63,9 @@ function setError(message = '') {
 
 function refresh() {
   const editing = submitting || preparing || Boolean(screening);
-  submit.disabled = editing || checking || !trajectory || !selectedWorkerReady();
+  const failed = currentScreeningFailed();
+  submit.disabled = editing || checking || !trajectory || !selectedWorkerReady() || failed;
+  byId('reference-screen-blocker').hidden = !failed;
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
   speedSelect.disabled = editing || !clips.length;
@@ -79,6 +83,10 @@ function refresh() {
 
 function selectedWorkerReady() {
   return resources.some(({ id, ready }) => id === worker.value && ready);
+}
+
+function currentScreeningFailed() {
+  return trajectory && failedScreenings.has(worker.value + '/' + trajectoryDigest);
 }
 
 function showWorkerHint() {
@@ -141,6 +149,7 @@ async function selectTrajectory(load, nextSpeed) {
     clips = nextClips;
     speed = nextSpeed;
     trajectory = value;
+    trajectoryDigest = receipt.referenceSha256;
     attempt = undefined;
     const list = byId('reference-clips');
     list.replaceChildren(...clips.map(({ label }) => {
@@ -244,6 +253,9 @@ async function screenBatch(entries) {
         const { result } = await api('originman-reference/screen', {
           computeResourceId, trajectory: value,
         }, undefined, controller.signal);
+        const key = computeResourceId + '/' + result.referenceSha256;
+        if (result.passed) failedScreenings.delete(key);
+        else failedScreenings.add(key);
         if (result.passed) passed++;
         const failure = result.firstFailedFrame === null ? '' : `，首个失败帧 ${result.firstFailedFrame}`;
         const detail = document.createElement('small');
@@ -276,7 +288,7 @@ screenCancel.addEventListener('click', () => screening?.abort());
 
 byId('reference-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !trajectory) return;
+  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !trajectory || currentScreeningFailed()) return;
   submitting = true;
   refresh();
   setError();

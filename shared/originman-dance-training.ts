@@ -29,6 +29,7 @@ export const ORIGINMAN_DANCE_SECTION_TYPES = [
 type SectionType = (typeof ORIGINMAN_DANCE_SECTION_TYPES)[number];
 export interface OriginmanDanceTraining {
   schemaVersion: 1;
+  compositionMode?: 'preset' | 'custom';
   title: string;
   bpm: number;
   sections: { type: SectionType; beats: 4 | 8 | 16; intensity: number }[];
@@ -51,6 +52,7 @@ export function normalizeOriginmanDanceTraining(value: unknown): OriginmanDanceT
         ![
           'schemaVersion',
           'title',
+          'compositionMode',
           'bpm',
           'sections',
           'seed',
@@ -58,6 +60,9 @@ export function normalizeOriginmanDanceTraining(value: unknown): OriginmanDanceT
           'rewardTuning',
         ].includes(key),
     ) ||
+    (value.compositionMode !== undefined &&
+      value.compositionMode !== 'preset' &&
+      value.compositionMode !== 'custom') ||
     typeof value.title !== 'string' ||
     !value.title.trim() ||
     value.title.length > 80 ||
@@ -105,6 +110,7 @@ export function normalizeOriginmanDanceTraining(value: unknown): OriginmanDanceT
   }
   return {
     schemaVersion: 1,
+    ...(value.compositionMode ? { compositionMode: value.compositionMode } : {}),
     title: value.title.trim(),
     bpm: value.bpm,
     sections,

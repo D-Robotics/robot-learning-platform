@@ -7,6 +7,7 @@ import {
 } from '../../shared/originman-reference-training.js';
 import originManDanceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json' with { type: 'json' };
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import originManManifest from '../../plugins/rdk-robot-learning-platform/references/originman-manifest.json' with { type: 'json' };
 import { validateSim2RealManifest } from '../../shared/sim2real.js';
 import type { Request, Response, Router } from 'express';
@@ -91,6 +92,7 @@ export function registerSim2RealWorkshopRoutes(
           frames: trajectory.joint_pos.length,
           durationSeconds: trajectory.joint_pos.length / trajectory.fps,
           fps: trajectory.fps,
+          referenceSha256: createHash('sha256').update(JSON.stringify(trajectory)).digest('hex'),
         };
       } catch (error) {
         throw new ExperimentError(

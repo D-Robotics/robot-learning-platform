@@ -891,9 +891,15 @@ function runnerPayload(
   idempotencyKey?: string,
   demonstrations?: import('../../shared/sim2real.js').Sim2RealDemonstrations,
 ): Record<string, unknown> {
+  let workerTraining = training;
+  if (training?.originmanDance?.compositionMode) {
+    // The composition mode is for the workbench and ledger. Existing workers consume the original recipe schema.
+    const { compositionMode, ...originmanDance } = training.originmanDance;
+    workerTraining = { ...training, originmanDance };
+  }
   const task =
-    taskId === 'originman-dance' && training?.originmanDance
-      ? { id: taskId, originmanDance: training.originmanDance }
+    taskId === 'originman-dance' && workerTraining?.originmanDance
+      ? { id: taskId, originmanDance: workerTraining.originmanDance }
       : taskId === ORIGINMAN_REFERENCE_TASK
         ? { id: taskId }
         : resolvedTaskPack(taskId);
@@ -912,7 +918,7 @@ function runnerPayload(
     artifacts: manifest.artifacts,
     ...(taskId ? { taskId } : {}),
     ...(task ? { task } : {}),
-    ...(training ? { training } : {}),
+    ...(workerTraining ? { training: workerTraining } : {}),
     ...(demonstrations ? { demonstrations } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),

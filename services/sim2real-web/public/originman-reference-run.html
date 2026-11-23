@@ -6,7 +6,7 @@
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./run-detail-page.mjs?v=5"></script>
+    <script type="module" src="./run-detail-page.mjs?v=6"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -44,6 +44,11 @@
           <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
           <p id="run-hardware-readiness" hidden></p>
           <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
+          <details class="experiment-details" id="run-logs" hidden>
+            <summary>本轮引擎日志</summary>
+            <button type="button" id="run-logs-load">读取日志</button>
+            <pre id="run-logs-output" class="empty-state" tabindex="0" aria-label="本轮引擎日志">等待读取。</pre>
+          </details>
         </section>
 
         <section aria-labelledby="quality-heading">
