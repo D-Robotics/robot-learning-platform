@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { normalizeTrainingSpec } from './sim2real.js';
+import { composeOriginmanReference } from '../services/sim2real-web/public/originman-reference-compose.mjs';
 import {
   ORIGINMAN_REFERENCE_ENGINE,
   originmanReferenceCalibration,
@@ -8,6 +9,49 @@ import {
 } from './originman-reference-training.js';
 
 describe('OriginMan trajectory following', () => {
+  it('keeps source motion intact and revalidates blended, slowed trajectories', () => {
+    const original = originmanReferenceExample();
+    const { robot, trajectory } = originmanReferenceCalibration;
+    const clips = [{ label: 'A', value: original }];
+    expect(composeOriginmanReference(clips, 1, robot.jointOrder, trajectory)).toBe(original);
+    const joined = composeOriginmanReference(
+      [...clips, { label: 'B', value: original }],
+      0.5,
+      robot.jointOrder,
+      trajectory,
+    );
+    expect(joined.fps).toBe(50);
+    expect(joined.joint_pos).toHaveLength((200 + 19 + 200 - 1) * 2 + 1);
+    expect(joined.joint_pos[0]).toEqual(original.joint_pos[0].map((q) => q || 0));
+    expect(joined.joint_pos.at(-1)).toEqual(original.joint_pos.at(-1));
+    expect(joined.joint_vel[1][12]).toBeCloseTo(
+      (joined.joint_pos[2][12] - joined.joint_pos[0][12]) * 25,
+      7,
+    );
+    expect(validateOriginmanReferenceTrajectory(joined)).toEqual(joined);
+    expect(() =>
+      composeOriginmanReference(
+        [{ label: 'A', value: { ...original, fps: 25 } }],
+        0.5,
+        robot.jointOrder,
+        trajectory,
+      ),
+    ).toThrow(/采样频率/);
+    const long = {
+      ...original,
+      joint_pos: Array.from({ length: 6100 }, (_, frame) => original.joint_pos[frame % 200]),
+      joint_vel: Array.from({ length: 6100 }, (_, frame) => original.joint_vel[frame % 200]),
+    };
+    expect(() =>
+      composeOriginmanReference(
+        [{ label: '长参考', value: long }],
+        0.5,
+        robot.jointOrder,
+        trajectory,
+      ),
+    ).toThrow(/240 秒/);
+  });
+
   it('keeps relative positions, joint order and physical servo order distinct', () => {
     const example = originmanReferenceExample();
     expect(validateOriginmanReferenceTrajectory(example)).toEqual(example);

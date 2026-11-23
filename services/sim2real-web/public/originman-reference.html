@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=2"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -29,9 +29,23 @@
         <section aria-labelledby="reference-import-heading">
           <h2 id="reference-import-heading">导入参考轨迹</h2>
           <p id="reference-format">支持 50 Hz 的 NPZ 或 JSON。关节位置使用相对站姿的弧度，速度使用弧度/秒。</p>
-          <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" /></p>
+          <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" disabled /></p>
           <p><button id="reference-example" type="button" disabled>加载示例摆臂</button>
           <button id="reference-example-download" type="button" disabled>下载示例 JSON</button></p>
+          <details class="experiment-details">
+            <summary>拼接片段与慢放</summary>
+            <p>按加入顺序拼接，片段之间加入 0.4 秒平滑过渡。慢放后仍以 50 Hz 保存，并重新计算关节速度。</p>
+            <p><label for="reference-append">追加轨迹片段</label>
+              <input id="reference-append" type="file" accept=".npz,.json" disabled /></p>
+            <ol id="reference-clips" aria-label="片段顺序"></ol>
+            <p><label for="reference-speed">轨迹速度</label>
+              <select id="reference-speed" disabled>
+                <option value="1">原速</option>
+                <option value="0.75">0.75 倍速</option>
+                <option value="0.5">0.5 倍速</option>
+              </select>
+              <button id="reference-export" type="button" disabled>下载当前轨迹 JSON</button></p>
+          </details>
           <p id="reference-status" role="status" aria-live="polite">正在读取任务配置。</p>
           <p id="reference-error" class="experiment-error" role="alert" hidden></p>
         </section>
@@ -39,7 +53,8 @@
           <h2 id="reference-training-heading">训练与评测</h2>
           <form id="reference-form">
             <p><label for="reference-worker">训练 Worker</label>
-              <select id="reference-worker" required><option value="">请选择</option></select></p>
+              <select id="reference-worker" required aria-describedby="reference-worker-hint"><option value="">请选择</option></select>
+              <button id="reference-worker-check" type="button" disabled>检查连接</button></p>
             <p><label for="reference-steps">预算</label>
               <select id="reference-steps">
                 <option value="8192">快检 · 8,192 步</option>
@@ -51,7 +66,7 @@
                 <option>1</option><option>2</option><option>4</option><option>8</option>
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
-            <p id="reference-worker-hint"></p>
+            <p id="reference-worker-hint" role="status"></p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>
         </section>
