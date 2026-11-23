@@ -394,6 +394,7 @@ function renderRun(document, location, run, runId) {
     ['算法', config.algorithm],
     ['训练预算', config.originmanReferenceSummary?.trainingSteps ?? config.originmanReference?.trainingSteps ?? danceConfigFor(run)?.trainingSteps ?? config.timesteps ?? config.trainingSteps ?? config.totalTimesteps],
     ['实际训练步数', run.metrics?.trainingSteps],
+    ['已评测 checkpoint', run.metrics?.originmanReference?.checkpointEvaluations],
     ['实际训练设备', run.metrics?.trainingDeviceName ?? run.metrics?.trainingDevice],
     ['并行环境', config.numEnvs],
     ['计划轮数', config.maxIterations],

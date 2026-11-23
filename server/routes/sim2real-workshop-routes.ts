@@ -19,9 +19,11 @@ import {
   getSim2RealRun,
   getSim2RealModel,
   getSim2RealComputeResource,
+  getSim2RealComputeResourceSecret,
   findSim2RealRunByIdempotency,
 } from '../sim2real/sim2real-store.js';
 import { wrapAsync, sendApiError } from '../sim2real/http-helpers.js';
+import { screenOriginmanReferenceWithWorker } from '../sim2real/robogo-runner.js';
 // The public platform validates manifest-defined robots under the custom profile.
 const courseManifest =
   validateSim2RealManifest(originManManifest).manifest ??
@@ -97,6 +99,62 @@ export function registerSim2RealWorkshopRoutes(
           400,
         );
       }
+    }),
+  );
+  router.post(
+    referenceApi + '/screen',
+    handle(async (request, owner) => {
+      let trajectory;
+      try {
+        trajectory = validateOriginmanReferenceTrajectory(request.body?.trajectory);
+      } catch (error) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_INVALID',
+          error instanceof Error ? error.message : '参考轨迹无效。',
+          400,
+        );
+      }
+      const selected = await getSim2RealComputeResourceSecret(
+        String(request.body?.computeResourceId ?? ''),
+        owner,
+      );
+      const resource = selected?.resource;
+      if (
+        !resource ||
+        resource.status !== 'online' ||
+        resource.source === 'local-agent' ||
+        resource.mock !== false ||
+        !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
+      ) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_WORKER_MISSING',
+          '请先检查支持跟跳的 Worker 连接。',
+          409,
+        );
+      }
+      const result = await screenOriginmanReferenceWithWorker({
+        runnerUrl: resource.runnerUrl,
+        token: selected.runnerToken,
+        accountId: owner ?? 'local-dev',
+        trajectory,
+      }).catch(() => {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_SCREEN_FAILED',
+          'Worker 未返回可核验的筛查结果。请检查连接后重试。',
+          503,
+        );
+      });
+      if (result.busy) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_SCREEN_BUSY',
+          'Worker 正在处理任务，请稍后重试。',
+          409,
+        );
+      }
+      if (result.invalid) {
+        throw new ExperimentError('ORIGINMAN_REFERENCE_SCREEN_INVALID', result.invalid, 422);
+      }
+      return { result };
     }),
   );
   router.post(

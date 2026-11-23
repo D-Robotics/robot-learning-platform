@@ -24,6 +24,15 @@ The evaluator runs the exported ONNX on the same reference; completion, tilt
 below 32° and absolute terminal yaw below 5° determine the gate. The page also
 reports mean tracking error. An ONNX is downloadable for completed simulation
 runs even when the quality gate fails. This version is scoped to simulation.
+Training evaluates an exported checkpoint every 32,768 steps and at the budget
+boundary. The first passing checkpoint ends the same run, whose results record
+actual steps and use that exact ONNX and reference for replay. The 8,192-step
+smoke budget is evaluated at its end.
+
+Use the workbench's physical screen on the current trajectory or a group of up
+to eight files. The selected account Worker checks each reference through the
+calibrated zero-residual simulation and returns frame counts, peak tilt, early
+failure frame and input digests. Screening creates no training run.
 
 Register `originman-reference-ppo` in the Worker
 `RDK_SIM2REAL_TRAIN_ENGINES_JSON` with an absolute Python executable and this
@@ -33,5 +42,6 @@ in the same layout. Reuse the pinned OriginMan dance Python environment, its
 bundle at `RDK_ORIGINMAN_DANCE_BUNDLE_DIR`, and a working offscreen MuJoCo
 renderer plus FFmpeg. The engine uses CUDA when available with
 `RDK_ORIGINMAN_DANCE_DEVICE=auto`. Run the connection test after updating
-the Worker so the platform has current engine capabilities. Large trajectory
-transfers are subject to the platform's 2 MiB JSON request limit.
+the Worker so the platform has current engine capabilities. Allow up to 16 MiB
+on the authenticated OriginMan reference upload and screening paths if a reverse
+proxy imposes a lower limit. Other training uploads use the standard limit.

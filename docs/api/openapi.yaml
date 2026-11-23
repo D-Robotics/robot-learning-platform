@@ -283,6 +283,28 @@ paths:
         "200": { description: Valid frame count, duration in seconds, and frame rate }
         "400": { description: Unsupported frequency, joint order, motion limits, or invalid trajectory data }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/originman-reference/screen:
+    post:
+      tags: [workspace]
+      operationId: screenOriginManReferenceTrajectory
+      summary: Run a zero-residual physics screen on the selected account Worker without starting training
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [trajectory, computeResourceId]
+              properties:
+                trajectory: { $ref: "#/components/schemas/OriginmanReferenceTrajectory" }
+                computeResourceId: { type: string }
+      responses:
+        "200": { description: Screen result bound to the reference, scene and calibration digests }
+        "400": { description: Invalid trajectory }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Compatible Worker is unavailable or busy }
+        "422": { description: Trajectory exceeds the calibrated scene's actuator limits }
+        "503": { description: No verifiable screen result }
   /api/v1/duck/originman-reference/model:
     post:
       tags: [workspace]

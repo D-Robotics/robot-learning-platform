@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=2"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=3"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -67,6 +67,17 @@
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
             <p id="reference-worker-hint" role="status"></p>
+            <details class="experiment-details">
+              <summary>训练前物理筛查</summary>
+              <p>由所选 Worker 用标定场景逐帧模拟。批量支持 8 个文件，逐项报告帧数、峰值倾角和首个失败帧。</p>
+              <p><button id="reference-screen-current" type="button" disabled>筛查当前轨迹</button></p>
+              <p><label for="reference-screen-files">批量筛查轨迹</label>
+                <input id="reference-screen-files" type="file" accept=".npz,.json" multiple disabled />
+                <button id="reference-screen-cancel" type="button" hidden>取消后续筛查</button></p>
+              <p id="reference-screen-status" role="status" aria-live="polite"></p>
+              <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
+            </details>
+            <p>标准与长训每 32,768 步评测一次 checkpoint。完整度、峰值倾角和末尾偏航同时达标时提前结束。</p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>
         </section>

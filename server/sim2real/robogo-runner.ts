@@ -2,6 +2,7 @@ import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
   ORIGINMAN_REFERENCE_TASK,
+  type OriginmanReferenceTrajectory,
 } from '../../shared/originman-reference-training.js';
 import type {
   Sim2RealCheckpointRef,
@@ -13,6 +14,7 @@ import type {
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import { ORIGINMAN_DANCE_SECTION_TYPES } from '../../shared/originman-dance-training.js';
+import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { normalizeLatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
@@ -581,6 +583,7 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     qualityGatePassed,
     referenceSha256,
     sceneSha256,
+    checkpointEvaluations,
   } = value as Record<string, unknown>;
   if (
     typeof framesExpected !== 'number' ||
@@ -620,6 +623,12 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
       Math.abs(finalYawDeg) < limits.maxAbsFinalYawDeg,
     referenceSha256,
     sceneSha256,
+    ...(typeof checkpointEvaluations === 'number' &&
+    Number.isSafeInteger(checkpointEvaluations) &&
+    checkpointEvaluations >= 1 &&
+    checkpointEvaluations <= 64
+      ? { checkpointEvaluations }
+      : {}),
     ...(replay && { replay }),
     ...(video && { video }),
   };
@@ -960,6 +969,11 @@ export async function requestRobogoTraining(input: {
           ...(token ? { Authorization: 'Bearer ' + token } : {}),
           ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
           'X-Sim2Real-Account': accountId,
+          ...(input.allowPrivateHttp === true &&
+          input.taskId === ORIGINMAN_REFERENCE_TASK &&
+          input.training?.engine === ORIGINMAN_REFERENCE_ENGINE
+            ? { 'X-RDK-Reference-Trajectory': '1' }
+            : {}),
           'User-Agent': 'RDKStudio/1.0 (+sim2real-runner)',
         },
         body: JSON.stringify(
@@ -1020,6 +1034,68 @@ export async function requestRobogoTraining(input: {
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function screenOriginmanReferenceWithWorker(input: {
+  runnerUrl: string;
+  token?: string;
+  accountId: string;
+  trajectory: OriginmanReferenceTrajectory;
+}) {
+  const url = new URL(normalizeComputeRunnerUrl(input.runnerUrl, 'server-runner'));
+  url.pathname = url.pathname.slice(0, -'/train'.length) + '/originman-reference/screen';
+  const token = safeToken(input.token);
+  const serialized = JSON.stringify(input.trajectory);
+  const response = await fetch(url, {
+    method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(50_000),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Sim2Real-Account': safeAccountId(input.accountId),
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+    },
+    body: serialized,
+  });
+  const report = JSON.parse(await boundedResponseText(response));
+  if (response.status === 409) return { busy: true } as const;
+  if (!response.ok || report?.ok !== true) throw Error('reference screen unavailable');
+  if (typeof report.invalid === 'string') return { invalid: safeText(report.invalid, 300) };
+  const referenceSha256 = createHash('sha256').update(serialized).digest('hex');
+  const gate = report.gate;
+  if (
+    report.referenceSha256 !== referenceSha256 ||
+    !/^[a-f0-9]{64}$/.test(report.sceneSha256 ?? '') ||
+    !/^[a-f0-9]{64}$/.test(report.calibrationSha256 ?? '') ||
+    gate?.framesExpected !== input.trajectory.joint_pos.length ||
+    !Number.isSafeInteger(gate.framesEvaluated) ||
+    gate.framesEvaluated < 1 ||
+    gate.framesEvaluated > gate.framesExpected ||
+    typeof gate.maxTiltDeg !== 'number' ||
+    !Number.isFinite(gate.maxTiltDeg) ||
+    gate.maxTiltDeg < 0 ||
+    gate.maxTiltDeg > 180 ||
+    typeof gate.completed !== 'boolean' ||
+    (gate.completed
+      ? gate.firstFailedFrame !== null
+      : gate.firstFailedFrame !== gate.framesEvaluated)
+  ) {
+    throw Error('invalid reference screen receipt');
+  }
+  return {
+    referenceSha256,
+    sceneSha256: String(report.sceneSha256),
+    calibrationSha256: String(report.calibrationSha256),
+    framesExpected: Number(gate.framesExpected),
+    framesEvaluated: Number(gate.framesEvaluated),
+    maxTiltDeg: Number(gate.maxTiltDeg),
+    firstFailedFrame: gate.completed ? null : Number(gate.firstFailedFrame),
+    passed:
+      gate.completed &&
+      gate.framesEvaluated === gate.framesExpected &&
+      gate.maxTiltDeg < originmanReferenceCalibration.evaluation.maxTiltDeg,
+  };
 }
 
 function statusUrl(rawRunnerUrl: string, externalRunId: string): string {

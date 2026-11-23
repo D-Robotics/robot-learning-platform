@@ -33,6 +33,8 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+ROLLOUT_STEPS = 4096
+CHECKPOINT_STEPS = 32768
 
 
 def digest(path):
@@ -171,6 +173,8 @@ def evaluate(env, policy):
     return {
         "framesExpected": len(env.target),
         "framesEvaluated": len(errors),
+        "completed": bool(complete and not failed),
+        "firstFailedFrame": len(errors) if failed else None,
         "trackingMaeRad": float(np.mean(errors)),
         "maxTiltDeg": peak,
         "finalYawDeg": data["yaw"],
@@ -178,20 +182,67 @@ def evaluate(env, policy):
     }, frames
 
 
-def train_and_export(bundle, output, trajectory, budget, num_envs, seed):
+def reference_gate(bundle, trajectory):
+    env = ReferenceTracking(bundle, trajectory)
+    zero = lambda _obs: np.zeros(18)
+    calibrated, _ = evaluate(env, zero)
+    original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
+    return env, {
+        "gate": calibrated,
+        "existingSceneGate": original,
+        "calibrationSha256": digest(PROFILE_PATH),
+        "actionJoints": TRACKED,
+        "controlHz": HZ,
+    }
+
+
+def screen_reference():
+    raw = json.load(sys.stdin)
+    bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
+    scene_hash = validate_bundle(bundle)["sceneSha256"]
+    try:
+        _, report = reference_gate(bundle, validate_trajectory(raw))
+    except ValueError as error:
+        print(json.dumps({"invalid": str(error)}, allow_nan=False))
+        return
+    print(json.dumps({**report, "sceneSha256": scene_hash}, allow_nan=False))
+
+
+def gate_allows_training(evidence):
+    return (evidence["completed"] and evidence["framesEvaluated"] == evidence["framesExpected"]
+            and evidence["maxTiltDeg"] < PROFILE["evaluation"]["maxTiltDeg"])
+
+
+def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env):
     torch.set_num_threads(1)
-    rollout = 4096
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     factory = lambda: ReferenceTracking(bundle, trajectory)
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
-        learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=rollout // num_envs,
+        learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=ROLLOUT_STEPS // num_envs,
                       batch_size=128, n_epochs=4, learning_rate=3e-4,
                       policy_kwargs={"net_arch": [128, 128], "log_std_init": -2.8})
-        learner.learn(total_timesteps=budget, callback=WorkerProgress(budget, rollout, engine=ENGINE))
-        learner.save(output / "final")
-        return str(learner.device), (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
-                                     else learner.device.type)
+        checkpoints = []
+        while learner.num_timesteps < budget:
+            learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
+                          reset_num_timesteps=False,
+                          callback=WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE))
+            learner.save(output / "final")
+            policy_path = output / "policy.onnx"
+            policy_sha = write_onnx(output / "final.zip", policy_path, 96)
+            session = ReferenceEvaluator(onnx.load(policy_path))
+            result, frames = evaluate(
+                evaluation_env, lambda obs: session.run(None, {"observation": obs[None]})[0][0]
+            )
+            checkpoints.append({"steps": learner.num_timesteps, "policySha256": policy_sha,
+                                **result})
+            print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
+                             allow_nan=False), flush=True)
+            if result["qualityGatePassed"]:
+                break
+        device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
+                       else learner.device.type)
+        return str(learner.device), device_name, learner.num_timesteps, policy_sha, result, frames, checkpoints
     finally:
         sim.close()
 
@@ -219,22 +270,16 @@ def main():
     scene_hash = validate_bundle(bundle)["sceneSha256"]
     reference_path = output / "reference.json"
     reference_path.write_text(json.dumps(tracks["trajectory"], separators=(",", ":"), allow_nan=False))
-    env = ReferenceTracking(bundle, trajectory)
-    zero = lambda _obs: np.zeros(18)
-    calibrated, _ = evaluate(env, zero)
-    original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
-    report = {"gate": calibrated, "existingSceneGate": original, "calibrationSha256": digest(PROFILE_PATH),
-              "actionJoints": TRACKED, "controlHz": HZ}
+    env, report = reference_gate(bundle, trajectory)
     (output / "reference-gate.json").write_text(json.dumps(report, allow_nan=False))
     print(json.dumps({"event": "reference-gate", **report}), flush=True)
-    if calibrated["framesEvaluated"] != calibrated["framesExpected"] or calibrated["maxTiltDeg"] >= PROFILE["evaluation"]["maxTiltDeg"]:
+    if not gate_allows_training(report["gate"]):
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
-    device, device_name = train_and_export(bundle, output, trajectory, budget, num_envs, seed)
-    policy_path = output / "policy.onnx"
-    policy_sha = write_onnx(output / "final.zip", policy_path, 96)
-    session = ReferenceEvaluator(onnx.load(policy_path))
-    results, frames = evaluate(env, lambda obs: session.run(None, {"observation": obs[None]})[0][0])
+    device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
+        bundle, output, trajectory, budget, num_envs, seed, env
+    )
+    results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
     np.savez_compressed(replay_path, qpos=np.asarray(frames))
     replay_sha = digest(replay_path)
@@ -244,7 +289,7 @@ def main():
     try:
         subprocess.run([sys.executable, str(ROOT / "engines/originman-dance-ppo/render_replay.py"),
                         "--scene", str(bundle / "model/scene.xml"), "--replay", str(replay_path),
-                        "--output", str(video_path)], check=True, timeout=300)
+                        "--output", str(video_path)], check=True, timeout=max(300, len(frames) // 10))
     except (OSError, subprocess.SubprocessError) as error:
         print(f"Reference replay rendering failed: {error}", file=sys.stderr, flush=True)
     else:
@@ -264,14 +309,18 @@ def main():
                      "runtime": "onnxruntime-cpu", "workload": "humanoid-dance",
                      "sha256": policy_sha, "deployable": False},
         "metrics": {"engine": ENGINE, "contractValid": True, "observationSize": 96, "actionSize": 18,
-                    "trainingSteps": budget, "trainingDevice": device, "trainingDeviceName": device_name,
+                    "trainingSteps": actual_steps, "trainingDevice": device, "trainingDeviceName": device_name,
                     "physicsBackend": "cpu-mujoco", "originmanReference": results},
     }
-    (output / "evaluation.json").write_text(json.dumps({**report, "evaluation": results}, allow_nan=False))
+    (output / "evaluation.json").write_text(json.dumps(
+        {**report, "checkpoints": checkpoints, "evaluation": results}, allow_nan=False))
     write_manifest(output)
     result_path.write_text(json.dumps(result, allow_nan=False))
 
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main()
+    if sys.argv[1:] == ["--screen-reference"]:
+        screen_reference()
+    else:
+        main()

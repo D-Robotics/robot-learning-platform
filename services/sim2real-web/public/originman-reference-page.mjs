@@ -15,6 +15,11 @@ const speedSelect = byId('reference-speed');
 const exportButton = byId('reference-export');
 const checkWorker = byId('reference-worker-check');
 const workerHint = byId('reference-worker-hint');
+const screenCurrent = byId('reference-screen-current');
+const screenFiles = byId('reference-screen-files');
+const screenCancel = byId('reference-screen-cancel');
+const screenStatus = byId('reference-screen-status');
+const screenResults = byId('reference-screen-results');
 const exampleButton = byId('reference-example');
 const exampleDownload = byId('reference-example-download');
 let example;
@@ -26,22 +31,24 @@ let attempt;
 let preparing = false;
 let checking = false;
 let submitting = false;
+let screening;
 let resources = [];
 
-async function api(path, body, idempotencyKey) {
+async function api(path, body, idempotencyKey, signal) {
   const response = await fetch(new URL('./api/v1/duck/' + path, location.href), {
-    credentials: 'same-origin', cache: 'no-store',
+    credentials: 'same-origin', cache: 'no-store', signal,
     ...(body && { method: 'POST', body: JSON.stringify(body) }),
     headers: {
       accept: 'application/json',
       ...(body && { 'content-type': 'application/json' }),
       ...(idempotencyKey && { 'Idempotency-Key': idempotencyKey }),
+      ...(path === 'runs' && { 'X-RDK-Reference-Trajectory': '1' }),
     },
   });
   const value = await response.json().catch(() => null);
   if (!response.ok || !value?.ok) {
     if (response.status === 401) throw Error('请先登录机器人学习平台，再刷新此页。');
-    if (response.status === 413) throw Error('轨迹超过当前请求的 2 MB 上限，请拆成更短的片段。');
+    if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
     throw Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。');
   }
   return value;
@@ -53,7 +60,7 @@ function setError(message = '') {
 }
 
 function refresh() {
-  const editing = submitting || preparing;
+  const editing = submitting || preparing || Boolean(screening);
   submit.disabled = editing || checking || !trajectory || !selectedWorkerReady();
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
@@ -61,8 +68,11 @@ function refresh() {
   exportButton.disabled = editing || !trajectory;
   exampleButton.disabled = editing || !example;
   exampleDownload.disabled = !example;
-  worker.disabled = submitting || checking;
-  checkWorker.disabled = submitting || checking || !worker.value;
+  worker.disabled = submitting || checking || Boolean(screening);
+  checkWorker.disabled = worker.disabled || !worker.value;
+  screenCurrent.disabled = editing || checking || !trajectory || !selectedWorkerReady();
+  screenFiles.disabled = editing || checking || !selectedWorkerReady();
+  screenCancel.hidden = !screening;
   envs.disabled = submitting;
   byId('reference-steps').disabled = submitting;
 }
@@ -179,7 +189,7 @@ checkWorker.addEventListener('click', async () => {
 });
 
 async function readClip(incoming) {
-  if (incoming.size > 8 * 1024 * 1024) throw Error('参考文件大小不能超过 8 MiB。');
+  if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');
   const value = /\.npz$/i.test(incoming.name)
     ? await readOriginmanNpz(await incoming.arrayBuffer())
     : JSON.parse(await incoming.text());
@@ -210,9 +220,63 @@ function downloadReference(value, name) {
 exampleDownload.addEventListener('click', () => downloadReference(example, 'originman-reference-example.json'));
 exportButton.addEventListener('click', () => downloadReference(trajectory, 'originman-reference-prepared.json'));
 
+async function screenBatch(entries) {
+  if (screening || preparing || submitting || checking || !selectedWorkerReady()) return;
+  if (entries.length > MAX_REFERENCE_CLIPS) {
+    screenStatus.textContent = '每次最多筛查 8 个文件。';
+    return;
+  }
+  if (!entries.length) return;
+  const controller = new AbortController();
+  screening = controller;
+  const computeResourceId = worker.value;
+  let passed = 0;
+  let tested = 0;
+  screenResults.replaceChildren();
+  refresh();
+  try {
+    for (const { label, load } of entries) {
+      if (controller.signal.aborted) break;
+      screenStatus.textContent = `正在筛查第 ${tested + 1} / ${entries.length} 项。`;
+      const row = document.createElement('li');
+      try {
+        const value = await load();
+        const { result } = await api('originman-reference/screen', {
+          computeResourceId, trajectory: value,
+        }, undefined, controller.signal);
+        if (result.passed) passed++;
+        const failure = result.firstFailedFrame === null ? '' : `，首个失败帧 ${result.firstFailedFrame}`;
+        const detail = document.createElement('small');
+        detail.textContent = `参考 SHA-256 ${result.referenceSha256}`;
+        row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。 `;
+        row.append(detail);
+      } catch (cause) {
+        if (controller.signal.aborted) break;
+        row.textContent = `${label} · ${cause.message}`;
+      }
+      tested++;
+      screenResults.append(row);
+    }
+    screenStatus.textContent = `${controller.signal.aborted ? '筛查已取消，' : ''}已返回 ${tested}/${entries.length} 项，通过 ${passed} 项。`;
+  } finally {
+    screening = undefined;
+    refresh();
+  }
+}
+
+screenCurrent.addEventListener('click', () => void screenBatch([
+  { label: '当前轨迹', load: () => trajectory },
+]));
+screenFiles.addEventListener('change', () => {
+  const files = Array.from(screenFiles.files);
+  screenFiles.value = '';
+  void screenBatch(files.map((incoming) => ({ label: incoming.name, load: async () => (await readClip(incoming)).value })));
+});
+screenCancel.addEventListener('click', () => screening?.abort());
+
 byId('reference-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (submitting || checking || preparing || !selectedWorkerReady() || !trajectory) return;
+  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !trajectory) return;
   submitting = true;
   refresh();
   setError();

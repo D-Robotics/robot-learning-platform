@@ -34,6 +34,9 @@ const DATA_DIR = path.resolve(
   ),
 );
 const MAX_BODY = 2 * 1024 * 1024;
+const MAX_REFERENCE_BODY = 16 * 1024 * 1024;
+const REFERENCE_ENGINE = 'originman-reference-ppo';
+const REFERENCE_TASK = 'originman-reference-track';
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_DANCE_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -132,6 +135,7 @@ const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
 const queuedJobs = [];
 const activeJobs = new Set();
+let screening = false;
 const activeChildren = new Set();
 const finalizingJobs = new Set();
 let jobsLoadPromise;
@@ -262,12 +266,12 @@ function fail(message, status = 400, code = 'invalid_training_request') {
   return error;
 }
 
-async function bodyJson(request) {
+async function bodyJson(request, maxBody = MAX_BODY) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += Buffer.byteLength(chunk);
-    if (size > MAX_BODY) throw fail('training request is too large', 413, 'request_too_large');
+    if (size > maxBody) throw fail('training request is too large', 413, 'request_too_large');
     chunks.push(chunk);
   }
   if (!size) return {};
@@ -1046,7 +1050,7 @@ async function pumpQueue() {
     // than launching it with an implicit fallback or dropping it.
     return;
   }
-  while (activeJobs.size < limit && queuedJobs.length) {
+  while (activeJobs.size + Number(screening) < limit && queuedJobs.length) {
     const job = queuedJobs.shift();
     if (!job || job.status !== 'queued') continue;
     let config;
@@ -1096,7 +1100,14 @@ async function persist(job) {
 
 async function handleTrain(request, response) {
   await ensureJobsLoaded();
-  const source = await bodyJson(request);
+  const referenceUpload = request.headers['x-rdk-reference-trajectory'] === '1';
+  const source = await bodyJson(request, referenceUpload ? MAX_REFERENCE_BODY : MAX_BODY);
+  if (
+    referenceUpload &&
+    (source.taskId !== REFERENCE_TASK || source.training?.engine !== REFERENCE_ENGINE)
+  ) {
+    throw fail('the reference upload transport requires OriginMan reference tracking');
+  }
   const engines = workerEngines();
   maxConcurrentJobs();
   if (!engines.size) {
@@ -1165,6 +1176,66 @@ async function handleTrain(request, response) {
   queuedJobs.push(job);
   void pumpQueue();
   json(response, 202, publicJob(job));
+}
+
+async function handleReferenceScreen(request, response) {
+  accountId(request, {});
+  await ensureJobsLoaded();
+  const engine = engineFor({ training: { engine: REFERENCE_ENGINE } });
+  if (!engineExecutableReady(engine.executable)) {
+    throw fail('reference engine executable is unavailable', 503, 'engine_executable_unavailable');
+  }
+  if (screening || queuedJobs.length || activeJobs.size >= maxConcurrentJobs()) {
+    throw fail('reference worker is busy', 409, 'reference_screen_busy');
+  }
+  screening = true;
+  try {
+    const trajectory = await bodyJson(request, MAX_REFERENCE_BODY);
+    const input = JSON.stringify(trajectory);
+    const report = await new Promise((resolve, reject) => {
+      const child = spawn(engine.executable, [...engine.args, '--screen-reference'], {
+        cwd: DATA_DIR,
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: childEnvironment({
+          dir: DATA_DIR,
+          runId: 'reference-screen',
+          contractId: 'reference-screen',
+          profile: 'smoke',
+        }),
+      });
+      activeChildren.add(child);
+      let stdout = '';
+      const timeout = setTimeout(() => child.kill('SIGKILL'), 45_000);
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+      child.stdout.on('data', (chunk) => {
+        if (stdout.length + chunk.length > MAX_LOG) child.kill('SIGKILL');
+        else stdout += String(chunk);
+      });
+      child.once('error', reject);
+      child.once('close', (code) => {
+        clearTimeout(timeout);
+        activeChildren.delete(child);
+        if (code !== 0) {
+          reject(fail('reference screen did not finish', 503, 'reference_screen_failed'));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(fail('reference screen returned invalid results', 503, 'reference_screen_failed'));
+        }
+      });
+    });
+    json(response, 200, {
+      ...report,
+      ok: true,
+      referenceSha256: createHash('sha256').update(input).digest('hex'),
+    });
+  } finally {
+    screening = false;
+    void pumpQueue();
+  }
 }
 
 async function handleStatus(request, response, runId) {
@@ -1568,6 +1639,10 @@ export function createLocalTrainingWorkerServer() {
       }
       if (request.method === 'POST' && request.url === '/train') {
         await handleTrain(request, response);
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/originman-reference/screen') {
+        await handleReferenceScreen(request, response);
         return;
       }
       const videoRoute = /^\/runs\/[^/]+\/(dance-video|workshop-video)$/.exec(request.url ?? '');

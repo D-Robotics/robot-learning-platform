@@ -39,6 +39,7 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 .experiment-error { color: var(--red-text); background: var(--red-soft); padding: 16px; margin-bottom: 24px; border-radius: 8px; }
 .experiment-details { border-top: 1px solid var(--line); padding-top: 16px; }
 .experiment-details pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-meta)/1.6 var(--font-label); }
+#reference-screen-results small { overflow-wrap: anywhere; }
 #login-platform { display: block; margin-top: 16px; }
 #download-video { display: inline-block; margin: 12px 16px 0 0; }
 @media (max-width: 720px) {
