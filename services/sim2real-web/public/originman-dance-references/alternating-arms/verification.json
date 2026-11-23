@@ -1,0 +1,111 @@
+{
+  "action": "alternating-arms",
+  "simulationOnly": true,
+  "method": "optimization in MuJoCo followed by phase-table ONNX export",
+  "contractId": "custom-policy-originman-dance-v2",
+  "config": {
+    "schemaVersion": 1,
+    "title": "alternating-arms",
+    "bpm": 100.0,
+    "seed": 7,
+    "trainingSteps": 8192,
+    "sections": [
+      {
+        "type": "alternating-arms",
+        "beats": 4,
+        "intensity": 0.6
+      }
+    ]
+  },
+  "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+  "policySha256": "57cdbb65abe1bbd3bf6962a8bf89600d1b29a568739c5bb0a66ddbb651f31fb1",
+  "replaySha256": "80a862c618bc275bb23aad8626d29b4594b04c4b42972c3e80c5df0d3c3be405",
+  "evaluations": [
+    {
+      "bpm": 95.0,
+      "completed": true,
+      "failed": false,
+      "reward": 615.752566329479,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-arms",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "armAsymmetryRangeM": 0.15158945344976343,
+          "alternatingArmFraction": 0.6929133858267716,
+          "armBeatCorrelation": 0.22319433109724665
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 0.9880412280973434,
+      "fallContacts": [],
+      "steps": 127
+    },
+    {
+      "bpm": 100.0,
+      "completed": true,
+      "failed": false,
+      "reward": 576.5639853611352,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-arms",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "armAsymmetryRangeM": 0.15174283784131037,
+          "alternatingArmFraction": 0.6916666666666667,
+          "armBeatCorrelation": 0.22885835225889625
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 1.0013957586236855,
+      "fallContacts": [],
+      "steps": 120
+    },
+    {
+      "bpm": 105.0,
+      "completed": true,
+      "failed": false,
+      "reward": 547.1926294758533,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "alternating-arms",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "armAsymmetryRangeM": 0.15186257978329515,
+          "alternatingArmFraction": 0.6956521739130435,
+          "armBeatCorrelation": 0.24538866430442685
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 1.0087912947670001,
+      "fallContacts": [],
+      "steps": 115
+    }
+  ],
+  "videoReceipt": {
+    "source": "recorded-simulation-qpos",
+    "physicalRobot": false,
+    "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+    "replaySha256": "80a862c618bc275bb23aad8626d29b4594b04c4b42972c3e80c5df0d3c3be405",
+    "videoSha256": "adcaf93fa3d99df37abeb060644b904e45c0bac173ef4909a5e277a9e50a09f2",
+    "frames": 121,
+    "fps": 50,
+    "durationSeconds": 2.42,
+    "renderSettings": {
+      "cameraAzimuth": 135,
+      "cameraElevation": -12,
+      "cameraDistance": 1.25,
+      "headlightAmbient": 0.4,
+      "headlightDiffuse": 0.8
+    }
+  }
+}

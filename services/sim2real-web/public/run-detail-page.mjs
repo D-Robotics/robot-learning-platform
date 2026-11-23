@@ -1,3 +1,5 @@
+import { renderDanceReferenceLinks } from './dance-reference-links.mjs';
+
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
 const REFERENCE_TASK = 'originman-reference-track';
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
@@ -16,6 +18,12 @@ const SECTION_LABELS = Object.freeze({
   'weight-shift': '左右换重心',
   'squat-rise': '下蹲起身',
   'open-pose': '展开定格',
+  'single-arm-wave': '单臂挥手',
+  'arms-overhead': '双臂上举',
+  'cross-and-open': '胸前交叉展开',
+  'side-lean': '左右侧身',
+  'alternating-knee-lift': '交替抬膝',
+  'side-tap': '侧点步收回',
 });
 
 const DANCE_MEASUREMENTS = Object.freeze({
@@ -409,6 +417,7 @@ function renderRun(document, location, run, runId) {
   }
   renderDance(document, run);
   renderQuality(document, run);
+  renderDanceReferenceLinks(document, run, SECTION_LABELS);
   if (tracking) text(document, 'run-kind', 'OriginMan · 参考轨迹仿真');
   drawCurve(document, run);
   renderVideo(document, location, run, runId);

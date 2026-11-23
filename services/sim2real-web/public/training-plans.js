@@ -9,7 +9,18 @@ window.TrainingPlans = (() => {
     ppo: { learningRate: 'training-ppo-learning-rate', entropyCoefficient: 'training-ppo-entropy', clipParameter: 'training-ppo-clip' },
     taskTuning: { trackLinearVelocityWeight: 'training-reward-linear', trackAngularVelocityWeight: 'training-reward-angular', headPoseTrackingWeight: 'training-reward-head' },
   };
-  const names = { 'alternating-arms': '左右交替摆臂', 'weight-shift': '左右换重心', 'squat-rise': '下蹲起身', 'open-pose': '展开定格' };
+  const names = {
+    'alternating-arms': '左右交替摆臂',
+    'weight-shift': '左右换重心',
+    'squat-rise': '下蹲起身',
+    'open-pose': '展开定格',
+    'single-arm-wave': '单臂挥手',
+    'arms-overhead': '双臂上举',
+    'cross-and-open': '胸前交叉展开',
+    'side-lean': '左右侧身',
+    'alternating-knee-lift': '交替抬膝',
+    'side-tap': '侧点步收回',
+  };
   const byId = (id) => document.getElementById(id);
   const field = (id) => byId(id)?.value.trim() || '';
   const idValid = (id) => /^[a-f0-9-]{36}$/.test(id);
@@ -47,7 +58,7 @@ window.TrainingPlans = (() => {
       };
       if (!recipe.title || !Number.isFinite(recipe.bpm) || !Number.isFinite(recipe.trainingSteps) || !Number.isFinite(number(numEnvs)) ||
           ('seed' in recipe && !Number.isFinite(recipe.seed)) ||
-          recipe.sections.some((section) => !Number.isFinite(section.intensity))) return null;
+          recipe.sections.some((section) => !Object.hasOwn(names, section.type) || !Number.isFinite(section.intensity))) return null;
       return recipe;
     }
 
@@ -60,7 +71,7 @@ window.TrainingPlans = (() => {
         row.querySelector('button').disabled = sections.childElementCount === 1;
       });
       error.textContent = enabled() && !read()
-        ? '请填写舞段名称，并检查节奏、步数、并行环境、种子和动作强度的范围。' : '';
+        ? '请填写舞段名称、为每段选择动作，并检查节奏、步数、并行环境、种子和动作强度。' : '';
     }
 
     function append(section) {

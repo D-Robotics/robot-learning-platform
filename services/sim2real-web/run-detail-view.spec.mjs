@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+import { ORIGINMAN_DANCE_SECTION_TYPES } from '../../shared/originman-dance-training.ts';
 import { startRunDetail } from './public/run-detail-page.mjs';
 
 const markup = fs.readFileSync(new URL('./public/run-detail.html', import.meta.url), 'utf8');
@@ -67,7 +69,7 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
                 measurements: { lateralTrackingFraction: 0.63 },
               },
               {
-                type: 'squat-rise',
+                type: 'side-tap',
                 passed: false,
                 measurements: { squatDescentM: 0.031, squatAscentM: 0.01653 },
               },
@@ -98,6 +100,16 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   });
 
   assert.equal(page.runId, 'run_42');
+  assert.deepEqual(
+    Array.from(f.document.querySelectorAll('#dance-reference-links a'), (link) => [
+      link.getAttribute('href'),
+      link.textContent,
+    ]),
+    [
+      ['./originman-dance-references/index.html#alternating-arms', '交替摆臂'],
+      ['./originman-dance-references/index.html#side-tap', '侧点步收回'],
+    ],
+  );
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/v1\/duck\/runs\/run_42$/);
   assert.equal(requests[0].options.credentials, 'same-origin');
@@ -267,7 +279,7 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
       bpm: 120,
       trainingSteps: 8192,
       seed: 7,
-      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.25 }],
+      sections: [{ type: 'side-tap', beats: 8, intensity: 0.25 }],
     },
   };
   const run = {
@@ -308,12 +320,54 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(requests, [['/sim2real/runs/' + runId, undefined]]);
+  const actionSelect = workspace.window.document.querySelector('[data-dance-type]');
+  assert.deepEqual(
+    Array.from(actionSelect.options, (option) => option.value),
+    ORIGINMAN_DANCE_SECTION_TYPES,
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(planner.dance().sections)),
+    training.originmanDance.sections,
+  );
   assert.equal(planner.dance().bpm, 120);
   assert.equal(planner.danceNumEnvs(), 4);
   assert.equal(
     workspace.window.document.getElementById('training-plan-save').textContent,
     '保存为新方案',
   );
+});
+
+test('dance reference page and replay assets cover every supported action', (t) => {
+  const directory = new URL('./public/originman-dance-references/', import.meta.url);
+  const catalog = JSON.parse(fs.readFileSync(new URL('catalog.json', directory), 'utf8'));
+  assert.equal(catalog.simulationOnly, true);
+  assert.deepEqual(
+    catalog.references.map(({ type }) => type),
+    ORIGINMAN_DANCE_SECTION_TYPES,
+  );
+
+  const referencePage = new JSDOM(fs.readFileSync(new URL('index.html', directory), 'utf8'));
+  t.after(() => referencePage.window.close());
+  for (const reference of catalog.references) {
+    const section = referencePage.window.document.getElementById(reference.type);
+    assert.equal(section.querySelector('video').getAttribute('src'), reference.video);
+    assert.deepEqual(
+      Array.from(section.querySelectorAll('a'), (link) => link.getAttribute('href')),
+      [reference.policy, reference.verification],
+    );
+    for (const [file, sha256] of [
+      [reference.policy, reference.policySha256],
+      [reference.video, reference.videoSha256],
+    ]) {
+      const actual = createHash('sha256')
+        .update(fs.readFileSync(new URL(file, directory)))
+        .digest('hex');
+      assert.equal(actual, sha256, file);
+    }
+    assert.doesNotThrow(() =>
+      JSON.parse(fs.readFileSync(new URL(reference.verification, directory), 'utf8')),
+    );
+  }
 });
 
 test('dance Workshop links fill the requested draft without submitting or saving', async (t) => {
