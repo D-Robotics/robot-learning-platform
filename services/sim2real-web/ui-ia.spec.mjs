@@ -791,6 +791,19 @@ assert.ok(
 );
 
 const workshopPage = fs.readFileSync(path.join(here, 'public/workshop.html'), 'utf8');
+const originmanReferencePage = fs.readFileSync(
+  path.join(here, 'public/originman-reference.html'),
+  'utf8',
+);
+const originmanReferenceHeader = originmanReferencePage.match(
+  /<header class="experiment-header">([\s\S]*?)<\/header>/,
+);
+assert.ok(originmanReferenceHeader, 'reference tracking must provide a return link');
+assert.deepEqual(
+  Array.from(originmanReferenceHeader[1].matchAll(/<a href="([^"]+)">/g), ([, href]) => href),
+  ['./workshop.html'],
+  'reference tracking must return through the OriginMan Workshop',
+);
 assert.match(workshopPage, /<nav class="workshop-progress" aria-label="课程进度">/);
 for (const stage of ['reference', 'budget', 'execution', 'result'])
   assert.match(workshopPage, new RegExp('id="workshop-step-' + stage + '"'));
