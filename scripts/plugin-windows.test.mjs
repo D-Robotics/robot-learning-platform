@@ -86,7 +86,9 @@ test(
     timeout: 60000,
   },
   async (t) => {
-    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-win-'));
+    // WinPS Expand-Archive compares canonical extraction paths to its destination.
+    // Resolve the runner's 8.3 TEMP alias before passing the destination to it.
+    const temp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-win-')));
     t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
     const root = path.join(temp, '课程 插件');
     const source = fileURLToPath(
@@ -132,6 +134,7 @@ test(
     assert.ifError(installation.error);
     assert.equal(installation.status, 0, installation.stdout + installation.stderr);
     const archive = path.join(root, 'Qoder本机导入包.zip');
+    assert.ok(fs.existsSync(archive), installation.stdout + installation.stderr);
     const extracted = path.join(temp, '导入后');
     const unzip = spawnSync(
       'powershell.exe',
@@ -139,7 +142,7 @@ test(
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        'Expand-Archive -LiteralPath $env:RDK_TEST_ZIP -DestinationPath $env:RDK_TEST_EXTRACT',
+        'Expand-Archive -ErrorAction Stop -LiteralPath $env:RDK_TEST_ZIP -DestinationPath $env:RDK_TEST_EXTRACT',
       ],
       {
         env: { ...process.env, RDK_TEST_ZIP: archive, RDK_TEST_EXTRACT: extracted },
@@ -151,6 +154,13 @@ test(
     assert.ifError(unzip.error);
     assert.equal(unzip.status, 0, unzip.stderr);
     const importedRoot = path.join(extracted, 'rdk-robot-learning-platform');
+    assert.ok(
+      fs.existsSync(path.join(importedRoot, '.mcp.json')),
+      unzip.stdout +
+        unzip.stderr +
+        ' extracted entries: ' +
+        JSON.stringify(fs.readdirSync(extracted)),
+    );
     const config = JSON.parse(fs.readFileSync(path.join(importedRoot, '.mcp.json'), 'utf8'));
     const entry = config.mcpServers['rdk-robot-learning-platform'];
     assert.equal(entry.args[0], path.join(root, 'scripts/experience-mcp.mjs'));
