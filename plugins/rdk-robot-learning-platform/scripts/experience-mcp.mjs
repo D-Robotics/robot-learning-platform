@@ -1086,7 +1086,7 @@ export function experienceProxy(
         platformCode: 'WORKSHOP_FLOW_STOPPED',
         message: '本次短训流程已受阻或已绑定原Run，不接受换标识、换资源或改用通用提交工具重交。',
         nextAction:
-          '保留原Run，只读查看状态和原因。新实验须由用户明确开始新任务；当前任务立即结束。',
+          '查看原 Run 可使用 rdk_training_status。开始另一轮时调用 rdk_workshop，传 intent=new、course=recovery，并使用新实验的 contextId。',
       },
     };
     return {

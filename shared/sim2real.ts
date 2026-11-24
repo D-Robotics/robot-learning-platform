@@ -436,7 +436,8 @@ export interface Sim2RealCompatibilityView {
   artifactWorkload?: ModelArtifactWorkload;
 }
 
-export type Sim2RealRunStatus = 'ready' | 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
+export type Sim2RealRunStatus =
+  'cancelled' | 'cancelling' | 'ready' | 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
 
 export interface Sim2RealRunRecord {
   id: string;

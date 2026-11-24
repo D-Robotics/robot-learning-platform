@@ -509,7 +509,8 @@ export function createDshCapabilityHandlers(
       if (!result.ok) fail(result.status, result.body, '工作区摘要读取失败');
       return {
         generatedAt: str(result.body.generatedAt),
-        runCountScope: result.body.runCountScope === 'owner-ledger' ? 'owner-ledger' : 'recent-window',
+        runCountScope:
+          result.body.runCountScope === 'owner-ledger' ? 'owner-ledger' : 'recent-window',
         runStatuses: objectValue(result.body.runStatuses),
         counts: objectValue(result.body.counts),
         latest: objectValue(result.body.latest),
@@ -793,6 +794,54 @@ export function createDshCapabilityHandlers(
       };
     },
 
+    async rdk_compute_resource_update(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const id = requiredArg(input, 'computeResourceId', '请提供 computeResourceId。');
+      const patch = Object.fromEntries(
+        Object.entries({
+          name: argString(input, 'name'),
+          runnerUrl: argString(input, 'runnerUrl'),
+          runnerToken: argString(input, 'runnerToken'),
+        }).filter(([, v]) => v),
+      );
+      if (!Object.keys(patch).length)
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供新名称、地址或凭据。');
+      const result = await run(exec.signal).fetch(
+        '/api/sim2real/compute-resources/' + encodeURIComponent(id),
+        { method: 'PATCH', json: patch },
+      );
+      if (!result.ok) fail(result.status, result.body, '算力资源更新失败');
+      return { computeResource: result.body.computeResource };
+    },
+    async rdk_training_cancel(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const id = requiredArg(input, 'runId', '请提供 runId。');
+      const result = await run(exec.signal).fetch(
+        '/api/sim2real/runs/' + encodeURIComponent(id) + '/cancel',
+        { method: 'POST', json: {} },
+      );
+      if (!result.ok) fail(result.status, result.body, '无法确认取消训练');
+      return {
+        runId: id,
+        status: objectValue(result.body.run).status,
+        processStopConfirmed: result.body.processStopConfirmed,
+      };
+    },
+    async rdk_training_preflight(args: unknown, exec: ToolRunContext) {
+      const input = argsRecord(args);
+      const computeResourceId = requiredArg(input, 'computeResourceId', '请选择算力资源。');
+      const result = await run(exec.signal).fetch('/api/sim2real/training/preflight', {
+        method: 'POST',
+        json: {
+          computeResourceId,
+          engine: argString(input, 'engine') || undefined,
+          taskId: argString(input, 'taskId') || undefined,
+          device: argString(input, 'device') || undefined,
+        },
+      });
+      if (!result.ok) fail(result.status, result.body, '训练环境预检未完成');
+      return result.body;
+    },
     async rdk_compute_resource_test(args: unknown, exec: ToolRunContext) {
       const input = argsRecord(args);
       const id = requiredArg(input, 'computeResourceId', '请提供 computeResourceId。');
@@ -966,15 +1015,32 @@ export function createDshCapabilityHandlers(
           input.demonstrationRunId.trim().length > 200 ||
           !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/.test(input.demonstrationRunId.trim()))
       ) {
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'demonstrationRunId 必须是有效的示教 Run ID（最多 200 字符）。');
+        throw new CapabilityError(
+          'DSH_CAPABILITY_REJECTED',
+          'demonstrationRunId 必须是有效的示教 Run ID（最多 200 字符）。',
+        );
       }
       if (input.syntheticSmoke !== undefined && !(typeof input.syntheticSmoke === 'boolean')) {
         throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'syntheticSmoke 必须是布尔值。');
       }
       if (
+        input.originmanWorkshop !== undefined &&
+        !(
+          typeof input.originmanWorkshop === 'object' &&
+          input.originmanWorkshop &&
+          !Array.isArray(input.originmanWorkshop)
+        )
+      )
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供恢复课配置对象。');
+      if (
         input.originmanDance !== undefined &&
-        !(typeof input.originmanDance === 'object' && input.originmanDance && !Array.isArray(input.originmanDance))
-      ) throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'originmanDance 必须是舞蹈配置对象。');
+        !(
+          typeof input.originmanDance === 'object' &&
+          input.originmanDance &&
+          !Array.isArray(input.originmanDance)
+        )
+      )
+        throw new CapabilityError('DSH_CAPABILITY_REJECTED', 'originmanDance 必须是舞蹈配置对象。');
       const overview = await run(exec.signal).fetch('/api/sim2real/overview', { method: 'GET' });
       if (!overview.ok) fail(overview.status, overview.body, '工作区读取失败');
       const modelId = argString(input, 'modelId') || firstModelId(overview.body);
@@ -997,10 +1063,15 @@ export function createDshCapabilityHandlers(
         ...(argText(input, 'demonstrationRunId', 200)
           ? { demonstrationRunId: argText(input, 'demonstrationRunId', 200) }
           : {}),
-        ...(typeof input.syntheticSmoke === 'boolean' ? { syntheticSmoke: input.syntheticSmoke } : {}),
+        ...(typeof input.syntheticSmoke === 'boolean'
+          ? { syntheticSmoke: input.syntheticSmoke }
+          : {}),
+        ...(input.originmanWorkshop !== undefined
+          ? { originmanWorkshop: input.originmanWorkshop }
+          : {}),
         ...(input.originmanDance !== undefined ? { originmanDance: input.originmanDance } : {}),
       };
-      const idempotencyKey = dshIdempotencyKey('training');
+      const idempotencyKey = argString(input, 'idempotencyKey') || dshIdempotencyKey('training');
       const result = await run(exec.signal).fetch('/api/sim2real/runs', {
         method: 'POST',
         idempotencyKey,
@@ -1057,6 +1128,7 @@ export function createDshCapabilityHandlers(
           successRate: defined(metrics.successRate),
           fallRate: defined(metrics.fallRate),
           iterations: defined(metrics.iterations),
+          ...(metrics.originmanWorkshop ? { originmanWorkshop: metrics.originmanWorkshop } : {}),
         },
       };
     },
@@ -1078,9 +1150,12 @@ export function createDshCapabilityHandlers(
           status: defined(evaluation.status),
           warnings: boundedArray(evaluation.warnings, 10),
         },
-        frameCount: typeof result.body.frameCount === 'number'
-          ? result.body.frameCount
-          : Array.isArray(result.body.frames) ? result.body.frames.length : 0,
+        frameCount:
+          typeof result.body.frameCount === 'number'
+            ? result.body.frameCount
+            : Array.isArray(result.body.frames)
+              ? result.body.frames.length
+              : 0,
       };
     },
 
@@ -1090,7 +1165,8 @@ export function createDshCapabilityHandlers(
       const limit = Math.min(Math.max(Math.trunc(argNumber(input, 'limit') ?? 50), 1), 200);
       const result = await run(exec.signal).fetch(
         queryPath(`/api/sim2real/runs/${encodeURIComponent(runId)}/telemetry`, {
-          limit, includeSamples: 'false',
+          limit,
+          includeSamples: 'false',
         }),
         { method: 'GET' },
       );
@@ -1102,9 +1178,12 @@ export function createDshCapabilityHandlers(
           source: str(chunk.source),
           sequence: defined(chunk.sequence),
           receivedAt: str(chunk.receivedAt),
-          sampleCount: typeof chunk.sampleCount === 'number'
-            ? chunk.sampleCount
-            : Array.isArray(chunk.samples) ? chunk.samples.length : null,
+          sampleCount:
+            typeof chunk.sampleCount === 'number'
+              ? chunk.sampleCount
+              : Array.isArray(chunk.samples)
+                ? chunk.samples.length
+                : null,
           droppedCount: defined(chunk.droppedCount),
           attested: chunk.attested === true,
         };
@@ -1143,6 +1222,11 @@ export function createDshCapabilityHandlers(
         retainedFrom: defined(result.body.retainedFrom),
         truncated: result.body.truncated === true,
         lines: boundedArray(result.body.lines, 200),
+        ...(result.body.source === 'retained-tail' && {
+          source: 'retained-tail',
+          stdoutTail: str(result.body.stdoutTail),
+          stderrTail: str(result.body.stderrTail),
+        }),
       };
     },
 
@@ -1216,6 +1300,7 @@ export function createDshCapabilityHandlers(
           successRate: defined(metrics.successRate),
           fallRate: defined(metrics.fallRate),
           iterations: defined(metrics.iterations),
+          ...(metrics.originmanWorkshop ? { originmanWorkshop: metrics.originmanWorkshop } : {}),
         },
         replay: {
           sampleCount: defined(replay.sampleCount),
@@ -1511,7 +1596,10 @@ export function createDshCapabilityHandlers(
         throw new CapabilityError('DSH_CAPABILITY_REJECTED', "action 需为 'close' 或 'open'。");
       }
       if (value === undefined || value <= 0) {
-        throw new CapabilityError('DSH_CAPABILITY_REJECTED', '请提供正数 value（close=力，open=宽度 mm）。');
+        throw new CapabilityError(
+          'DSH_CAPABILITY_REJECTED',
+          '请提供正数 value（close=力，open=宽度 mm）。',
+        );
       }
       const result = await run(exec.signal).fetch(
         stationPath('/api/sim2real/board-station/arm/gripper', input),
@@ -1564,10 +1652,10 @@ export function createDshCapabilityHandlers(
         // The failure below records that the safety state is unknown.
       }
       try {
-        armStop = await context.fetch(
-          stationPath('/api/sim2real/board-station/arm/stop', input),
-          { method: 'POST', json: {} },
-        );
+        armStop = await context.fetch(stationPath('/api/sim2real/board-station/arm/stop', input), {
+          method: 'POST',
+          json: {},
+        });
       } catch {
         // Recorded in the aggregated failure below.
       }
@@ -1628,7 +1716,11 @@ export function createDshCapabilityHandlers(
 
     async rdk_docs_toc(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
-      const manual = requiredArg(input, 'manual', '请提供手册 id（来自 rdk_docs_manuals 或检索结果的 manual 字段）。');
+      const manual = requiredArg(
+        input,
+        'manual',
+        '请提供手册 id（来自 rdk_docs_manuals 或检索结果的 manual 字段）。',
+      );
       const docs = options.docsService ?? defaultDocsService;
       const query = argString(input, 'query');
       return callDocs(() => docs.listToc({ manual, ...(query ? { query } : {}) }, fetchText));
@@ -1636,7 +1728,9 @@ export function createDshCapabilityHandlers(
 
     async rdk_docs_page(args: unknown, _exec: ToolRunContext) {
       const input = argsRecord(args);
-      const url = assertDocsUrl(requiredArg(input, 'url', '请提供页面 URL（来自检索、目录或上一轮结果）。'));
+      const url = assertDocsUrl(
+        requiredArg(input, 'url', '请提供页面 URL（来自检索、目录或上一轮结果）。'),
+      );
       const docs = options.docsService ?? defaultDocsService;
       return callDocs(() => docs.getPage({ url, maxChars: 6_000 }, fetchText));
     },
@@ -1651,8 +1745,7 @@ export function createDshCapabilityHandlers(
           query,
           results: cached,
           cached: true,
-          hint:
-            '这些是全网第三方信息（非官方结论），本次结果来自 10 分钟内的缓存；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
+          hint: '这些是全网第三方信息（非官方结论），本次结果来自 10 分钟内的缓存；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
         };
       }
       const webSearch = options.webSearch ?? bingWebSearch;
@@ -1667,8 +1760,7 @@ export function createDshCapabilityHandlers(
         return {
           query,
           results: hits,
-          hint:
-            '这些是全网第三方信息（非官方结论）；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
+          hint: '这些是全网第三方信息（非官方结论）；与 rdk_docs_* 的官方资料冲突时以官方为准，引用时附链接并注明为网络检索结果。',
         };
       } catch (error) {
         if (error instanceof CapabilityError) throw error;

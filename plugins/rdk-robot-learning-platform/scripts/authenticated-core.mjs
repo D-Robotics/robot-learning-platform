@@ -1312,7 +1312,7 @@ export async function connectAuthenticatedCore({
           } catch {}
         }
         if (
-          value?.status === 'failed' &&
+          ['failed', 'completed'].includes(value?.status) &&
           Array.isArray(value.lines) &&
           value.lines.length === 0 &&
           !value.diagnostic
@@ -1343,6 +1343,18 @@ export async function connectAuthenticatedCore({
               body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
             } catch {
               throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '平台未返回有效启动诊断。');
+            }
+            if (body.runId === id && body.source === 'retained-tail') {
+              return apiResult({
+                ...value,
+                source: body.source,
+                ...(typeof body.stdoutTail === 'string' && {
+                  stdoutTail: body.stdoutTail.slice(-2000),
+                }),
+                ...(typeof body.stderrTail === 'string' && {
+                  stderrTail: body.stderrTail.slice(-2000),
+                }),
+              });
             }
             const d = body.diagnostic;
             if (

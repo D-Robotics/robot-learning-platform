@@ -464,3 +464,344 @@ export async function fetchLocalRunLogs(input: {
     clearTimeout(timer);
   }
 }
+
+/** Request cancellation; a cancelling acknowledgement is not proof of exit. */
+export async function requestLocalTrainingCancel(
+  input: Parameters<typeof requestLocalTrainingStatus>[0],
+): Promise<Sim2RealRobogoRunResult> {
+  const localToken = String(
+    input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+  ).trim();
+  const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  assertLocalRunnerToken(runnerUrl, localToken);
+  return requestRobogoTrainingStatus({
+    ...input,
+    operation: 'cancel',
+    requestToken: localToken || undefined,
+    runnerUrl,
+    allowPrivateHttp: true,
+    allowEnvironmentToken: false,
+  });
+}
+
+export class LocalEnginePreflightBusyError extends Error {
+  readonly code = 'engine_preflight_busy';
+  constructor() {
+    super('Worker is running training or another environment probe.');
+    this.name = 'LocalEnginePreflightBusyError';
+  }
+}
+
+export class LocalEnginePreflightUnsupportedError extends Error {}
+
+async function workerPreflightErrorCode(response: Response): Promise<string | undefined> {
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.length;
+      if (size > 8192) {
+        await reader.cancel();
+        return undefined;
+      }
+      chunks.push(value);
+    }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'))?.error;
+  } catch {
+    return undefined;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/** Explicit environment probe; never submits /train or falls back to another resource. */
+export async function requestLocalEnginePreflight(input: {
+  accountId: string;
+  taskId: string;
+  runnerUrl?: string;
+  runnerToken?: string;
+  fetchImpl?: typeof fetch;
+}): Promise<Record<string, unknown>> {
+  const accountId = safeAccountId(input.accountId);
+  if (!/^[a-z][a-z0-9-]{0,63}$/.test(input.taskId)) throw new Error('Invalid preflight task id.');
+  const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  const token = String(
+    input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+  ).trim();
+  assertLocalRunnerToken(runnerUrl, token);
+  const url = new URL(normalizeRunnerUrl(runnerUrl, { localHttp: true }));
+  const pathname = url.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith('/train')) throw new Error('Worker URL must end with /train.');
+  url.pathname = pathname.slice(0, -6) + '/engines/microduck-rl/preflight';
+  url.search = '';
+  url.hash = '';
+  const response = await (input.fetchImpl ?? fetch)(url, {
+    method: 'POST',
+    redirect: 'error',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-sim2real-account': accountId,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ taskId: input.taskId }),
+    signal: AbortSignal.timeout(55000),
+  });
+  if (!response.ok) {
+    const code = await workerPreflightErrorCode(response);
+    if (
+      (response.status === 404 && code === 'not_found') ||
+      (response.status === 409 && code === 'engine_preflight_not_configured')
+    )
+      throw new LocalEnginePreflightUnsupportedError();
+    if (response.status === 429 && code === 'engine_preflight_busy')
+      throw new LocalEnginePreflightBusyError();
+    throw new Error(
+      `Worker environment probe returned HTTP ${response.status}; check its version and preflightArgs.`,
+    );
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Worker preflight report is empty.');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > 65536) {
+      await reader.cancel();
+      throw new Error('Worker preflight report exceeds limit.');
+    }
+    chunks.push(value);
+  }
+  const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+  const report = body.report as Record<string, unknown> | undefined;
+  const required = new Set([
+    'upstream',
+    'uv',
+    'project-spec',
+    'venv',
+    'python',
+    'dependencies',
+    'cuda',
+    'robot-assets',
+    'exporter',
+    'task-registry',
+  ]);
+  if (
+    body.ok !== true ||
+    !report ||
+    report.schemaVersion !== 1 ||
+    report.engine !== 'microduck-rl' ||
+    report.taskId !== input.taskId ||
+    report.trainingPerformed !== false ||
+    !Array.isArray(report.checks) ||
+    report.checks.length > 32
+  )
+    throw new Error('Worker preflight report does not match the requested engine/task.');
+  const seen = new Set<string>();
+  const checks = report.checks.map((raw: unknown) => {
+    const item = raw as Record<string, unknown>;
+    if (
+      !item ||
+      typeof item.id !== 'string' ||
+      !required.has(item.id) ||
+      seen.has(item.id) ||
+      !['passed', 'blocked', 'unverified'].includes(String(item.status))
+    )
+      throw new Error('Invalid preflight checks.');
+    seen.add(item.id);
+    return {
+      id: item.id,
+      status: String(item.status),
+      detail: String(item.detail ?? '').slice(0, 1000),
+      recovery: String(item.recovery ?? '').slice(0, 1000),
+    };
+  });
+  if (seen.size !== required.size) throw new Error('Worker preflight report is incomplete.');
+  const checkedAt = typeof report.checkedAt === 'string' ? report.checkedAt : '';
+  if (
+    !Number.isFinite(Date.parse(checkedAt)) ||
+    Math.abs(Date.now() - Date.parse(checkedAt)) > 120000
+  )
+    throw new Error('Worker preflight report is stale.');
+  const dependencies = Array.isArray(report.dependencies)
+    ? report.dependencies.slice(0, 128).map((raw: unknown) => {
+        const item = raw as Record<string, unknown>;
+        if (!item || typeof item.name !== 'string' || !/^[A-Za-z0-9_.-]{1,100}$/.test(item.name))
+          throw new Error('Invalid dependency report.');
+        return {
+          name: item.name,
+          version: typeof item.version === 'string' ? item.version.slice(0, 64) : null,
+          ok: item.ok === true,
+        };
+      })
+    : [];
+  return {
+    taskTuning: (() => {
+      const capability = report.taskTuning as Record<string, unknown> | undefined;
+      const fields = [
+        'trackLinearVelocityWeight',
+        'trackAngularVelocityWeight',
+        'headPoseTrackingWeight',
+      ];
+      return capability?.schemaVersion === 1 &&
+        Array.isArray(capability.fields) &&
+        capability.fields.length === fields.length &&
+        fields.every((field) => (capability.fields as unknown[]).includes(field)) &&
+        Array.isArray(capability.tasks) &&
+        capability.tasks.length === 1 &&
+        capability.tasks[0] === 'walk'
+        ? { schemaVersion: 1, fields, tasks: ['walk'] }
+        : null;
+    })(),
+    ppoOverrides: (() => {
+      const capability = report.ppoOverrides as Record<string, unknown> | undefined;
+      const fields = ['learningRate', 'entropyCoefficient', 'clipParameter'];
+      return capability?.schemaVersion === 1 &&
+        capability.resumeLearningRate === 'private-copy' &&
+        Array.isArray(capability.fields) &&
+        capability.fields.length === fields.length &&
+        fields.every((field) => (capability.fields as unknown[]).includes(field))
+        ? { schemaVersion: 1, fields, resumeLearningRate: 'private-copy' }
+        : null;
+    })(),
+    schemaVersion: 1,
+    engine: 'microduck-rl',
+    taskId: input.taskId,
+    checkedAt,
+    checks,
+    readyForSmokeTraining:
+      report.readyForSmokeTraining === true && checks.every((check) => check.status === 'passed'),
+    dependencies,
+    pythonVersion:
+      typeof report.pythonVersion === 'string' ? report.pythonVersion.slice(0, 64) : null,
+    requiredPython:
+      typeof report.requiredPython === 'string' ? report.requiredPython.slice(0, 100) : null,
+    gpuName: typeof report.gpuName === 'string' ? report.gpuName.slice(0, 120) : null,
+    source: 'worker-environment-probe',
+    cached: body.cached === true,
+    trainingPerformed: false,
+    simulationVerified: false,
+    next: '基础检查通过后仍需小规模真实训练与独立评测，不能据此认定策略可部署。',
+  };
+}
+
+export async function requestOriginmanEnginePreflight(input: {
+  engine: 'originman-recovery' | 'originman-recovery-reflect';
+  accountId: string;
+  device: 'cpu' | 'cuda';
+  runnerUrl?: string;
+  runnerToken?: string;
+  fetchImpl?: typeof fetch;
+}): Promise<Record<string, unknown>> {
+  const accountId = safeAccountId(input.accountId);
+  if (!['cpu', 'cuda'].includes(input.device)) throw new Error('Invalid OriginMan device.');
+  const runnerUrl = input.runnerUrl ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL ?? '';
+  const token = String(
+    input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
+  ).trim();
+  assertLocalRunnerToken(runnerUrl, token);
+  const url = new URL(normalizeRunnerUrl(runnerUrl, { localHttp: true }));
+  const pathname = url.pathname.replace(/\/+$/, '');
+  if (!pathname.endsWith('/train')) throw new Error('Worker URL must end with /train.');
+  url.pathname = pathname.slice(0, -6) + '/engines/' + input.engine + '/preflight';
+  url.search = '';
+  url.hash = '';
+  const response = await (input.fetchImpl ?? fetch)(url, {
+    method: 'POST',
+    redirect: 'error',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'application/json',
+      'x-sim2real-account': accountId,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ device: input.device }),
+    signal: AbortSignal.timeout(55000),
+  });
+  if (!response.ok) {
+    const code = await workerPreflightErrorCode(response);
+    if (
+      (response.status === 404 && code === 'not_found') ||
+      (response.status === 409 && code === 'engine_preflight_not_configured')
+    )
+      throw new LocalEnginePreflightUnsupportedError();
+    if (response.status === 429 && code === 'engine_preflight_busy')
+      throw new LocalEnginePreflightBusyError();
+    throw new Error('OriginMan Worker preflight unavailable.');
+  }
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Worker preflight report is empty.');
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.length;
+    if (size > 65536) {
+      await reader.cancel();
+      throw new Error('Worker preflight report exceeds limit.');
+    }
+    chunks.push(value);
+  }
+  const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>;
+  const report = body.report as Record<string, unknown> | undefined;
+  const expected = new Set([
+    'dependency-numpy',
+    'dependency-mujoco',
+    'dependency-torch',
+    'dependency-stable_baselines3',
+    'dependency-gymnasium',
+    'scene-contract',
+    'training-device',
+    'training-entrypoint',
+    'training-config',
+  ]);
+  if (
+    body.ok !== true ||
+    !report ||
+    report.schemaVersion !== 1 ||
+    report.engine !== input.engine ||
+    report.taskId !== 'originman-recovery' ||
+    report.device !== input.device ||
+    report.trainingPerformed !== false ||
+    !Array.isArray(report.checks) ||
+    report.checks.length !== expected.size
+  )
+    throw new Error('Invalid OriginMan preflight report.');
+  const seen = new Set<string>();
+  const checks = report.checks.map((raw: unknown) => {
+    const item = raw as Record<string, unknown>;
+    if (
+      !item ||
+      typeof item.id !== 'string' ||
+      !expected.has(item.id) ||
+      seen.has(item.id) ||
+      !['passed', 'blocked', 'unverified'].includes(String(item.status))
+    )
+      throw new Error('Invalid OriginMan preflight check.');
+    seen.add(item.id);
+    return { id: item.id, status: String(item.status) };
+  });
+  const checkedAt = typeof report.checkedAt === 'string' ? report.checkedAt : '';
+  if (
+    !Number.isFinite(Date.parse(checkedAt)) ||
+    Math.abs(Date.now() - Date.parse(checkedAt)) > 120000
+  )
+    throw new Error('OriginMan preflight report is stale.');
+  return {
+    schemaVersion: 1,
+    engine: input.engine,
+    taskId: 'originman-recovery',
+    device: input.device,
+    checkedAt,
+    trainingPerformed: false,
+    readyForSmokeTraining: checks.every((c) => c.status === 'passed'),
+    checks,
+  };
+}

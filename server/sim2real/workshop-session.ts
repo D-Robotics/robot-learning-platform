@@ -20,6 +20,7 @@ type Session = {
   contextId: string;
   modelId: string;
   computeResourceId: string;
+  engine?: 'originman-recovery' | 'originman-recovery-reflect';
   createdAt: string;
   recipe: Recipe | null;
   comparisonBase?: { contextId: string; recipe: Recipe };
@@ -263,6 +264,7 @@ export function createWorkshopSessions(deps: Dependencies) {
     async create(
       input: { modelId: string; computeResourceId: string; comparisonBaseId?: string },
       owner?: string,
+      engine: Session['engine'] = 'originman-recovery-reflect',
     ) {
       if (
         !input ||
@@ -289,6 +291,7 @@ export function createWorkshopSessions(deps: Dependencies) {
       const s: Session = {
         schemaVersion: 1,
         contextId: 'ws-' + randomUUID().replaceAll('-', '').slice(0, 20),
+        engine,
         modelId: input.modelId,
         computeResourceId: input.computeResourceId,
         ...(comparisonBase ? { comparisonBase } : {}),
@@ -436,7 +439,7 @@ export function createWorkshopSessions(deps: Dependencies) {
             r.mock !== false ||
             m.phase !== 'train' ||
             !/^([a-f0-9]{64})$/.test(String(m.policySha256 ?? '')) ||
-            t.engine !== 'originman-recovery-reflect' ||
+            t.engine !== (s.engine ?? 'originman-recovery-reflect') ||
             t.algorithm !== 'sac' ||
             t.numEnvs !== 4 ||
             w.timesteps !== s.recipe!.timesteps
@@ -462,7 +465,7 @@ export function createWorkshopSessions(deps: Dependencies) {
             idempotencyKey: contextId + '-' + phase,
             training: {
               profile: 'standard',
-              engine: 'originman-recovery-reflect',
+              engine: s.engine ?? 'originman-recovery-reflect',
               algorithm: 'sac',
               numEnvs: 4,
               maxIterations: Math.ceil(recipe.timesteps / 256),

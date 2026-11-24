@@ -216,3 +216,9 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python
 `scripts/gpu-deploy.mjs` 的第 1 步会失败并给出排查清单——这是预期行为。机器就绪后重跑同一条命令即可；本机其他功能（`npm run demo:starter` CPU 真实训练、可视化、评测、只读板端预检）完全不依赖 GPU 机器。
 
 大规模训练（万级并行、域随机化）请继续参考 `engines/mjlab-rsl-rl-adapter/README.md`，在同一 worker 协议下替换引擎可执行文件即可。
+
+## 多账号共用一张卡
+
+管理员在平台服务配置 `RDK_SIM2REAL_SHARED_GPU_URL`（Worker 的 /train 地址）和 `RDK_SIM2REAL_SHARED_GPU_TOKEN`（与 Worker 相同的至少 32 字符密钥）。登录后的学员选择「课堂共享 GPU」，无需领取密钥或重复登记机器。每张卡使用一个 Worker 进程，通过 `CUDA_VISIBLE_DEVICES` 固定设备。默认 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS=1`，同卡的多个账号可同时提交，多出的任务在同一 Worker 排队。按显存实测提高此值可以同时执行多份训练。运行记录、日志、策略和取消操作按提交账号授权。
+
+恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。

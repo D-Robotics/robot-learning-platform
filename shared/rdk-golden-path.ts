@@ -82,21 +82,24 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
   const projectDatasetIds = input.project ? new Set(input.project.datasetIds) : undefined;
   const modelId =
     input.modelId || (projectModelIds?.size === 1 ? [...projectModelIds][0] : undefined);
-  const taskId = input.taskId || newest(input.runs)?.taskId || newest(input.evaluations)?.taskId;
+  const modelRuns = input.runs.filter(
+    (run) =>
+      (!projectModelIds || projectModelIds.has(run.modelId)) &&
+      (!modelId || run.modelId === modelId),
+  );
+  const modelEvaluations = input.evaluations.filter(
+    (evaluation) =>
+      (!projectModelIds || projectModelIds.has(evaluation.modelId)) &&
+      (!modelId || evaluation.modelId === modelId),
+  );
+  const taskId = input.taskId || newest(modelRuns)?.taskId || newest(modelEvaluations)?.taskId;
 
   const datasets = input.datasets.filter(
     (dataset) => !projectDatasetIds || projectDatasetIds.has(dataset.id),
   );
-  const runs = input.runs.filter(
-    (run) =>
-      (!projectModelIds || projectModelIds.has(run.modelId)) &&
-      (!modelId || run.modelId === modelId) &&
-      (!taskId || !run.taskId || run.taskId === taskId),
-  );
-  const evaluations = input.evaluations.filter(
-    (evaluation) =>
-      (!modelId || evaluation.modelId === modelId) &&
-      (!taskId || !evaluation.taskId || evaluation.taskId === taskId),
+  const runs = modelRuns.filter((run) => !taskId || !run.taskId || run.taskId === taskId);
+  const evaluations = modelEvaluations.filter(
+    (evaluation) => !taskId || !evaluation.taskId || evaluation.taskId === taskId,
   );
   const deployments = input.deployments.filter(
     (deployment) => !modelId || deployment.modelId === modelId,
@@ -104,6 +107,8 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
 
   const contractRun = newest(runs.filter((run) => run.backend === 'contract'));
   const contractState = {
+    cancelling: 'running',
+    cancelled: 'blocked',
     ready: 'ready',
     queued: 'running',
     running: 'running',
@@ -147,11 +152,16 @@ export function deriveRdkGoldenPath(input: Inputs): RdkGoldenPathSnapshot {
         ? '模型契约已校验，下一步启动本地/GPU 训练或接入已有模型'
         : '启动本地/GPU 训练，或接入已有模型',
     );
-  else if (latestRun.status === 'running' || latestRun.status === 'queued') {
-    trainStage = stage('train', 'running', '训练正在运行，等待制品生成', [latestRun.id]);
+  else if (['queued', 'running', 'cancelling'].includes(latestRun.status)) {
+    trainStage = stage(
+      'train',
+      'running',
+      latestRun.status === 'cancelling' ? '正在等待 Worker 确认取消' : '训练正在运行，等待制品生成',
+      [latestRun.id],
+    );
   } else if (latestRun.status === 'completed') {
     trainStage = stage('train', 'succeeded', '训练已完成并产生可追溯 Run', [latestRun.id]);
-  } else if (latestRun.status === 'failed' || latestRun.status === 'blocked') {
+  } else if (['failed', 'blocked', 'cancelled'].includes(latestRun.status)) {
     trainStage = stage(
       'train',
       latestRun.status === 'failed' ? 'failed' : 'blocked',

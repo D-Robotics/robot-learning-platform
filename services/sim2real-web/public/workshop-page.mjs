@@ -1,4 +1,4 @@
-const WORKSHOP_ENGINE = 'originman-recovery-reflect';
+const courseEngine = (engines) => ['originman-recovery-reflect','originman-recovery'].find(engine => engines?.includes(engine));
 
 /** Button-driven orchestration. The normal authenticated /runs API owns every submission. */
 export async function startWorkshop({
@@ -467,7 +467,7 @@ export async function startWorkshop({
     if (health.connected !== true || health.computeResource?.status !== 'online')
       throw Error('训练资源暂不可用，请检查连接后刷新原实验。');
     const engines = health.computeResource.engines;
-    if (phase === 'train' && Array.isArray(engines) && !engines.includes(WORKSHOP_ENGINE))
+    if (phase === 'train' && Array.isArray(engines) && !courseEngine(engines))
       throw Error('这台算力机缺少本课程的训练引擎。请另开实验，选择支持本课程的算力机。');
     // Recovering an interrupted claim returns the same payload and idempotency
     // key. The /runs reservation prevents concurrent requests from dispatching twice.
@@ -781,15 +781,13 @@ export async function startWorkshop({
       $('workshop-compute-check').textContent = connectionHint(health);
       return 'offline';
     }
-    // CUDA preflight exercises the base engine. The Workshop claim uses the
-    // reflect variant, which must also be registered on this worker.
     const engines = health.computeResource.engines;
     if (!Array.isArray(engines)) return 'unverified';
-    if (!engines.includes(WORKSHOP_ENGINE)) return 'engine';
+    if (!courseEngine(engines)) return 'engine';
     let checked;
     try {
       checked = await json('training/preflight', {
-        computeResourceId: id, taskId: 'originman-recovery', engine: 'originman-recovery',
+        computeResourceId: id, taskId: 'originman-recovery', engine: courseEngine(engines), device: 'cuda',
       });
     } catch (e) {
       if (e.code === 'SIM2REAL_ENGINE_PREFLIGHT_BUSY') return 'busy';
@@ -802,11 +800,12 @@ export async function startWorkshop({
     }
     const report = checked.report;
     if (checked.computeResourceId !== id || report?.schemaVersion !== 1 ||
-        report.trainingPerformed !== false || report.engine !== 'originman-recovery' ||
+        report.trainingPerformed !== false || report.engine !== courseEngine(engines) ||
         report.taskId !== 'originman-recovery' || !Array.isArray(report.checks)) return 'invalid';
     const device = report.checks.find((check) => check.id === 'training-device');
     if (device?.status === 'blocked') return 'cuda';
     if (report.readyForSmokeTraining !== true) return 'blocked';
+    if (report.device === 'cuda' && device?.status === 'passed') return 'ready';
     try {
       if (device?.status === 'passed') {
         const resolved = JSON.parse(device.detail)?.resolvedDevice;
@@ -834,9 +833,9 @@ export async function startWorkshop({
       const resources = data.resources.filter((resource) =>
         validId(resource?.id) && typeof resource.name === 'string' && resource.name.trim() &&
         resource.mock !== true && resource.status !== 'offline' &&
-        (!Array.isArray(resource.engines) || resource.engines.includes(WORKSHOP_ENGINE)));
+        (!Array.isArray(resource.engines) || courseEngine(resource.engines)));
       const recommended = resources.filter((resource) =>
-        resource.cuda === true && resource.mock === false && Array.isArray(resource.engines) && resource.engines.includes(WORKSHOP_ENGINE));
+        resource.cuda === true && resource.mock === false && Array.isArray(resource.engines) && courseEngine(resource.engines));
       for (const resource of resources) {
         const status = resource.status === 'online' ? '上次检查可用' : '待检查';
         const kind = recommended.includes(resource) ? ' · 支持本课程' : ' · 课程兼容性待检查';

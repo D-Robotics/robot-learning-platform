@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { canonicalDanceConfig } from '../plugins/rdk-robot-learning-platform/scripts/dance-training.mjs';
 import assert from 'node:assert/strict';
 import {
   resolveOriginmanDanceConfig,
@@ -19,6 +20,13 @@ const base = {
   bpm: 100,
   sections: [{ type: 'weight-shift', beats: 8, intensity: 0.5 }],
 };
+
+test('dance retries preserve the selected composition mode', () => {
+  for (const compositionMode of ['preset', 'custom']) {
+    const draft = canonicalDanceConfig({ ...base, compositionMode });
+    assert.equal(resolveOriginmanDanceConfig(draft).compositionMode, compositionMode);
+  }
+});
 
 test('dance config omits rewardTuning when the learner provides none', () => {
   const resolved = resolveOriginmanDanceConfig({ ...base });

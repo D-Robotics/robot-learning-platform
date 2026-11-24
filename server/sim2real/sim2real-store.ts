@@ -2370,20 +2370,53 @@ export async function getSim2RealLineage(
   };
 }
 
+/** One administrator-provisioned worker queue. Run ownership remains per SSO account. */
+let sharedGpu: { resource: Sim2RealComputeResource; runnerToken: string } | undefined;
+function configuredSharedGpu() {
+  const url = process.env.RDK_SIM2REAL_SHARED_GPU_URL?.trim();
+  const token = process.env.RDK_SIM2REAL_SHARED_GPU_TOKEN?.trim();
+  if (!url || !token || token.length < 32) {
+    sharedGpu = undefined;
+    return;
+  }
+  if (!sharedGpu || url !== sharedGpu.resource.runnerUrl || token !== sharedGpu.runnerToken) {
+    const now = new Date().toISOString();
+    sharedGpu = {
+      runnerToken: token,
+      resource: {
+        id: 'c1a55-' + createHash('sha256').update(url).digest('hex').slice(0, 24),
+        name: '课堂共享 GPU',
+        kind: 'local-gpu',
+        source: 'server-runner',
+        runnerUrl: url,
+        status: 'unknown',
+        tokenConfigured: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    };
+  }
+  return sharedGpu;
+}
+
 export async function listSim2RealComputeResources(
   owner?: string,
 ): Promise<Sim2RealComputeResource[]> {
   const ledger = await readLedger();
-  return (ledger.computeResources ?? [])
+  const shared = configuredSharedGpu();
+  const resources = (ledger.computeResources ?? [])
     .filter((item) => ownerMatches(item, owner))
     .slice(0, 100)
     .map((item) => copy(withoutComputeResourcePrivate(item)));
+  return shared ? [copy(shared.resource), ...resources] : resources;
 }
 
 export async function getSim2RealComputeResource(
   id: string,
   owner?: string,
 ): Promise<Sim2RealComputeResource | null> {
+  const shared = configuredSharedGpu();
+  if (shared?.resource.id === id) return copy(shared.resource);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2395,6 +2428,8 @@ export async function getSim2RealComputeResourceSecret(
   id: string,
   owner?: string,
 ): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
+  const shared = configuredSharedGpu();
+  if (shared?.resource.id === id) return copy(shared);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2452,7 +2487,21 @@ export async function updateSim2RealComputeResource(
     >
   > & { runnerToken?: string },
   owner?: string,
+  checked?: { runnerUrl: string; runnerToken: string; source?: string },
 ): Promise<Sim2RealComputeResource | null> {
+  const shared = configuredSharedGpu();
+  if (shared?.resource.id === id) {
+    // Only the server-side active probe supplies checked coordinates. A client PATCH
+    // cannot change the shared destination, credentials, or attest worker health.
+    if (
+      !checked ||
+      checked.runnerUrl !== shared.resource.runnerUrl ||
+      checked.runnerToken !== shared.runnerToken
+    )
+      return null;
+    shared.resource = { ...shared.resource, ...patch, updatedAt: new Date().toISOString() };
+    return copy(shared.resource);
+  }
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
@@ -2460,6 +2509,13 @@ export async function updateSim2RealComputeResource(
     const index = resources.findIndex((item) => item.id === id && ownerMatches(item, owner));
     if (index < 0) return null;
     const current = resources[index];
+    if (
+      checked &&
+      (checked.runnerUrl !== current.runnerUrl ||
+        checked.runnerToken !== (current.runnerToken ?? '') ||
+        checked.source !== current.source)
+    )
+      return null;
     const updated: StoredComputeResource = {
       ...current,
       ...copy(patch),
@@ -2626,7 +2682,16 @@ export async function listSim2RealRuns(owner?: string): Promise<Sim2RealRunRecor
 
 export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
   const ledger = await readLedger();
-  const statuses = { ready: 0, queued: 0, running: 0, completed: 0, blocked: 0, failed: 0 };
+  const statuses = {
+    cancelled: 0,
+    cancelling: 0,
+    ready: 0,
+    queued: 0,
+    running: 0,
+    completed: 0,
+    blocked: 0,
+    failed: 0,
+  };
   let runs = 0;
   let latest: StoredRun | undefined;
   for (const run of ledger.runs) {
@@ -2637,7 +2702,7 @@ export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
   }
   return {
     runs,
-    activeRuns: statuses.queued + statuses.running,
+    activeRuns: statuses.cancelling + statuses.queued + statuses.running,
     statuses,
     latest: latest ? copy(withoutRunPrivate(latest)) : undefined,
     registeredArtifacts: ledger.artifacts.filter((item) => ownerMatches(item, owner)).length,
@@ -2696,7 +2761,7 @@ export interface Sim2RealRunReservation {
 function isActiveRunnerRun(run: Pick<Sim2RealRunRecord, 'backend' | 'status'>): boolean {
   return (
     (run.backend === 'local' || run.backend === 'robogo') &&
-    (run.status === 'queued' || run.status === 'running')
+    ['queued', 'running', 'cancelling'].includes(run.status)
   );
 }
 
@@ -2714,7 +2779,11 @@ function isActiveRunnerRun(run: Pick<Sim2RealRunRecord, 'backend' | 'status'>): 
  */
 function isTerminalRunStatus(status: Sim2RealRunStatus): boolean {
   return (
-    status === 'ready' || status === 'completed' || status === 'blocked' || status === 'failed'
+    status === 'cancelled' ||
+    status === 'ready' ||
+    status === 'completed' ||
+    status === 'blocked' ||
+    status === 'failed'
   );
 }
 
@@ -2945,7 +3014,8 @@ export async function updateSim2RealRun(
     // terminal state, ignore a late active/other status update instead of
     // allowing stale observations to move it backwards in the lifecycle.
     if (
-      isTerminalRunStatus(current.status) &&
+      ((current.status === 'cancelling' && ['running', 'queued'].includes(patch.status ?? '')) ||
+        isTerminalRunStatus(current.status)) &&
       patch.status !== undefined &&
       patch.status !== current.status
     ) {

@@ -35,3 +35,5 @@
 历史 smoke 使用旧版场景摘要检查；后续真实平台实验已核验实际 sceneSha256，保留原 sourceSceneSha256 并分别报告匹配状态。50 万步质量实验已经完成但未达标；完整来源链和再分发授权仍待确认。
 
 三个轨道的训练、合同和评价问题不同，不合并数字，也不把短训完成说成质量通过。
+
+部署方可在平台源码目录运行 `python engines/originman-dance-ppo/build_bundle.py --model /path/to/converted-model --out /path/to/new-dance-bundle`，从自有模型生成参考轨迹并验证整包。将输出目录设置为 Worker 的 `RDK_ORIGINMAN_DANCE_BUNDLE_DIR`。转换 URDF 的命令见引擎 README。

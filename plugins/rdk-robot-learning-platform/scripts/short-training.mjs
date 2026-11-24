@@ -207,7 +207,7 @@ export async function shortTraining(
       throw Error('本实验训练未完成、非真实执行或策略来源未核对，不提交评测。');
     const t = run.training;
     if (
-      t.engine !== 'originman-recovery-reflect' ||
+      !['originman-recovery', 'originman-recovery-reflect'].includes(t.engine) ||
       t.algorithm !== 'sac' ||
       t.numEnvs !== 4 ||
       (!formal && t.originmanWorkshop.timesteps !== 8192) ||
@@ -343,7 +343,11 @@ export async function shortTraining(
         backend: 'local',
         taskId: 'originman-recovery',
         profile: 'standard',
-        engine: 'originman-recovery-reflect',
+        engine:
+          prepared.resource?.engines?.includes('originman-recovery') &&
+          !prepared.resource.engines.includes('originman-recovery-reflect')
+            ? 'originman-recovery'
+            : 'originman-recovery-reflect',
         algorithm: 'sac',
         numEnvs: 4,
         maxIterations: Math.ceil(budget / 256),

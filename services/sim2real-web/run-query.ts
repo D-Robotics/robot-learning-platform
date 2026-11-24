@@ -85,6 +85,8 @@ export function createRunQuery() {
 
       const status =
         {
+          cancelled: '已取消',
+          cancelling: '取消中',
           ready: '就绪',
           queued: '排队中',
           running: '运行中',

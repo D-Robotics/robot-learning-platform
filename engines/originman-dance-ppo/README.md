@@ -95,3 +95,15 @@ probe set and misaligned the index, leaving the ndarray in the report), and
 all three JSON write sites (`evaluation.json`, `training-summary.json`,
 `result.json`) serialize through `_json_default`, which converts numpy types
 to built-ins while `allow_nan=False` keeps failing closed on NaN.
+
+## 从本地模型生成训练素材
+
+在已安装舞蹈引擎依赖的环境执行以下命令。第一步读取部署方自有的 OriginMan ROS 模型包，第二步接收包含 scene.xml、meshes 和 model-manifest.json 的目录。已有转换结果可直接从第二步开始。
+
+```sh
+python engines/originman-straight/model.py --source /path/to/originman_urdf --out /path/to/converted-model
+python engines/originman-dance-ppo/build_bundle.py --model /path/to/converted-model --out /path/to/new-dance-bundle
+export RDK_ORIGINMAN_DANCE_BUNDLE_DIR=/path/to/new-dance-bundle
+```
+
+生成器用同一份场景计算 120 帧双腿逆运动学参考，保留原网格摘要，核对关节和策略维度。将环境变量配置到运行训练的 Worker 服务后重启该服务。

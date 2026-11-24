@@ -1,3 +1,4 @@
+import { getWorkshopRun, restoreWorkshopEvidence } from '../sim2real/workshop-run-evidence.js';
 import { registerComputeSshRoutes } from './sim2real-compute-ssh-routes.js';
 import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
 import { desktopRelayBridgeStatus } from '../sim2real/studio-desktop-relay-status.js';
@@ -147,6 +148,12 @@ import {
   requestLocalTraining,
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
+  isLocalRunnerConfigured,
+  requestLocalTrainingCancel,
+  requestLocalEnginePreflight,
+  requestOriginmanEnginePreflight,
+  LocalEnginePreflightBusyError,
+  LocalEnginePreflightUnsupportedError,
   fetchLocalRunTelemetry,
   fetchLocalRunLogs,
   localRunnerTokenFormatValid,
@@ -619,6 +626,44 @@ function studioConnectRequestBody(value: unknown): Record<string, unknown> | nul
   if (source.bridgeId == null) return {};
   const bridgeId = studioSafeId(source.bridgeId);
   return bridgeId ? { bridgeId } : null;
+}
+
+async function checkRegisteredWorker(
+  secret: NonNullable<Awaited<ReturnType<typeof getSim2RealComputeResourceSecret>>>,
+  owner?: string,
+) {
+  const runnerUrl = secret.resource.runnerUrl;
+  const runnerToken = secret.runnerToken ?? '';
+  const checkedAt = new Date().toISOString();
+  const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
+  const checked = tokenError
+    ? {
+        diagnostic: {
+          code: 'WORKER_TOKEN_REQUIRED',
+          message: tokenError,
+          recovery: '在当前算力资源配置中更新 bearer token，再测试连接。',
+        },
+        payload: null,
+      }
+    : await probeComputeWorker(runnerUrl, runnerToken);
+  const { diagnostic, payload } = checked;
+  const patch = {
+    status: payload ? 'online' : 'offline',
+    message: diagnostic.message,
+    lastCheckedAt: checkedAt,
+    engines: payload?.engines ?? [],
+    mock: payload?.mock,
+    ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
+    ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
+    ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
+    ...(payload?.maxConcurrentJobs == null ? {} : { maxConcurrentJobs: payload.maxConcurrentJobs }),
+  };
+  const updated = await updateSim2RealComputeResource(secret.resource.id, patch as never, owner, {
+    runnerUrl,
+    runnerToken,
+    source: secret.resource.source,
+  });
+  return { updated, diagnostic };
 }
 
 function computeResourceHealthFailure(
@@ -1909,6 +1954,16 @@ async function dispatchRunBackend(input: {
         relayAgentUrl: selectedResource.resource.runnerUrl.replace(/\/train\/?$/, ''),
       };
     }
+    if (selectedResource && computeResourceHealthFailure(selectedResource.resource) === 'stale') {
+      const { updated, diagnostic } = await checkRegisteredWorker(selectedResource, owner);
+      if (!updated || updated.status !== 'online') {
+        return {
+          status: 'blocked',
+          summary: updated ? diagnostic.message : '算力配置已变更，请重新选择资源。',
+        };
+      }
+      selectedResource.resource = updated;
+    }
     const resourceHealthFailure = selectedResource
       ? computeResourceHealthFailure(selectedResource.resource)
       : null;
@@ -2245,6 +2300,7 @@ async function autoAttachEvaluationTelemetry(
     const workerAccount = owner ?? (isMultiUser ? '' : 'local-dev');
     if (!workerAccount) return;
     const runner = await resolveRunner(run.computeResourceId);
+    if (run.computeResourceId && !runner) return;
     const fetchTelemetry = () =>
       fetchLocalRunTelemetry({
         accountId: workerAccount,
@@ -2399,7 +2455,7 @@ export function createSim2RealRouter(
     // deployment-wide worker; doing so could stage a different run's data
     // under the same external id.
     if (!selectedResource) return null;
-    if (computeResourceHealthFailure(selectedResource.resource)) return null;
+    if (selectedResource.resource.source === 'local-agent') return null;
     return {
       runnerUrl: selectedResource.resource.runnerUrl,
       runnerToken: selectedResource.runnerToken ?? '',
@@ -2685,7 +2741,7 @@ export function createSim2RealRouter(
   registerOriginmanClassroomRoutes(router, {
     api,
     owner: classroomOwner,
-    run: getSim2RealRun,
+    run: getWorkshopRun,
     video: (run, owner) => fetchClassroomArtifact(run, owner, 'workshop-video'),
   });
   registerOriginmanSimulatorRoutes(router, {
@@ -2987,6 +3043,15 @@ export function createSim2RealRouter(
     wrapAsync(async (request, response) => {
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
+      if (String(request.params.id).startsWith('c1a55-')) {
+        sendApiError(
+          response,
+          403,
+          'SIM2REAL_SHARED_RESOURCE_MANAGED',
+          '共享 GPU 由平台管理员维护。',
+        );
+        return;
+      }
       const body =
         request.body && typeof request.body === 'object'
           ? (request.body as Record<string, unknown>)
@@ -3151,6 +3216,183 @@ export function createSim2RealRouter(
     }),
   );
 
+  async function inspectTrainingEnvironment(
+    request: Request,
+    response: Response,
+    owner: string | undefined,
+    input: { engine?: unknown; taskId?: unknown; computeResourceId?: unknown; device?: unknown },
+  ): Promise<{ computeResourceId: string | null; report: Record<string, unknown> } | null> {
+    const originman =
+      input.taskId === 'originman-recovery' ||
+      input.engine === 'originman-recovery-reflect' ||
+      input.engine === 'originman-recovery';
+    if (
+      input.engine !== undefined &&
+      !['microduck-rl', 'originman-recovery', 'originman-recovery-reflect'].includes(
+        String(input.engine),
+      )
+    ) {
+      sendApiError(
+        response,
+        400,
+        'SIM2REAL_ENGINE_PREFLIGHT_UNSUPPORTED',
+        '当前环境预检支持 MicroDuck RL 和 OriginMan 受扰恢复引擎。',
+        { retryable: false },
+      );
+      return null;
+    }
+    const taskId = input.taskId ?? (originman ? 'originman-recovery' : 'walk');
+    if (
+      originman &&
+      (input.engine === 'microduck-rl' ||
+        taskId !== 'originman-recovery' ||
+        !['cpu', 'cuda'].includes(String(input.device ?? 'cuda')) ||
+        typeof input.computeResourceId !== 'string' ||
+        !input.computeResourceId.trim())
+    ) {
+      sendApiError(
+        response,
+        400,
+        'SIM2REAL_ENGINE_PREFLIGHT_INVALID',
+        '请指定 OriginMan 任务、训练设备和执行资源。',
+        { retryable: false },
+      );
+      return null;
+    }
+    if (typeof taskId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(taskId)) {
+      sendApiError(response, 400, 'SIM2REAL_TASK_INVALID', '请提供有效任务 ID。', {
+        retryable: false,
+      });
+      return null;
+    }
+    const resourceId = input.computeResourceId;
+    if (resourceId !== undefined && (typeof resourceId !== 'string' || !resourceId.trim())) {
+      sendApiError(
+        response,
+        400,
+        'SIM2REAL_COMPUTE_RESOURCE_INVALID',
+        '请提供有效的执行资源 ID。',
+        { retryable: false },
+      );
+      return null;
+    }
+    const selected = resourceId ? await getSim2RealComputeResourceSecret(resourceId, owner) : null;
+    if (resourceId && !selected) {
+      sendApiError(
+        response,
+        404,
+        'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND',
+        '资源不存在或不属于当前账号；不会回退到其他 Worker。',
+        { retryable: false },
+      );
+      return null;
+    }
+    if (!selected && !isLocalRunnerConfigured()) {
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_LOCAL_RUNNER_NOT_CONFIGURED',
+        '尚未选择或配置训练 Worker，请先在执行资源中登记并连接训练主机。',
+        { retryable: false },
+      );
+      return null;
+    }
+    if (selected?.resource.source === 'local-agent') {
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_PREFLIGHT_BROWSER_RELAY_REQUIRED',
+        '该资源需要浏览器 Relay；目前环境预检只接通直连 Worker。',
+        { retryable: false },
+      );
+      return null;
+    }
+    const accountId = String(
+      auth.resolvePrincipal(request)?.accountId ??
+        owner ??
+        (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
+    ).trim();
+    if (!accountId) {
+      sendApiError(response, 401, 'SIM2REAL_ACCOUNT_REQUIRED', '请先登录。', {
+        retryable: false,
+      });
+      return null;
+    }
+    try {
+      const runner = selected
+        ? { runnerUrl: selected.resource.runnerUrl, runnerToken: selected.runnerToken ?? '' }
+        : {};
+      const report = originman
+        ? await requestOriginmanEnginePreflight({
+            accountId,
+            device: (input.device ?? 'cuda') as 'cpu' | 'cuda',
+            engine:
+              input.engine === 'originman-recovery-reflect' ||
+              (input.engine === undefined &&
+                selected?.resource.engines?.includes('originman-recovery-reflect'))
+                ? 'originman-recovery-reflect'
+                : 'originman-recovery',
+            ...runner,
+          })
+        : await requestLocalEnginePreflight({ accountId, taskId, ...runner });
+      return { computeResourceId: selected?.resource.id ?? null, report };
+    } catch (error) {
+      if (error instanceof LocalEnginePreflightUnsupportedError) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_PREFLIGHT_NOT_SUPPORTED',
+          '该 Worker 尚未配置环境预检。请更新 Worker 并为引擎配置 preflightArgs。',
+          { retryable: false },
+        );
+        return null;
+      }
+      if (error instanceof LocalEnginePreflightBusyError) {
+        sendApiError(
+          response,
+          429,
+          'SIM2REAL_ENGINE_PREFLIGHT_BUSY',
+          '当前 Worker 正在训练或执行环境检查，待空闲后重试；训练提交仍使用原幂等键。本次未启动新的训练。',
+          { retryable: true, retryAfterSeconds: 15 },
+        );
+        return null;
+      }
+      console.warn('[sim2real] environment preflight unavailable', redactInternalError(error));
+      sendApiError(
+        response,
+        503,
+        'SIM2REAL_ENGINE_PREFLIGHT_UNAVAILABLE',
+        '环境预检未完成；核对 Worker 版本、引擎 preflightArgs 和连接配置。没有启动训练。',
+        { retryable: true, retryAfterSeconds: 15 },
+      );
+      return null;
+    }
+  }
+
+  router.post(
+    api('/training/preflight'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const result = await inspectTrainingEnvironment(request, response, owner, request.body ?? {});
+      if (result) response.json({ ok: true, ...result });
+    }),
+  );
+
+  router.post(
+    api('/compute-resources/:id/preflight'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const result = await inspectTrainingEnvironment(request, response, owner, {
+        ...request.body,
+        computeResourceId: request.params.id,
+      });
+      if (result) response.json({ ok: true, supported: true, trainingSubmitted: false, ...result });
+    }),
+  );
   router.post(
     api('/compute-resources/:id/test'),
     wrapAsync(async (request, response) => {
@@ -3162,8 +3404,6 @@ export function createSim2RealRouter(
         return;
       }
       const checkedAt = new Date().toISOString();
-      const runnerUrl = String(secret.resource.runnerUrl);
-      const runnerToken = String(secret.runnerToken ?? '').trim();
       if (secret.resource.source === 'local-agent') {
         const updated = await updateSim2RealComputeResource(
           secret.resource.id,
@@ -3177,36 +3417,7 @@ export function createSim2RealRouter(
         response.json({ ok: true, computeResource: updated, connected: false, browserRelay: true });
         return;
       }
-      const tokenError = computeRunnerTokenError(runnerUrl, runnerToken);
-      const checked = tokenError
-        ? {
-            diagnostic: {
-              code: 'WORKER_TOKEN_REQUIRED',
-              message: tokenError,
-              recovery: '在当前算力资源配置中更新 bearer token，再测试连接。',
-            },
-            payload: null,
-          }
-        : await probeComputeWorker(runnerUrl, runnerToken);
-      const { diagnostic, payload } = checked;
-      const patch = {
-        status: payload ? 'online' : 'offline',
-        message: diagnostic.message,
-        lastCheckedAt: checkedAt,
-        engines: payload?.engines ?? [],
-        mock: payload?.mock,
-        ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
-        ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
-        ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
-        ...(payload?.maxConcurrentJobs == null
-          ? {}
-          : { maxConcurrentJobs: payload.maxConcurrentJobs }),
-      };
-      const updated = await updateSim2RealComputeResource(
-        secret.resource.id,
-        patch as never,
-        owner,
-      );
+      const { updated, diagnostic } = await checkRegisteredWorker(secret, owner);
       response.json({
         ok: true,
         computeResource: updated,
@@ -3622,10 +3833,10 @@ export function createSim2RealRouter(
         });
         return;
       }
-      let current = run;
+      let current = await restoreWorkshopEvidence(run, owner);
       if (
         (run.backend === 'local' || run.backend === 'robogo') &&
-        (run.status === 'queued' || run.status === 'running') &&
+        ['queued', 'running', 'cancelling'].includes(run.status) &&
         run.externalRunId &&
         !run.relayAgentUrl
       ) {
@@ -3699,7 +3910,7 @@ export function createSim2RealRouter(
               ...(latest.metrics ? { metrics: latest.metrics } : {}),
               ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
               ...(latest.progress ? { progress: latest.progress } : {}),
-              ...((latest.status === 'completed' || latest.status === 'failed') && !run.finishedAt
+              ...(['completed', 'failed', 'cancelled'].includes(latest.status) && !run.finishedAt
                 ? { finishedAt: new Date().toISOString() }
                 : {}),
             };
@@ -3852,6 +4063,128 @@ export function createSim2RealRouter(
       }
       response.setHeader('Content-Length', video.sizeBytes);
       response.end(bytes);
+    }),
+  );
+
+  router.post(
+    api('/runs/:id/cancel'),
+    wrapAsync(async (request, response) => {
+      const owner = requestOwner(request, response, auth);
+      if (owner === null) return;
+      noStore(response);
+      const run = await getSim2RealRun(String(request.params.id || ''), owner);
+      if (!run) {
+        sendApiError(
+          response,
+          404,
+          'SIM2REAL_RUN_NOT_FOUND',
+          '运行记录不存在，或不属于当前账号。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (!['queued', 'running', 'cancelling'].includes(run.status)) {
+        response.json({
+          ok: true,
+          run,
+          alreadyTerminal: true,
+          processStopConfirmed: run.status === 'cancelled',
+        });
+        return;
+      }
+      if (run.backend !== 'local' || run.relayAgentUrl) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_CANCEL_UNSUPPORTED',
+          run.relayAgentUrl
+            ? '此任务通过浏览器 Relay 连接；平台尚未接通该链路的取消协议。'
+            : '此执行后端尚未接通取消协议。任务状态未改变。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (!run.externalRunId) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_RUN_RECONCILIATION_REQUIRED',
+          '任务提交结果尚不明确；请先对账取得执行端任务 ID，不能仅修改台账来声称停止。',
+          { retryable: false },
+        );
+        return;
+      }
+      const accountId = String(
+        auth.resolvePrincipal(request)?.accountId ??
+          owner ??
+          (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
+      ).trim();
+      if (!accountId) {
+        sendApiError(response, 401, 'SIM2REAL_ACCOUNT_REQUIRED', '请先登录。', {
+          retryable: false,
+        });
+        return;
+      }
+      const selected = run.computeResourceId
+        ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+        : null;
+      if (run.computeResourceId && !selected) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND',
+          '运行所选资源已删除或不属于当前账号，拒绝回退到其他 runner。',
+          { retryable: false },
+        );
+        return;
+      }
+      try {
+        const latest = await requestLocalTrainingCancel({
+          accountId,
+          externalRunId: run.externalRunId,
+          ...(selected
+            ? { runnerUrl: selected.resource.runnerUrl, runnerToken: selected.runnerToken ?? '' }
+            : {}),
+        });
+        if (
+          latest.externalRunId !== run.externalRunId ||
+          !['cancelling', 'cancelled', 'completed', 'failed'].includes(latest.status)
+        )
+          throw new Error('Runner did not acknowledge cancellation.');
+        const terminal = ['cancelled', 'completed', 'failed'].includes(latest.status);
+        const updated = await updateSim2RealRun(
+          run.id,
+          {
+            status: latest.status,
+            summary:
+              latest.message ??
+              (terminal ? '执行端已返回终态。' : '已请求取消，等待执行端确认退出。'),
+            ...(typeof latest.mock === 'boolean' ? { mock: latest.mock } : {}),
+            ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
+            ...(latest.artifact ? { artifact: latest.artifact } : {}),
+            ...(latest.metrics ? { metrics: latest.metrics } : {}),
+            ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
+            ...(latest.progress ? { progress: latest.progress } : {}),
+            ...(terminal ? { finishedAt: new Date().toISOString() } : {}),
+          },
+          owner,
+        );
+        if (updated?.status === 'completed') await attachEvalTelemetryForRun(updated, owner);
+        response.status(terminal ? 200 : 202).json({
+          ok: true,
+          run: updated ?? run,
+          processStopConfirmed: (updated ?? run).status === 'cancelled',
+        });
+      } catch (error) {
+        console.warn('[sim2real] cancellation could not be confirmed', redactInternalError(error));
+        sendApiError(
+          response,
+          503,
+          'SIM2REAL_RUN_CANCEL_UNCONFIRMED',
+          '无法确认执行端已接受取消；任务状态未改为已取消。请查询状态后重试。',
+          { retryable: true, retryAfterSeconds: 5 },
+        );
+      }
     }),
   );
 
@@ -4129,6 +4462,28 @@ export function createSim2RealRouter(
             }
           : {}),
       });
+      // Terminal job status includes bounded, scrubbed tails even on older
+      // workers without a cursor log endpoint. Preserve the live cursor.
+      const tail = run.failureDetail;
+      if (
+        (!logs || logs.total === 0) &&
+        (tail?.stdoutTail || tail?.stderrTail) &&
+        (run.status === 'completed' || run.status === 'failed')
+      ) {
+        response.json({
+          ok: true,
+          runId: run.id,
+          status: run.status,
+          source: 'retained-tail',
+          total: after,
+          retainedFrom: after,
+          truncated: true,
+          lines: [],
+          ...(tail.stdoutTail && { stdoutTail: tail.stdoutTail }),
+          ...(tail.stderrTail && { stderrTail: tail.stderrTail }),
+        });
+        return;
+      }
       if (!logs) {
         sendApiError(
           response,
@@ -4204,6 +4559,15 @@ export function createSim2RealRouter(
         return;
       }
       const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (run.computeResourceId && !runner) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_POLICY_TRIAL_ARTIFACT_UNAVAILABLE',
+          '原训练资源不可访问，无法读取策略。',
+        );
+        return;
+      }
       const artifact = await fetchLocalRunArtifact({
         accountId: workerAccount,
         externalRunId: run.externalRunId,
@@ -4624,7 +4988,7 @@ export function createSim2RealRouter(
         }
         if (classroom.phase === 'evaluate') {
           const source =
-            classroom.sourceRunId && (await getSim2RealRun(classroom.sourceRunId, owner));
+            classroom.sourceRunId && (await getWorkshopRun(classroom.sourceRunId, owner));
           const parent = source && source.training?.originmanWorkshop;
           if (
             !source ||

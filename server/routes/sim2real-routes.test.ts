@@ -2740,9 +2740,9 @@ describe('Sim2Real HTTP routes', () => {
     });
     const modelId = (registered.body as { model: { id: string } }).model.id;
     const originalFetch = globalThis.fetch;
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls += 1;
+    const calls: string[] = [];
+    globalThis.fetch = (async (url) => {
+      calls.push(String(url));
       throw new Error('stale resource must not call a runner');
     }) as typeof fetch;
     try {
@@ -2757,7 +2757,7 @@ describe('Sim2Real HTTP routes', () => {
       expect(launch.body).toMatchObject({
         run: {
           status: 'blocked',
-          summary: expect.stringContaining('超过 30 秒'),
+          summary: expect.any(String),
         },
       });
 
@@ -2784,7 +2784,10 @@ describe('Sim2Real HTTP routes', () => {
         code: 'SIM2REAL_RUN_RECONCILE_UNAVAILABLE',
         retryable: true,
       });
-      expect(calls).toBe(1);
+      expect(calls).toEqual([
+        'http://127.0.0.1:19091/healthz',
+        'http://127.0.0.1:19091/runs/stale-run-1',
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

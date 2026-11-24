@@ -64,6 +64,7 @@ export function resolveOriginmanDanceConfig(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) fail('expected an object');
   const allowed = new Set([
     'schemaVersion',
+    'compositionMode',
     'title',
     'bpm',
     'sections',
@@ -72,6 +73,8 @@ export function resolveOriginmanDanceConfig(input) {
     'rewardTuning',
   ]);
   for (const key of Object.keys(input)) if (!allowed.has(key)) fail(`unknown field ${key}`);
+  if (input.compositionMode !== undefined && !['custom', 'preset'].includes(input.compositionMode))
+    fail('compositionMode must be custom or preset');
   if (input.schemaVersion !== 1) fail('schemaVersion must be 1');
   if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 80)
     fail('title must contain 1–80 characters');
@@ -118,6 +121,7 @@ export function resolveOriginmanDanceConfig(input) {
   return {
     schemaVersion: 1,
     kind: 'originman-dance-draft',
+    ...(input.compositionMode ? { compositionMode: input.compositionMode } : {}),
     title: input.title.trim(),
     bpm,
     totalBeats: sections.reduce((sum, section) => sum + section.beats, 0),

@@ -2772,6 +2772,37 @@ paths:
       responses:
         "200": { description: Compute resource removed. }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/training/preflight:
+    post:
+      summary: Check the requested task and device using the selected Worker
+      operationId: inspectTrainingEnvironment
+      requestBody:
+        content:
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: Validated environment checks. }
+        "429": { description: Worker is busy. }
+        "503": { description: Worker could not verify its environment. }
+  /api/v1/duck/compute-resources/{id}/preflight:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Verify the task environment on one registered resource
+      operationId: inspectComputeResourceEnvironment
+      responses:
+        "200": { description: Environment report bound to the requested resource. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/cancel:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Request cancellation on the original Worker
+      operationId: cancelTrainingRun
+      responses:
+        "200": { description: Run is terminal. }
+        "202": { description: Worker accepted the request and is confirming process exit. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Cancellation has not been confirmed. }
   /api/v1/duck/compute-resources/{id}/test:
     parameters:
       - name: id

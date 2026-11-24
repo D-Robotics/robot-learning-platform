@@ -1,4 +1,8 @@
 import {
+  isOriginmanWorkshopEngine,
+  normalizeOriginmanWorkshopResult,
+} from '../../shared/originman-workshop.js';
+import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
   ORIGINMAN_REFERENCE_TASK,
@@ -47,7 +51,7 @@ export function resolvedTaskPack(taskId?: string): Record<string, unknown> | nul
   }
 }
 export interface Sim2RealRobogoRunResult {
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed';
   externalRunId?: string;
   /** Propagated by the server-side mock worker; never implies a deployable model. */
   mock?: boolean;
@@ -681,6 +685,9 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     trainingDevice && /^[a-zA-Z0-9][a-zA-Z0-9 ._()+-]{0,95}$/.test(deviceName)
       ? deviceName
       : undefined;
+  const workshop = isOriginmanWorkshopEngine(engine)
+    ? normalizeOriginmanWorkshopResult(source.originmanWorkshop)
+    : undefined;
   const originmanDance =
     engine === 'originman-dance-ppo' ? safeDanceMetrics(source.originmanDance) : undefined;
   return {
@@ -722,6 +729,7 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       : { iterations: bounded('iterations', 0, 2_000_000) }),
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
+    ...(workshop ? { originmanWorkshop: workshop } : {}),
     ...(originmanDance ? { originmanDance } : {}),
     ...(engine === ORIGINMAN_REFERENCE_ENGINE
       ? { originmanReference: safeReferenceMetrics(source.originmanReference) }
@@ -804,12 +812,13 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
             requestedStatus === 'succeeded' ||
             requestedStatus === 'done'
           ? 'completed'
-          : requestedStatus === 'failed' ||
-              requestedStatus === 'error' ||
-              requestedStatus === 'cancelled' ||
-              requestedStatus === 'canceled'
-            ? 'failed'
-            : null;
+          : requestedStatus === 'cancelled' || requestedStatus === 'canceled'
+            ? 'cancelled'
+            : requestedStatus === 'cancelling' || requestedStatus === 'canceling'
+              ? 'cancelling'
+              : requestedStatus === 'failed' || requestedStatus === 'error'
+                ? 'failed'
+                : null;
   if (!status) throw new Sim2RealError('sim2real_robogo_runner_status_invalid');
   const launchUrlValue = safeText(source.launchUrl ?? source.url, 500);
   const launchUrl =
@@ -817,7 +826,10 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const externalRunId = safeText(source.externalRunId ?? source.runId ?? source.id, 120);
   const validExternalRunId =
     !externalRunId || /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId) ? externalRunId : '';
-  if ((status === 'queued' || status === 'running') && !validExternalRunId) {
+  if (
+    (status === 'queued' || status === 'running' || status === 'cancelling') &&
+    !validExternalRunId
+  ) {
     throw new Sim2RealError('sim2real_robogo_runner_run_id_missing');
   }
   const message =
@@ -1146,6 +1158,7 @@ export async function requestRobogoTrainingStatus(input: {
   externalRunId: string;
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
+  operation?: 'cancel';
   statusUrl?: string;
   timeoutMs?: number;
   allowPrivateHttp?: boolean;
@@ -1169,8 +1182,8 @@ export async function requestRobogoTrainingStatus(input: {
   const timeoutMs = boundedTimeout(input.timeoutMs);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
-      method: 'GET',
+    const response = await fetchImpl(input.operation === 'cancel' ? url + '/cancel' : url, {
+      method: input.operation === 'cancel' ? 'POST' : 'GET',
       signal: controller.signal,
       redirect: 'error',
       headers: {

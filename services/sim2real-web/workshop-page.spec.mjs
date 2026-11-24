@@ -828,16 +828,15 @@ for (const outcome of [
             }),
             computeResource: {
               status: outcome === 'offline' ? 'offline' : 'online',
-              engines: [
-                outcome === 'wrong-engine' ? 'originman-recovery' : 'originman-recovery-reflect',
-              ],
+              engines: [outcome === 'wrong-engine' ? 'microduck-rl' : 'originman-recovery-reflect'],
             },
           });
         if (route === 'training/preflight') {
           assert.deepEqual(body, {
             computeResourceId: 'worker',
             taskId: 'originman-recovery',
-            engine: 'originman-recovery',
+            engine: 'originman-recovery-reflect',
+            device: 'cuda',
           });
           if (outcome === 'preflight-unavailable')
             return {
@@ -858,7 +857,7 @@ for (const outcome of [
             report: {
               schemaVersion: 1,
               taskId: 'originman-recovery',
-              engine: 'originman-recovery',
+              engine: 'originman-recovery-reflect',
               trainingPerformed: false,
               readyForSmokeTraining: outcome === 'ready',
               checks: [

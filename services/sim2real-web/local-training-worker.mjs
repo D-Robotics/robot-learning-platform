@@ -136,6 +136,9 @@ const jobs = new Map();
 const queuedJobs = [];
 const activeJobs = new Set();
 let screening = false;
+let workerShuttingDown = false;
+const jobChildren = new Map();
+const cancellationBarriers = new Map();
 const activeChildren = new Set();
 const finalizingJobs = new Set();
 let jobsLoadPromise;
@@ -537,7 +540,22 @@ function workerEngines() {
         'worker_configuration_invalid',
       );
     }
-    entries.set(id, { id, executable, args });
+    const preflightArgs = value.preflightArgs;
+    if (
+      preflightArgs !== undefined &&
+      (!Array.isArray(preflightArgs) ||
+        !preflightArgs.length ||
+        preflightArgs.length > 128 ||
+        preflightArgs.some(
+          (arg) => typeof arg !== 'string' || arg.length > 500 || arg.includes('\0'),
+        ))
+    )
+      throw fail(
+        'engine preflightArgs must be a bounded array of strings',
+        500,
+        'worker_configuration_invalid',
+      );
+    entries.set(id, { id, executable, args, ...(preflightArgs ? { preflightArgs } : {}) });
   }
   return entries;
 }
@@ -667,7 +685,9 @@ async function restorePersistedJobs() {
       if (
         !SAFE_RUN_ID.test(candidate.runId) ||
         !text(candidate.accountId, 160) ||
-        !['queued', 'running', 'completed', 'failed'].includes(candidate.status) ||
+        !['queued', 'running', 'cancelling', 'cancelled', 'completed', 'failed'].includes(
+          candidate.status,
+        ) ||
         typeof candidate.fingerprint !== 'string'
       )
         continue;
@@ -676,7 +696,7 @@ async function restorePersistedJobs() {
       // A process restart terminates children through systemd's cgroup. Keep
       // the record visible, but close the stale reservation explicitly rather
       // than relaunching user work or reporting a false running state.
-      if (candidate.status === 'queued' || candidate.status === 'running') {
+      if (['queued', 'running', 'cancelling'].includes(candidate.status)) {
         candidate.status = 'failed';
         candidate.finishedAt = new Date().toISOString();
         candidate.errorCode = 'worker_restarted';
@@ -905,13 +925,16 @@ async function launch(job, config) {
   await writeFile(path.join(job.dir, 'request.json'), JSON.stringify(job.request, null, 2), {
     mode: 0o600,
   });
+  if (job.status !== 'queued' || workerShuttingDown) return;
   const child = spawn(config.executable, config.args, {
     cwd: job.dir,
+    detached: process.platform !== 'win32',
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: childEnvironment(job),
   });
   activeChildren.add(child);
+  jobChildren.set(job, child);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.pid = child.pid;
@@ -949,6 +972,15 @@ async function launch(job, config) {
 async function finish(job, code, stdout, stderr) {
   if (job.finishedAt || finalizingJobs.has(job)) return;
   finalizingJobs.add(job);
+  const cancellation = cancellationBarriers.get(job);
+  if (cancellation && !(await cancellation)) {
+    finalizingJobs.delete(job);
+    job.message = '取消尚未确认：训练进程组仍存在或无法检查，请检查 worker；资源仍保留。';
+    await persist(job).catch(() => undefined);
+    return;
+  }
+  jobChildren.delete(job);
+  cancellationBarriers.delete(job);
   // The process is done, so no chunk can complete a partial line anymore:
   // flush what remains as the final line of each stream.
   for (const stream of Object.keys(job.logPartials || {})) {
@@ -966,6 +998,16 @@ async function finish(job, code, stdout, stderr) {
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
   try {
+    if (job.cancelRequestedAt) {
+      job.status = 'cancelled';
+      job.deployable = false;
+      job.message = '训练已取消，执行进程已停止；未发布训练制品。';
+      job.exitCode = code;
+      if (stdout) job.stdoutTail = scrubLog(stdout);
+      if (stderr) job.stderrTail = scrubLog(stderr);
+      await persist(job);
+      return;
+    }
     const result = await readResult(job);
     const artifact = code === 0 && result ? resultArtifact(result) : null;
     if (artifact) {
@@ -1050,7 +1092,12 @@ async function pumpQueue() {
     // than launching it with an implicit fallback or dropping it.
     return;
   }
-  while (activeJobs.size + Number(screening) < limit && queuedJobs.length) {
+  while (
+    !workerShuttingDown &&
+    !preflightInFlight &&
+    activeJobs.size + Number(screening) < limit &&
+    queuedJobs.length
+  ) {
     const job = queuedJobs.shift();
     if (!job || job.status !== 'queued') continue;
     let config;
@@ -1185,7 +1232,12 @@ async function handleReferenceScreen(request, response) {
   if (!engineExecutableReady(engine.executable)) {
     throw fail('reference engine executable is unavailable', 503, 'engine_executable_unavailable');
   }
-  if (screening || queuedJobs.length || activeJobs.size >= maxConcurrentJobs()) {
+  if (
+    preflightInFlight ||
+    screening ||
+    queuedJobs.length ||
+    activeJobs.size >= maxConcurrentJobs()
+  ) {
     throw fail('reference worker is busy', 409, 'reference_screen_busy');
   }
   screening = true;
@@ -1194,6 +1246,7 @@ async function handleReferenceScreen(request, response) {
     const input = JSON.stringify(trajectory);
     const report = await new Promise((resolve, reject) => {
       const child = spawn(engine.executable, [...engine.args, '--screen-reference'], {
+        detached: process.platform !== 'win32',
         cwd: DATA_DIR,
         stdio: ['pipe', 'pipe', 'ignore'],
         env: childEnvironment({
@@ -1257,6 +1310,352 @@ async function handleStatus(request, response, runId) {
     return;
   }
   json(response, 200, publicJob(job));
+}
+
+const preflightCache = new Map();
+let preflightInFlight = null;
+let originmanPreflightFlight = null;
+async function handleEnginePreflight(request, response, engineId) {
+  try {
+    accountId(request, {});
+  } catch {
+    throw fail('account is required', 401, 'account_required');
+  }
+  if (!ENGINE_ID_RE.test(engineId)) throw fail('invalid engine id');
+  const input = await bodyJson(request);
+  const originman = ['originman-recovery', 'originman-recovery-reflect'].includes(engineId);
+  if (
+    originman &&
+    (Object.keys(input).some((k) => k !== 'device') || !['cpu', 'cuda'].includes(input.device))
+  )
+    throw fail('invalid OriginMan preflight request', 400, 'invalid_preflight_request');
+  const taskId = originman ? 'originman-recovery' : input.taskId || 'walk';
+  if (typeof taskId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(taskId))
+    throw fail('invalid task id');
+  const config = workerEngines().get(engineId);
+  if (!config) throw fail('engine is not registered', 404, 'engine_not_registered');
+  if (!config.preflightArgs)
+    throw fail(
+      'Declare preflightArgs for this engine on the worker; no training command was executed.',
+      409,
+      'engine_preflight_not_configured',
+    );
+  const key = JSON.stringify([
+    engineId,
+    taskId,
+    config,
+    process.env.RDK_MICRODUCK_RL_DIR,
+    process.env.RDK_MICRODUCK_RL_ROOT,
+    ...(originman ? [input.device, process.env.ORIGINMAN_SCENE] : []),
+  ]);
+  const cached = originman ? undefined : preflightCache.get(key);
+  if (cached && cached.expires > Date.now()) {
+    json(response, 200, { ok: true, report: cached.report, cached: true });
+    return;
+  }
+  if (
+    originman &&
+    originmanPreflightFlight?.key === key &&
+    !activeJobs.size &&
+    !queuedJobs.length &&
+    originmanPreflightFlight.waiters < 32
+  ) {
+    const flight = originmanPreflightFlight;
+    flight.waiters++;
+    try {
+      const report = await flight.promise;
+      json(response, 200, { ok: true, report, cached: false, shared: true });
+    } finally {
+      flight.waiters--;
+    }
+    return;
+  }
+  if (preflightInFlight || screening || activeJobs.size || queuedJobs.length)
+    throw fail(
+      'training or another environment check is using this worker',
+      429,
+      'engine_preflight_busy',
+    );
+  preflightInFlight = key;
+  let flight;
+  if (originman) {
+    let resolveFlight, rejectFlight;
+    const promise = new Promise((resolve, reject) => {
+      resolveFlight = resolve;
+      rejectFlight = reject;
+    });
+    // A lone request has no waiter to consume a failed flight.
+    promise.catch(() => {});
+    flight = { key, promise, resolve: resolveFlight, reject: rejectFlight, waiters: 0 };
+    originmanPreflightFlight = flight;
+  }
+  try {
+    await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
+    if (workerShuttingDown) throw fail('worker is stopping', 503, 'worker_stopping');
+    const env = childEnvironment({ runId: '', dir: DATA_DIR, contractId: '', profile: '' });
+    for (const name of [
+      'RDK_SIM2REAL_JOB_ID',
+      'RDK_SIM2REAL_JOB_DIR',
+      'RDK_SIM2REAL_REQUEST_FILE',
+      'RDK_SIM2REAL_RESULT_FILE',
+      'RDK_SIM2REAL_CONTRACT_ID',
+      'RDK_SIM2REAL_TRAIN_PROFILE',
+    ])
+      delete env[name];
+    env.RDK_PREFLIGHT_TASK_ID = taskId;
+    if (originman) {
+      env.RDK_ORIGINMAN_PREFLIGHT_DEVICE = input.device;
+      env.RDK_ORIGINMAN_PREFLIGHT_ENGINE = engineId;
+    }
+    env.PYTHONDONTWRITEBYTECODE = '1';
+    const report = await new Promise((resolve, reject) => {
+      const child = spawn(config.executable, config.preflightArgs, {
+        cwd: DATA_DIR,
+        env,
+        shell: false,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      activeChildren.add(child);
+      child.once('close', () => activeChildren.delete(child));
+      const output = [];
+      let bytes = 0,
+        failure;
+      const stop = (code) => {
+        failure ||= code;
+        try {
+          if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch {
+          /* already exited */
+        }
+      };
+      const timer = setTimeout(() => stop('engine_preflight_timeout'), 45000);
+      child.stdout.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > MAX_LOG) stop('engine_preflight_output_limit');
+        else output.push(chunk);
+      });
+      child.stderr.resume();
+      child.once('error', () => {
+        clearTimeout(timer);
+        reject(fail('Environment probe could not start.', 503, 'engine_preflight_failed'));
+      });
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        if (failure || code !== 0) {
+          reject(
+            fail(
+              'Environment probe did not finish; no training was started.',
+              503,
+              failure || 'engine_preflight_failed',
+            ),
+          );
+          return;
+        }
+        try {
+          const parsed = JSON.parse(Buffer.concat(output).toString('utf8'));
+          if (
+            parsed.schemaVersion !== 1 ||
+            parsed.engine !== engineId ||
+            !Array.isArray(parsed.checks) ||
+            !parsed.checks.length ||
+            parsed.checks.length > 32 ||
+            parsed.trainingPerformed !== false ||
+            parsed.checks.some(
+              (check) =>
+                !check ||
+                typeof check.id !== 'string' ||
+                !['passed', 'blocked', 'unverified'].includes(check.status),
+            )
+          )
+            throw new Error('invalid probe report');
+          if (originman) {
+            const expected = [
+              'dependency-numpy',
+              'dependency-mujoco',
+              'dependency-torch',
+              'dependency-stable_baselines3',
+              'dependency-gymnasium',
+              'training-entrypoint',
+              'training-config',
+              'scene-contract',
+              'training-device',
+            ];
+            if (
+              parsed.taskId !== taskId ||
+              parsed.device !== input.device ||
+              parsed.checks.length !== expected.length ||
+              new Set(parsed.checks.map((check) => check.id)).size !== expected.length ||
+              parsed.checks.some((check) => !expected.includes(check.id)) ||
+              !Number.isFinite(Date.parse(parsed.checkedAt)) ||
+              Math.abs(Date.now() - Date.parse(parsed.checkedAt)) > 120000
+            )
+              throw new Error('invalid OriginMan report');
+            parsed.checks = parsed.checks.map((check) => ({ id: check.id, status: check.status }));
+          }
+          parsed.readyForSmokeTraining =
+            parsed.checks.every((check) => check.status === 'passed') &&
+            (originman || parsed.readyForSmokeTraining === true);
+          resolve(parsed);
+        } catch {
+          reject(
+            fail(
+              'Environment probe returned an invalid report.',
+              503,
+              'engine_preflight_invalid_report',
+            ),
+          );
+        }
+      });
+    });
+    if (preflightCache.size >= 8) preflightCache.delete(preflightCache.keys().next().value);
+    if (!originman) preflightCache.set(key, { report, expires: Date.now() + 15000 });
+    if (flight) flight.resolve(report);
+    json(response, 200, { ok: true, report, cached: false });
+  } catch (error) {
+    if (flight) flight.reject(error);
+    throw error;
+  } finally {
+    if (flight && originmanPreflightFlight === flight) originmanPreflightFlight = null;
+    preflightInFlight = null;
+    void pumpQueue();
+  }
+}
+
+/** Cancel only a job owned by the authenticated account. */
+
+/** kill(0) includes Linux zombies. They have exited and cannot execute work. */
+async function hasLiveProcessGroup(
+  group,
+  {
+    platform = process.platform,
+    kill = process.kill.bind(process),
+    list = () => readdir('/proc'),
+    read = (pid) => readFile(`/proc/${pid}/stat`, 'utf8'),
+  } = {},
+) {
+  try {
+    kill(-group, 0);
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    return true;
+  }
+  if (platform !== 'linux') return true;
+  let seen = 0;
+  try {
+    for (const pid of await list()) {
+      if (!/^\d+$/.test(pid)) continue;
+      let stat;
+      try {
+        stat = await read(pid);
+      } catch (error) {
+        if (['ENOENT', 'ESRCH'].includes(error.code)) continue;
+        throw error;
+      }
+      const boundary = stat.lastIndexOf(')');
+      const fields = stat
+        .slice(boundary + 2)
+        .trim()
+        .split(/\s+/);
+      if (boundary < 0 || fields.length < 3 || !/^[0-9]+$/.test(fields[2])) return true;
+      if (Number(fields[2]) !== group) continue;
+      seen++;
+      if (!['Z', 'X'].includes(fields[0])) return true;
+    }
+    // No visible members while kill(0) succeeds is ambiguous (namespaces,
+    // permissions or a fork race). Only positive all-exited evidence passes.
+    return seen === 0;
+  } catch {
+    return true;
+  }
+}
+async function handleCancel(request, response, runId) {
+  await ensureJobsLoaded();
+  let owner;
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  const job = jobs.get(runId);
+  if (!job || job.accountId !== owner) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  if (['cancelled', 'completed', 'failed'].includes(job.status)) {
+    json(response, 200, publicJob(job));
+    return;
+  }
+  if (job.status === 'cancelling') {
+    json(response, 202, publicJob(job));
+    return;
+  }
+  if (finalizingJobs.has(job) || job.finishedAt) {
+    json(response, 409, {
+      ok: false,
+      error: 'run_finalizing',
+      message: '任务正在结束，请查询最终状态。',
+    });
+    return;
+  }
+  const child = jobChildren.get(job);
+  if (child && process.platform === 'win32') {
+    json(response, 501, {
+      ok: false,
+      error: 'process_tree_cancel_unsupported',
+      message: '此 worker 尚不支持 Windows 训练进程树取消。',
+    });
+    return;
+  }
+  job.cancelRequestedAt = new Date().toISOString();
+  if (!child) {
+    job.status = 'cancelled';
+    job.finishedAt = new Date().toISOString();
+    job.message = '排队训练已取消，未启动执行进程。';
+    const position = queuedJobs.indexOf(job);
+    if (position >= 0) queuedJobs.splice(position, 1);
+    activeJobs.delete(job);
+    await persist(job);
+    void pumpQueue();
+    json(response, 200, publicJob(job));
+    return;
+  }
+  job.status = 'cancelling';
+  job.message = '已请求取消，正在等待训练进程退出。';
+  // Each engine owns its POSIX process group. Kill the group rather than just
+  // the Python launcher, otherwise multiprocessing/CUDA workers can survive.
+  const signalGroup = (signal) => {
+    try {
+      process.kill(-child.pid, signal);
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  };
+  cancellationBarriers.set(
+    job,
+    new Promise((resolve) => {
+      setTimeout(async () => {
+        try {
+          signalGroup('SIGKILL');
+          for (let attempt = 0; attempt < 40; attempt++) {
+            if (!(await hasLiveProcessGroup(child.pid))) {
+              resolve(true);
+              return;
+            }
+            await new Promise((done) => setTimeout(done, 25));
+          }
+          resolve(false);
+        } catch {
+          resolve(false);
+        }
+      }, 1500);
+    }),
+  );
+  signalGroup('SIGTERM');
+  await persist(job);
+  json(response, 202, publicJob(job));
 }
 
 /**
@@ -1637,6 +2036,21 @@ export function createLocalTrainingWorkerServer() {
         json(response, 401, { ok: false, error: 'local_worker_unauthorized' });
         return;
       }
+      const preflightRoute = /^\/engines\/([a-z][a-z0-9-]{1,31})\/preflight$/.exec(
+        request.url || '',
+      );
+      if (request.method === 'POST' && preflightRoute) {
+        await handleEnginePreflight(request, response, preflightRoute[1]);
+        return;
+      }
+      if (request.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(request.url || '')) {
+        await handleCancel(
+          request,
+          response,
+          decodeURIComponent(request.url.slice('/runs/'.length, -'/cancel'.length)),
+        );
+        return;
+      }
       if (request.method === 'POST' && request.url === '/train') {
         await handleTrain(request, response);
         return;
@@ -1711,16 +2125,46 @@ if (isDirectEntry()) {
   server.listen(PORT, HOST, () =>
     console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`),
   );
-  const close = () => {
-    for (const child of activeChildren) child.kill('SIGTERM');
+  const close = async () => {
+    if (workerShuttingDown) return;
+    workerShuttingDown = true;
+    // An unconfirmed cancellation intentionally keeps its reservation, but
+    // its day-long job timer must not keep an already-closed Worker alive.
+    for (const job of jobs.values()) {
+      if (job.timeout) clearTimeout(job.timeout);
+      job.timeout = undefined;
+    }
+    const owned = [...activeChildren];
+    const exited = owned.map(
+      (child) =>
+        new Promise((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else child.once('close', resolve);
+        }),
+    );
+    const signalOwned = (signal) => {
+      for (const child of owned) {
+        try {
+          if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
+          else child.kill(signal);
+        } catch {
+          /* this owned process group has already exited */
+        }
+      }
+    };
+    const forceExit = setTimeout(() => process.exit(1), 5000);
+    forceExit.unref();
     server.closeIdleConnections?.();
     server.closeAllConnections?.();
-    const forceExit = setTimeout(() => process.exit(1), 5_000);
-    forceExit.unref();
-    server.close(() => {
-      clearTimeout(forceExit);
-      process.exit(0);
-    });
+    const serverClosed = new Promise((resolve) => server.close(resolve));
+    signalOwned('SIGTERM');
+    // Even if a launcher exits first, its process group may still contain
+    // multiprocessing or probe children that must not survive the worker.
+    await new Promise((resolve) => setTimeout(resolve, owned.length ? 1500 : 0));
+    signalOwned('SIGKILL');
+    await Promise.all([serverClosed, ...exited]);
+    clearTimeout(forceExit);
+    process.exitCode = 0;
   };
   process.once('SIGTERM', close);
   process.once('SIGINT', close);

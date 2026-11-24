@@ -27,6 +27,7 @@ const schema = {
       additionalProperties: false,
       properties: {
         schemaVersion: { type: 'integer', const: 1 },
+        compositionMode: { type: 'string', enum: ['preset', 'custom'] },
         title: { type: 'string', minLength: 1, maxLength: 80 },
         bpm: { type: 'number', minimum: 80, maximum: 140 },
         sections: {
@@ -128,10 +129,19 @@ function requireInput(args) {
 }
 
 export function canonicalDanceConfig(config) {
-  const { schemaVersion, title, bpm, sections, seed, trainingSteps, rewardTuning } =
-    resolveOriginmanDanceConfig(config);
+  const {
+    schemaVersion,
+    compositionMode,
+    title,
+    bpm,
+    sections,
+    seed,
+    trainingSteps,
+    rewardTuning,
+  } = resolveOriginmanDanceConfig(config);
   return {
     schemaVersion,
+    ...(compositionMode && { compositionMode }),
     title,
     bpm,
     sections,

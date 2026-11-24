@@ -16,6 +16,7 @@ export const ORIGINMAN_DANCE_DRAFT_TOOL = {
     type: 'object',
     properties: {
       schemaVersion: { type: 'integer', const: 1, default: 1 },
+      compositionMode: { type: 'string', enum: ['preset', 'custom'] },
       title: { type: 'string', minLength: 1, maxLength: 80 },
       bpm: { type: 'number', minimum: 80, maximum: 140 },
       sections: {

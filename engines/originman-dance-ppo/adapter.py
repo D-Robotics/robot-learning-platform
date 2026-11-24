@@ -56,7 +56,7 @@ def read_request():
 
 def validate_bundle(bundle: Path):
     if not bundle.is_absolute() or bundle.is_symlink() or not bundle.is_dir():
-        fail("RDK_ORIGINMAN_DANCE_BUNDLE_DIR must name an absolute, real directory")
+        fail("缺少可用的舞蹈素材包。请运行 engines/originman-dance-ppo/build_bundle.py 并将 RDK_ORIGINMAN_DANCE_BUNDLE_DIR 指向生成目录")
     for root, directories, files in os.walk(bundle, followlinks=False):
         for name in directories + files:
             if (Path(root) / name).is_symlink():
@@ -194,7 +194,7 @@ def main():
     request = read_request()
     bundle_value = os.environ.get("RDK_ORIGINMAN_DANCE_BUNDLE_DIR", "").strip()
     if not bundle_value:
-        fail("OriginMan model bundle is not mounted on this worker")
+        fail("缺少舞蹈素材包。请用 build_bundle.py 从自有模型生成素材，在 Worker 设置 RDK_ORIGINMAN_DANCE_BUNDLE_DIR。")
     bundle = Path(bundle_value)
     model_bundle = validate_bundle(bundle)
     model_manifest = model_bundle["manifest"]

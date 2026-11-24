@@ -190,6 +190,19 @@ def comparison(run, evaluation, out, value):
         "selectedCase": index,
         "traces": traces,
     }
+    # The selected trained-policy rollout has actual pre-action observations
+    # and actor outputs. Keep this simulation evidence separate from board data.
+    with (out / "telemetry.jsonl").open("w") as stream:
+        for frame in groups["rl"][index]["frames"]:
+            sample = {
+                "t": frame["time"],
+                "observation": frame["policyInputBeforeAction"],
+                "action": frame["actorOutputNormalized"],
+                "pairing": "policy-inference-v1",
+                "reward": frame["reward"],
+                "fall": frame["fallen"],
+            }
+            stream.write(json.dumps(sample, allow_nan=False) + "\n")
     paired = out / "video-records"
     paired.mkdir()
     (paired / "episodes.jsonl").write_text(
@@ -238,6 +251,7 @@ def main():
     evidence = {
         "schemaVersion": 1,
         "phase": value["phase"],
+        **({"groupId": value["groupId"]} if "groupId" in value else {}),
         "seed": value["seed"],
         "requestedTimesteps": value["timesteps"],
         "actualTimesteps": summary["actualTimesteps"],
@@ -265,6 +279,8 @@ def main():
         },
     )
     names = ["policy.onnx", "workshop-result.json", "source-evidence.json"]
+    if value["phase"] == "evaluate":
+        names.append("telemetry.jsonl")
     if "video" in evidence:
         names.append("comparison.mp4")
     (out / "SHA256SUMS").write_text("".join(f"{digest(out / n)}  {n}\n" for n in names))

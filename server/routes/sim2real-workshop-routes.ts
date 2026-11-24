@@ -1,3 +1,4 @@
+import { getWorkshopRun } from '../sim2real/workshop-run-evidence.js';
 import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
 import {
   ORIGINMAN_REFERENCE_ENGINE,
@@ -17,7 +18,6 @@ import {
   createSim2RealModel,
   listSim2RealModels,
   listSim2RealComputeResources,
-  getSim2RealRun,
   getSim2RealModel,
   getSim2RealComputeResource,
   getSim2RealComputeResourceSecret,
@@ -34,13 +34,19 @@ const courseManifest =
     contract: { ...originManManifest.contract, robotId: 'custom' },
   }).manifest;
 
+function courseEngine(engines?: string[]) {
+  return engines?.includes('originman-recovery') && !engines.includes('originman-recovery-reflect')
+    ? 'originman-recovery'
+    : 'originman-recovery-reflect';
+}
+
 export function createPlatformWorkshopSessions() {
   const root = () => String(process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
-  const experiments = createExperimentSessions({ root, getRun: getSim2RealRun });
+  const experiments = createExperimentSessions({ root, getRun: getWorkshopRun });
   const sessions = createWorkshopSessions({
     readExperiment: async (id, owner) => (await experiments.resume(id, owner)).view,
     root,
-    getRun: getSim2RealRun,
+    getRun: getWorkshopRun,
     findRun: async (key, owner) => (await findSim2RealRunByIdempotency(key, owner))?.run ?? null,
     remember: experiments.remember,
   });
@@ -248,7 +254,7 @@ export function registerSim2RealWorkshopRoutes(
           '课程模型或算力不属于当前账号。',
           404,
         );
-      return { session: await sessions.create(b, owner) };
+      return { session: await sessions.create(b, owner, courseEngine(resource.engines)) };
     }),
   );
   router.get(
@@ -324,6 +330,7 @@ export function registerSim2RealWorkshopRoutes(
         session: await sessions.create(
           { modelId: model.id, computeResourceId: resource.id },
           owner,
+          courseEngine(resource.engines),
         ),
       };
     }),

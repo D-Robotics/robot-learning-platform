@@ -73,6 +73,7 @@ for (const name of [
   'originman-dance-config.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',
+  'compute-onboarding.mjs',
   'playback-plan.mjs',
   'mcp-app-resource.mjs',
   'guided-input.mjs',
