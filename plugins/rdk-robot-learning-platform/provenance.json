@@ -44,7 +44,7 @@
     "mcp/source-checkout.example.json": "cd8a9a7c47436adec2dff557c059c982bbcea560683bf6de828b99dd8680e63d",
     "scripts/start-core-mcp.mjs": "8a194ecf0b7189bbcfdd5781096a119aca9b9056cb17545ef449e95b89781f53",
     "setup.mjs": "00aa01b277c77876bdc8de8e85948dc4ea68115d13b5bf34ae270f864f2ee5cf",
-    "setup-windows.ps1": "6c22fae060b54d66357e0fbea6bfa2ca667dd5553e9f1aa218a9ce71029b037e",
+    "setup-windows.ps1": "fbdbdf48c580fe574384c836af3ffff76be96c23720253e3e9f492c3c1ff0551",
     "setup-macos.command": "9b5ae861c5bca580e1a997b24502d53e6719feb4ffbcf428706b52045314ace2",
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",

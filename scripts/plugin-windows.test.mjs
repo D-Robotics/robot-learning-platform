@@ -86,9 +86,7 @@ test(
     timeout: 60000,
   },
   async (t) => {
-    // WinPS Expand-Archive compares canonical extraction paths to its destination.
-    // Resolve the runner's 8.3 TEMP alias before passing the destination to it.
-    const temp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-win-')));
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'rdk-win-'));
     t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
     const root = path.join(temp, '课程 插件');
     const source = fileURLToPath(
@@ -142,7 +140,7 @@ test(
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        'Expand-Archive -ErrorAction Stop -LiteralPath $env:RDK_TEST_ZIP -DestinationPath $env:RDK_TEST_EXTRACT',
+        "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory($env:RDK_TEST_ZIP, $env:RDK_TEST_EXTRACT)",
       ],
       {
         env: { ...process.env, RDK_TEST_ZIP: archive, RDK_TEST_EXTRACT: extracted },
