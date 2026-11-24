@@ -1,4 +1,4 @@
-import { getWorkshopRun, restoreWorkshopEvidence } from '../sim2real/workshop-run-evidence.js';
+import { getWorkshopRun, readWorkshopRunEvidence } from '../sim2real/workshop-run-evidence.js';
 import { registerComputeSshRoutes } from './sim2real-compute-ssh-routes.js';
 import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
 import { desktopRelayBridgeStatus } from '../sim2real/studio-desktop-relay-status.js';
@@ -3833,7 +3833,8 @@ export function createSim2RealRouter(
         });
         return;
       }
-      let current = await restoreWorkshopEvidence(run, owner);
+      const evidence = await readWorkshopRunEvidence(run, owner);
+      let current = evidence.run;
       if (
         (run.backend === 'local' || run.backend === 'robogo') &&
         ['queued', 'running', 'cancelling'].includes(run.status) &&
@@ -3988,6 +3989,9 @@ export function createSim2RealRouter(
       response.json({
         ok: true,
         artifactRetention: await getRunPolicyRetention(current, owner),
+        ...(evidence.workshopEvidenceIssue && {
+          workshopEvidenceIssue: evidence.workshopEvidenceIssue,
+        }),
         run: available
           ? {
               ...current,
@@ -4988,7 +4992,7 @@ export function createSim2RealRouter(
         }
         if (classroom.phase === 'evaluate') {
           const source =
-            classroom.sourceRunId && (await getWorkshopRun(classroom.sourceRunId, owner));
+            classroom.sourceRunId && (await getSim2RealRun(classroom.sourceRunId, owner));
           const parent = source && source.training?.originmanWorkshop;
           if (
             !source ||
@@ -5003,7 +5007,6 @@ export function createSim2RealRouter(
             source.training?.engine !== training.engine ||
             !source.externalRunId ||
             !source.artifact?.sha256 ||
-            source.metrics?.originmanWorkshop?.policySha256 !== source.artifact.sha256 ||
             parent.timesteps !== classroom.timesteps ||
             parent.seed !== classroom.seed ||
             parent.pushMaxForce !== classroom.pushMaxForce ||
@@ -5014,6 +5017,17 @@ export function createSim2RealRouter(
               409,
               'SIM2REAL_WORKSHOP_SOURCE_INVALID',
               '请使用同一模型与 Worker 上已校验的原训练。',
+            );
+            return;
+          }
+          const evidence = await readWorkshopRunEvidence(source, owner);
+          if (evidence.run.metrics?.originmanWorkshop?.policySha256 !== source.artifact.sha256) {
+            sendApiError(
+              response,
+              409,
+              'SIM2REAL_WORKSHOP_SOURCE_INVALID',
+              '原训练已完成。请核对原 Worker 的回执和策略校验值后再评测。',
+              { workshopEvidenceIssue: evidence.workshopEvidenceIssue ?? 'receipt-mismatch' },
             );
             return;
           }

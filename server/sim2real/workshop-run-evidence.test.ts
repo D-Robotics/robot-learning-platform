@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { getWorkshopRun } from './workshop-run-evidence.js';
+import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
+import { getWorkshopRun, readWorkshopRunEvidence } from './workshop-run-evidence.js';
 
 const store = vi.hoisted(() => ({
   getSim2RealRun: vi.fn(),
@@ -82,4 +83,31 @@ it('consults the account ledger before contacting a worker', async () => {
   expect(await getWorkshopRun(run.id, 'bob')).toBeNull();
   expect(store.getSim2RealRun).toHaveBeenCalledWith(run.id, 'bob');
   expect(worker).not.toHaveBeenCalled();
+});
+
+it.each([
+  [new Error('bad gateway'), 'worker-unavailable'],
+  [Object.assign(new Error('not found'), { runnerNotFound: true }), 'job-missing'],
+])(
+  'preserves finished training and reports the cause of a failed receipt lookup',
+  async (error, issue) => {
+    worker.mockRejectedValue(error);
+    expect(await readWorkshopRunEvidence(run as unknown as Sim2RealRunRecord, 'alice')).toEqual({
+      run,
+      workshopEvidenceIssue: issue,
+    });
+    expect(store.updateSim2RealRun).not.toHaveBeenCalled();
+  },
+);
+
+it('identifies a missing receipt and accepts a matching one after the worker recovers', async () => {
+  worker.mockResolvedValueOnce({ ...result, metrics: { engine: run.training.engine } });
+  expect(await readWorkshopRunEvidence(run as unknown as Sim2RealRunRecord, 'alice')).toEqual({
+    run,
+    workshopEvidenceIssue: 'receipt-missing',
+  });
+  expect(
+    (await readWorkshopRunEvidence(run as unknown as Sim2RealRunRecord, 'alice')).run.metrics
+      ?.originmanWorkshop,
+  ).toEqual(receipt);
 });

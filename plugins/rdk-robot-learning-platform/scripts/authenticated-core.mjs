@@ -776,7 +776,12 @@ export async function connectAuthenticatedCore({
         !(allowPrefix ? matchesRunIdentifier(runId, value.run?.id) : value.run?.id === runId)
       )
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
-      return value.run;
+      return {
+        ...value.run,
+        ...(typeof value.workshopEvidenceIssue === 'string' && {
+          workshopEvidenceIssue: value.workshopEvidenceIssue,
+        }),
+      };
     },
     async readDanceTrajectoryVerification(runId, expectedSha256, { signal } = {}) {
       const accountId = await verifiedWorkspaceAccount();

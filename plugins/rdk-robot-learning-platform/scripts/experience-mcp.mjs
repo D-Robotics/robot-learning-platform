@@ -19,7 +19,7 @@ import {
   prepareTraining,
   readOriginmanEvaluation,
 } from './workflow-inspection.mjs';
-import { enrichToolError } from './plugin-errors.mjs';
+import { enrichToolError, workshopEvidenceMessage } from './plugin-errors.mjs';
 import { AUTH_TOOLS } from './plugin-auth.mjs';
 import { SHORT_TRAINING_TOOLS, shortTraining } from './short-training.mjs';
 import { EXPERIMENT_TOOLS, experimentContext } from './experiment-context.mjs';
@@ -312,6 +312,8 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
   let learningEvidence;
   let nextStep;
   let studentReply = payload.studentReply || `本轮训练${status}。`;
+  const evidenceMessage = workshopEvidenceMessage(payload.run?.workshopEvidenceIssue);
+  if (evidenceMessage) studentReply += evidenceMessage;
   const device = metrics?.trainingDevice;
   if (typeof device === 'string' && /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(device)) {
     const deviceName = metrics.trainingDeviceName;
@@ -777,6 +779,9 @@ export function experienceProxy(
     if (
       upstream.readTrainingRun &&
       (!payload.run?.artifact?.sha256 ||
+        ((payload.run?.taskId ?? payload.taskId) === 'originman-recovery' &&
+          !payload.run?.metrics?.originmanWorkshop &&
+          !payload.run?.workshopEvidenceIssue) ||
         ((payload.run?.taskId ?? payload.taskId) === REFERENCE_TRACKING_TASK &&
           !payload.run?.metrics?.originmanReference))
     ) {
@@ -2063,6 +2068,9 @@ export function experienceProxy(
                 upstream.courseReadiness &&
                 ((args) => upstream.courseReadiness({ ...args, signal })),
               readModels: upstream.readModels && (() => upstream.readModels({ signal })),
+              readTrainingRun:
+                upstream.readTrainingRun &&
+                ((runId) => upstream.readTrainingRun(runId, { signal })),
               remote:
                 upstream.experimentSession &&
                 ((operation, input) => upstream.experimentSession(operation, input, { signal })),

@@ -5091,6 +5091,10 @@ components:
         run: { $ref: "#/components/schemas/Run" }
         idempotentReplay: { type: boolean }
         reconciled: { type: boolean }
+        workshopEvidenceIssue:
+          type: string
+          description: Why a completed workshop run still lacks independently matched worker evidence. Run status is preserved.
+          enum: [binding-missing, worker-unavailable, job-missing, receipt-missing, receipt-mismatch]
         artifactRetention:
           type: object
           required: [state]
