@@ -227,4 +227,4 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python
 
 在多槽位 Worker 上，受扰恢复环境检查可以使用一个空闲槽位。卡在运行或排队时，Worker 在运行配置未变的情况下最多复用同进程一小时内的成功检查。Worker 重启会恢复确定尚未尝试启动的任务，其他中断保留原记录与配方供手动重试。
 
-恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。
+恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。独立组包时须保留同级 `engines/microduck-football/train_football.py`，训练回执会归档该源码。

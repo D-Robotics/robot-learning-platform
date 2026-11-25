@@ -10,6 +10,8 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from monitor import REUSED_ACTOR_SOURCE
+
 
 def verify_environment(scene, experiment, modules):
     """Reset and step the residual training environment without training."""
@@ -71,9 +73,12 @@ def inspect(scene, device):
         benchmark = json.loads((root / "workshop" / "benchmark.json").read_text())
         if not isinstance(experiment.get("environment"), dict) or not isinstance(benchmark, dict):
             raise ValueError("invalid training configuration")
-        record("training-config", "passed", "training and benchmark configurations readable")
+        with REUSED_ACTOR_SOURCE.open("rb") as reused_actor:
+            if not reused_actor.read(1):
+                raise ValueError("empty training receipt source")
+        record("training-config", "passed", "training, benchmark and receipt source files readable")
     except Exception:
-        record("training-config", "blocked", "training or benchmark configuration unavailable")
+        record("training-config", "blocked", "training, benchmark or receipt source file unavailable")
 
     try:
         if not scene or not os.path.isfile(scene):
