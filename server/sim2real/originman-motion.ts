@@ -20,6 +20,7 @@ const MAX_BLOCKS = 128;
 const SPEED_LIMIT = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
+const REFERENCE_FILE = /^[a-z0-9][a-z0-9_-]{0,63}\.json$/;
 const demo = originmanReferenceExample();
 const digest = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 
@@ -42,13 +43,23 @@ type Motion = {
   poseOnly?: true;
 };
 type Block = { id: string; repeats: number };
+type PresetReference = {
+  file: string;
+  frames: number;
+  sha256: string;
+  sourceSha256?: string;
+  stanceProfile?: 'source-neutral-v1';
+  mode: 'source-exact' | 'timing-preserved';
+};
 type Preset = {
   id: string;
   displayName: string;
   bpm: number;
   blocks: Block[];
-  transitionSeconds: number;
-};
+} & (
+  | { reference: PresetReference; transitionSeconds?: never }
+  | { reference?: never; transitionSeconds: number }
+);
 type Catalog = { motions: Motion[]; presets: Preset[]; directory?: string };
 
 const builtIn: Catalog = {
@@ -117,6 +128,35 @@ async function readBounded(file: string, maxBytes: number) {
   return buffer;
 }
 
+function presetReference(value: unknown): PresetReference {
+  const { file, frames, sha256, sourceSha256, adapted, stanceProfile, ...extra } = record(value);
+  if (
+    typeof file !== 'string' ||
+    !REFERENCE_FILE.test(file) ||
+    typeof frames !== 'number' ||
+    !Number.isSafeInteger(frames) ||
+    frames < FPS ||
+    frames > MAX_FRAMES ||
+    typeof sha256 !== 'string' ||
+    !SHA256.test(sha256) ||
+    (adapted !== undefined && typeof adapted !== 'boolean') ||
+    (stanceProfile !== undefined && stanceProfile !== 'source-neutral-v1') ||
+    (adapted === true && sourceSha256 === undefined) ||
+    (sourceSha256 !== undefined &&
+      (typeof sourceSha256 !== 'string' || !SHA256.test(sourceSha256))) ||
+    Object.keys(extra).length
+  )
+    throw Error('Invalid source-exact preset reference');
+  return {
+    file,
+    frames,
+    sha256,
+    mode: adapted ? 'timing-preserved' : 'source-exact',
+    ...(sourceSha256 && { sourceSha256 }),
+    ...(stanceProfile && { stanceProfile }),
+  };
+}
+
 async function loadCatalog(): Promise<Catalog> {
   const directory = process.env.RDK_ORIGINMAN_MOTION_DIR?.trim();
   if (!directory) return builtIn;
@@ -169,7 +209,14 @@ async function loadCatalog(): Promise<Catalog> {
       };
     });
     const safePresets = presets.map((entry): Preset => {
-      const { id, displayName, bpm, blocks: sequence, transitionSeconds = 0.4 } = record(entry);
+      const {
+        id,
+        displayName,
+        bpm,
+        blocks: sequence,
+        transitionSeconds,
+        reference,
+      } = record(entry);
       if (
         typeof id !== 'string' ||
         !ID.test(id) ||
@@ -180,12 +227,22 @@ async function loadCatalog(): Promise<Catalog> {
         bpm > 140
       )
         throw Error('Invalid preset metadata');
+      const identity = { id, displayName: displayName.trim(), bpm };
+      if (reference !== undefined) {
+        if (transitionSeconds !== undefined) throw Error('Source-exact preset cannot set a blend');
+        return {
+          ...identity,
+          blocks:
+            sequence === undefined || (Array.isArray(sequence) && sequence.length === 0)
+              ? []
+              : blocks(sequence, safeMotions),
+          reference: presetReference(reference),
+        };
+      }
       return {
-        id,
-        displayName: displayName.trim(),
-        bpm,
+        ...identity,
         blocks: blocks(sequence, safeMotions),
-        transitionSeconds: transition(transitionSeconds),
+        transitionSeconds: transition(transitionSeconds === undefined ? 0.4 : transitionSeconds),
       };
     });
     if (
@@ -218,27 +275,38 @@ export async function listOriginmanMotion() {
       id: preset.id,
       displayName: preset.displayName,
       bpm: preset.bpm,
-      seconds: minimumFrames(preset.blocks, preset.transitionSeconds, catalog) / FPS,
+      seconds:
+        (preset.reference
+          ? preset.reference.frames
+          : minimumFrames(preset.blocks, preset.transitionSeconds, catalog)) / FPS,
       blocks: preset.blocks.reduce((sum, block) => sum + block.repeats, 0),
+      ...(preset.reference && { referenceMode: preset.reference.mode }),
+      ...(preset.reference?.stanceProfile && { stanceProfile: preset.reference.stanceProfile }),
     })),
     limits: { maxBlocks: MAX_BLOCKS, maxSeconds: MAX_FRAMES / FPS, maxRepeats: 8 },
   };
 }
 
+async function readTrajectoryAsset(
+  file: string,
+  metadata: { sha256: string; frames: number },
+  purpose: 'training' | 'motion-block',
+) {
+  const bytes = await readBounded(file, 5 * 1024 * 1024);
+  if (digest(bytes) !== metadata.sha256) throw Error('Motion hash mismatch');
+  const trajectory = validateOriginmanReferenceTrajectory(JSON.parse(bytes.toString()), purpose);
+  if (trajectory.joint_pos.length !== metadata.frames) throw Error('Motion frame count mismatch');
+  return trajectory;
+}
+
 async function readMotion(catalog: Catalog, motion: Motion) {
   if (!catalog.directory) return demo;
   try {
-    const bytes = await readBounded(
+    return await readTrajectoryAsset(
       path.join(catalog.directory, motion.id + '.json'),
-      5 * 1024 * 1024,
-    );
-    if (digest(bytes) !== motion.sha256) throw Error('Motion hash mismatch');
-    const trajectory = validateOriginmanReferenceTrajectory(
-      JSON.parse(bytes.toString()),
+      motion,
       'motion-block',
     );
-    if (trajectory.joint_pos.length !== motion.frames) throw Error('Motion frame count mismatch');
-    return trajectory;
   } catch {
     throw new OriginmanMotionError(
       `动作「${motion.displayName}」文件、摘要或轨迹格式未通过校验。`,
@@ -258,6 +326,43 @@ export async function prepareOriginmanMotion(input: unknown) {
     throw new OriginmanMotionError('预置舞蹈 ID 不在当前动作库，请刷新预置列表。');
   if (preset && (Object.hasOwn(args, 'transitionSeconds') || Object.hasOwn(args, 'bpm')))
     throw new OriginmanMotionError('预置使用原有节奏和过渡设置。');
+  const motions = new Map(catalog.motions.map((motion) => [motion.id, motion]));
+  if (preset?.reference) {
+    const asset = preset.reference;
+    let trajectory;
+    try {
+      if (!catalog.directory) throw Error('Source trajectory requires a configured catalog');
+      trajectory = await readTrajectoryAsset(
+        path.join(catalog.directory, asset.file),
+        asset,
+        'training',
+      );
+    } catch {
+      throw new OriginmanMotionError(
+        `预置「${preset.displayName}」的原版文件、摘要或轨迹格式未通过校验。`,
+        422,
+      );
+    }
+    const provenance: OriginmanMotionProvenance = {
+      source: `preset:${preset.id}`,
+      displayName: preset.displayName,
+      blocks: preset.blocks.map((item) => ({ ...item, sha256: motions.get(item.id)!.sha256 })),
+      ranges: [],
+      bpm: preset.bpm,
+      trajectorySha256: originmanReferenceDigest(trajectory),
+      trajectoryDigestVersion: REFERENCE_DIGEST_VERSION,
+      referenceMode: asset.mode,
+      referenceAssetSha256: asset.sha256,
+      ...(asset.sourceSha256 && { sourceSha256: asset.sourceSha256 }),
+      ...(asset.stanceProfile && { stanceProfile: asset.stanceProfile }),
+    };
+    return {
+      trajectory,
+      provenance,
+      adjustedTransitions: [],
+      extraTransitionSeconds: 0,
+    };
+  }
   const selected = preset?.blocks ?? blocks(custom, catalog.motions);
   const seconds = preset?.transitionSeconds ?? transition(transitionSeconds);
   const tempo = preset?.bpm ?? bpm;
@@ -267,7 +372,6 @@ export async function prepareOriginmanMotion(input: unknown) {
   if (minimumTotal > MAX_FRAMES)
     throw new OriginmanMotionError('编排总时长不能超过 90 秒，请减少动作或重复次数。');
 
-  const motions = new Map(catalog.motions.map((motion) => [motion.id, motion]));
   const positions: number[][] = [];
   const ranges: { id: string; from: number; to: number }[] = [];
   const cache = new Map<string, OriginmanReferenceTrajectory>();
@@ -390,6 +494,8 @@ export function summarizeOriginmanMotion(
     beats: ((frames / trajectory.fps) * provenance.bpm) / 60,
     extraTransitionSeconds: prepared.extraTransitionSeconds,
     adjustedTransitions: prepared.adjustedTransitions,
+    ...(provenance.referenceMode && { referenceMode: provenance.referenceMode }),
+    ...(provenance.stanceProfile && { stanceProfile: provenance.stanceProfile }),
     trajectorySha256: provenance.trajectorySha256,
     trajectoryDigestVersion: provenance.trajectoryDigestVersion,
     frameIndices: sampleFrames,

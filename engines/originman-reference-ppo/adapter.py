@@ -5,6 +5,7 @@ import json
 import math
 import multiprocessing
 import os
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -35,6 +36,7 @@ TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
 REFERENCE_DIGEST_VERSION = "originman-reference-f64be-v1"
+SOURCE_STANCE = "source-neutral-v1"
 ROLLOUT_STEPS = 4096
 CHECKPOINT_STEPS = 32768
 
@@ -81,9 +83,17 @@ def validate_trajectory(value):
 
 
 class ReferenceTracking(gym.Env):
-    def __init__(self, bundle, trajectory, calibrated=True):
+    def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None):
+        config = Config(stride=0, lift=0, sway=0)
+        if stance_profile == SOURCE_STANCE:
+            # The delivered position samples are relative to an uncrouched
+            # reference pose. Keep the existing stance for other recipes.
+            config.crouch = 0.0
+        elif stance_profile is not None:
+            raise ValueError("unsupported reference stance profile")
+        self.stance_profile = stance_profile
         self.robot = OriginManEnv(
-            bundle / "model/scene.xml", Config(stride=0, lift=0, sway=0),
+            bundle / "model/scene.xml", config,
             reference=np.load(bundle / "reference.npy", allow_pickle=False),
         )
         self.model, self.data = self.robot.model, self.robot.data
@@ -241,8 +251,8 @@ def evaluate(env, policy, ranges=()):
     }, frames
 
 
-def reference_gate(bundle, trajectory):
-    env = ReferenceTracking(bundle, trajectory)
+def reference_gate(bundle, trajectory, stance_profile=None):
+    env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
     zero = lambda _obs: np.zeros(18)
     calibrated, _ = evaluate(env, zero)
     try:
@@ -253,7 +263,11 @@ def reference_gate(bundle, trajectory):
     return env, {
         "gate": calibrated,
         **original_evidence,
-        "calibrationSha256": digest(PROFILE_PATH),
+        "calibrationSha256": (
+            hashlib.sha256(PROFILE_PATH.read_bytes() + b"\0" + stance_profile.encode()).hexdigest()
+            if stance_profile else digest(PROFILE_PATH)
+        ),
+        **({"stanceProfile": stance_profile} if stance_profile else {}),
         "actionJoints": TRACKED,
         "controlHz": HZ,
     }
@@ -263,13 +277,15 @@ def screen_reference():
     raw = json.load(sys.stdin)
     bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
     scene_hash = validate_bundle(bundle)["sceneSha256"]
+    stance_profile = raw.get("stanceProfile")
+    identity = {"stanceProfile": stance_profile} if stance_profile == SOURCE_STANCE else {}
     try:
-        _, report = reference_gate(bundle, validate_trajectory(raw))
+        _, report = reference_gate(bundle, validate_trajectory(raw), stance_profile)
     except ReferenceLimitError as error:
-        print(json.dumps({"invalid": str(error), "violation": error.violation}, allow_nan=False))
+        print(json.dumps({**identity, "invalid": str(error), "violation": error.violation}, allow_nan=False))
         return
     except ValueError as error:
-        print(json.dumps({"invalid": str(error)}, allow_nan=False))
+        print(json.dumps({**identity, "invalid": str(error)}, allow_nan=False))
         return
     print(json.dumps({**report, "sceneSha256": scene_hash,
                       "trajectorySha256": trajectory_digest(raw)}, allow_nan=False))
@@ -285,6 +301,13 @@ def composition_ranges(training, frames):
     if source is None:
         return []
     ranges = source.get("ranges")
+    asset_hash = source.get("referenceAssetSha256")
+    if asset_hash is not None:
+        if (not isinstance(asset_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", asset_hash)
+                or ranges != [] or "transitionSeconds" in source
+                or source.get("referenceMode") not in ("source-exact", "timing-preserved")):
+            raise ValueError("invalid source-exact choreography provenance")
+        return []
     if not isinstance(ranges, list) or not 1 <= len(ranges) <= 90:
         raise ValueError("invalid reference choreography segments")
     previous = 0
@@ -302,7 +325,8 @@ def composition_ranges(training, frames):
 def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
-    factory = lambda: ReferenceTracking(bundle, trajectory)
+    stance_profile = evaluation_env.stance_profile
+    factory = lambda: ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
         learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=ROLLOUT_STEPS // num_envs,
@@ -379,7 +403,10 @@ def main():
     scene_hash = validate_bundle(bundle)["sceneSha256"]
     reference_path = output / "reference.json"
     reference_path.write_text(json.dumps(tracks["trajectory"], separators=(",", ":"), allow_nan=False))
-    env, report = reference_gate(bundle, trajectory)
+    stance_profile = provenance.get("stanceProfile")
+    if stance_profile is not None and not provenance.get("referenceAssetSha256"):
+        raise ValueError("a source stance requires a verified preset asset")
+    env, report = reference_gate(bundle, trajectory, stance_profile)
     (output / "reference-gate.json").write_text(json.dumps(report, allow_nan=False))
     print(json.dumps({"event": "reference-gate", **report}), flush=True)
     if not gate_allows_training(report["gate"]):
@@ -390,12 +417,17 @@ def main():
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
-    np.savez_compressed(replay_path, qpos=np.asarray(frames))
+    # Each delivered sample maps to one video frame. The reset state precedes
+    # the first control tick and would add an extra 1/50 s to the original.
+    replay_frames = frames[1:] if provenance.get("referenceAssetSha256") else frames
+    np.savez_compressed(replay_path, qpos=np.asarray(replay_frames))
     replay_sha = digest(replay_path)
     results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
                    sceneSha256=scene_hash, replay={"sha256": replay_sha},
                    zeroResidualRmseRad=report["gate"]["trackingRmseRad"],
                    zeroResidualFramesEvaluated=report["gate"]["framesEvaluated"])
+    if stance_profile:
+        results.update(stanceProfile=stance_profile, calibrationSha256=report["calibrationSha256"])
     video_path = output / "dance-replay.mp4"
     try:
         subprocess.run([sys.executable, str(ROOT / "engines/originman-dance-ppo/render_replay.py"),

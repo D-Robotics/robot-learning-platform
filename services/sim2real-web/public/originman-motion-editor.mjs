@@ -120,8 +120,12 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       catalogSource.textContent = catalog.catalogSource === 'built-in-example'
         ? '当前提供教学示例。已有动作文件可在「导入自己的轨迹」中使用。'
         : catalog.presets.length + ' 支预置 · ' + catalog.motions.length + ' 个动作';
-      preset.replaceChildren(...catalog.presets.map(({ id, displayName, seconds, bpm: tempo }) =>
-        new Option(displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
+      preset.replaceChildren(...catalog.presets.map(({ id, displayName, seconds, bpm: tempo, referenceMode }) =>
+        new Option(referenceMode === 'source-exact'
+          ? displayName + ' · 原版 ' + seconds.toFixed(2) + ' 秒'
+          : referenceMode === 'timing-preserved'
+            ? displayName + ' · 原节奏 ' + seconds.toFixed(2) + ' 秒'
+            : displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
       const categories = [...new Set(catalog.motions.map((item) => item.category))];
       category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
@@ -168,12 +172,21 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       const response = await api('originman-motion/preview', selected);
       if (current !== generation) return;
       preview = response.preview;
-      submission = { composition: selected, expectedTrajectorySha256: preview.trajectorySha256 };
+      submission = {
+        composition: selected,
+        expectedTrajectorySha256: preview.trajectorySha256,
+        ...(preview.stanceProfile && { expectedStanceProfile: preview.stanceProfile }),
+      };
       joint.replaceChildren(...preview.joints.map(({ name }, index) => new Option(name, index)));
       const mostActive = preview.joints.reduce((best, track, index, tracks) =>
         track.max - track.min > tracks[best].max - tracks[best].min ? index : best, 0);
       joint.value = String(mostActive);
-      status.textContent = preview.seconds.toFixed(2) + ' 秒 · ' + preview.frames + ' 帧 · 约 ' + preview.beats.toFixed(1) + ' 拍。';
+      const length = preview.seconds.toFixed(2) + ' 秒 · ' + preview.frames + ' 帧';
+      status.textContent = preview.referenceMode === 'source-exact'
+        ? length + ' · 保留交付轨迹的原始采样和节奏。'
+        : preview.referenceMode === 'timing-preserved'
+          ? length + ' · 保留交付节奏，动作幅度按仿真场景适配。'
+          : length + ' · 约 ' + preview.beats.toFixed(1) + ' 拍。';
       if (preview.adjustedTransitions?.length) {
         const count = preview.adjustedTransitions.length;
         status.textContent += ' 为满足关节速度上限，已延长 ' + count + ' 处过渡，共增加 ' +

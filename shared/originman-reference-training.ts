@@ -8,6 +8,7 @@ export const ORIGINMAN_REFERENCE_JOINTS = originmanReferenceCalibration.robot.jo
 const { fps, maxAbsRad, maxSpeedRadPerS } = originmanReferenceCalibration.trajectory;
 const ROUNDING_TOLERANCE = 1e-4;
 export const ORIGINMAN_REFERENCE_MAX_FRAMES = 12_000;
+export const ORIGINMAN_SOURCE_STANCE = 'source-neutral-v1';
 
 export interface OriginmanReferenceTrajectory {
   schemaVersion: 1;
@@ -22,7 +23,11 @@ export interface OriginmanMotionProvenance {
   displayName: string;
   blocks: { id: string; repeats: number; sha256: string }[];
   ranges: { id: string; from: number; to: number }[];
-  transitionSeconds: number;
+  transitionSeconds?: number;
+  referenceAssetSha256?: string;
+  referenceMode?: 'source-exact' | 'timing-preserved';
+  stanceProfile?: typeof ORIGINMAN_SOURCE_STANCE;
+  sourceSha256?: string;
   bpm: number;
   trajectorySha256: string;
   trajectoryDigestVersion?: 'originman-reference-f64be-v1';

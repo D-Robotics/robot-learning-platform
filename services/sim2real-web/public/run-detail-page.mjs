@@ -533,6 +533,11 @@ function renderRun(document, location, run, runId, evidenceIssue) {
     ['算法', config.algorithm],
     ['参考来源', config.originmanReferenceComposition?.displayName],
     ['参考配方', config.originmanReferenceComposition?.source],
+    ['轨迹编排', config.originmanReferenceComposition?.referenceMode === 'timing-preserved'
+      ? '保留交付节奏的仿真适配（50 Hz）'
+      : config.originmanReferenceComposition?.referenceAssetSha256 ? '交付原版（50 Hz）' : undefined],
+    ['原版源文件 SHA-256', config.originmanReferenceComposition?.sourceSha256],
+    ['仿真初始站姿', run.metrics?.originmanReference?.stanceProfile === 'source-neutral-v1' ? '交付原版站姿' : undefined],
     ['动作顺序', config.originmanReferenceComposition?.blocks?.map(({ id, repeats }) => id + ' × ' + repeats).join(' → ')],
     ['参考帧数', config.originmanReferenceSummary?.frames],
     ['训练预算', config.originmanReferenceSummary?.trainingSteps ?? config.originmanReference?.trainingSteps ?? danceConfigFor(run)?.trainingSteps ?? config.timesteps ?? config.trainingSteps ?? config.totalTimesteps],

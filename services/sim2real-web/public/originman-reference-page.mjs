@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=5';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=6';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
@@ -71,9 +71,14 @@ function currentReference() {
   return motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
 }
 
+function screeningKey(computeResourceId, digest, stanceProfile) {
+  return computeResourceId && digest ? [computeResourceId, digest, stanceProfile ?? 'default'].join('/') : '';
+}
+
 function currentScreenKey() {
-  const digest = motion.isUpload() ? trajectoryDigest : motion.submission()?.expectedTrajectorySha256;
-  return digest && worker.value ? worker.value + '/' + digest : '';
+  if (motion.isUpload()) return screeningKey(worker.value, trajectoryDigest);
+  const selected = motion.submission();
+  return screeningKey(worker.value, selected?.expectedTrajectorySha256, selected?.expectedStanceProfile);
 }
 
 function refresh() {
@@ -284,7 +289,9 @@ async function screenBatch(entries) {
         const digest = result.trajectorySha256 ?? result.referenceSha256;
         if (reference.expectedTrajectorySha256 && digest !== reference.expectedTrajectorySha256)
           throw Error('筛查轨迹与当前预览不一致，请重新预览。');
-        screenings.set(computeResourceId + '/' + digest, result.passed);
+        if (reference.expectedStanceProfile && result.stanceProfile !== reference.expectedStanceProfile)
+          throw Error('筛查站姿与当前预览不一致，请重新预览。');
+        screenings.set(screeningKey(computeResourceId, digest, result.stanceProfile), result.passed);
         if (result.passed) passed++;
         const location = result.failureLocation;
         const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
@@ -355,7 +362,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
   const trainingSteps = Number(byId('reference-steps').value);
   const numEnvs = Number(envs.value);
   const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
-    reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest]);
+    reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest, reference.expectedStanceProfile]);
   if (!attempt || attempt.key !== key) attempt = { key, id: crypto.randomUUID() };
   try {
     const { modelId } = await api('originman-reference/model', { computeResourceId });

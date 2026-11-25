@@ -107,3 +107,15 @@ export RDK_ORIGINMAN_DANCE_BUNDLE_DIR=/path/to/new-dance-bundle
 ```
 
 生成器用同一份场景计算 120 帧双腿逆运动学参考，保留原网格摘要，核对关节和策略维度。将环境变量配置到运行训练的 Worker 服务后重启该服务。
+
+对于已使用踝部包围盒的舞蹈素材包，可以从原始 ROS 模型包恢复踝俯仰关节的碰撞网格。
+输入的 URDF 或 Xacro 必须与原模型清单中的摘要匹配，两个踝部网格的字节也必须对应。
+
+```sh
+python engines/originman-dance-ppo/upgrade_ankle_bundle.py \
+  --bundle /path/to/existing-dance-bundle \
+  --source-urdf /path/to/originman_urdf/urdf/originman_urdf.urdf.xacro \
+  --out /path/to/new-dance-bundle
+```
+
+新包保留素材中的参考数组和网格文件，清单里的 `sceneDerivation` 记录父场景及原网格摘要。

@@ -7,6 +7,7 @@ import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
   ORIGINMAN_REFERENCE_TASK,
+  ORIGINMAN_SOURCE_STANCE,
   type OriginmanReferenceTrajectory,
 } from '../../shared/originman-reference-training.js';
 import type {
@@ -632,6 +633,8 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     qualityGatePassed,
     referenceSha256,
     sceneSha256,
+    stanceProfile,
+    calibrationSha256,
     checkpointEvaluations,
   } = value as Record<string, unknown>;
   if (
@@ -695,6 +698,9 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
       Math.abs(finalYawDeg) < limits.maxAbsFinalYawDeg,
     referenceSha256,
     sceneSha256,
+    ...(stanceProfile === ORIGINMAN_SOURCE_STANCE &&
+      typeof calibrationSha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(calibrationSha256) && { stanceProfile, calibrationSha256 }),
     ...(typeof checkpointEvaluations === 'number' &&
     Number.isSafeInteger(checkpointEvaluations) &&
     checkpointEvaluations >= 1 &&
@@ -1162,11 +1168,15 @@ export async function screenOriginmanReferenceWithWorker(input: {
   token?: string;
   accountId: string;
   trajectory: OriginmanReferenceTrajectory;
+  stanceProfile?: typeof ORIGINMAN_SOURCE_STANCE;
 }) {
   const url = new URL(normalizeComputeRunnerUrl(input.runnerUrl, 'server-runner'));
   url.pathname = url.pathname.slice(0, -'/train'.length) + '/originman-reference/screen';
   const token = safeToken(input.token);
-  const serialized = JSON.stringify(input.trajectory);
+  const serialized = JSON.stringify({
+    ...input.trajectory,
+    ...(input.stanceProfile && { stanceProfile: input.stanceProfile }),
+  });
   const response = await fetch(url, {
     method: 'POST',
     redirect: 'error',
@@ -1184,6 +1194,9 @@ export async function screenOriginmanReferenceWithWorker(input: {
   if (!response.ok || report?.ok !== true) throw Error('reference screen unavailable');
   const referenceSha256 = createHash('sha256').update(serialized).digest('hex');
   if (report.referenceSha256 !== referenceSha256) throw Error('invalid reference screen receipt');
+  if (input.stanceProfile && report.stanceProfile !== input.stanceProfile)
+    return { unsupportedStance: true } as const;
+  const stance = input.stanceProfile ? { stanceProfile: input.stanceProfile } : {};
   if (typeof report.invalid === 'string') {
     const violation = report.violation;
     const validViolation =
@@ -1200,6 +1213,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
       ) &&
       violation.minRad <= violation.maxRad;
     return {
+      ...stance,
       invalid: safeText(report.invalid, 300),
       ...(validViolation && {
         violation: {
@@ -1235,6 +1249,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
     throw Error('invalid reference screen receipt');
   }
   return {
+    ...stance,
     referenceSha256,
     trajectorySha256,
     sceneSha256: String(report.sceneSha256),

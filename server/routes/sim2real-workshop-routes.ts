@@ -159,6 +159,11 @@ export function registerSim2RealWorkshopRoutes(
             input.composition,
             input.expectedTrajectorySha256,
           );
+          if (
+            input.expectedStanceProfile !== undefined &&
+            input.expectedStanceProfile !== prepared.provenance.stanceProfile
+          )
+            throw new OriginmanMotionError('参考站姿已更新，请重新预览。', 409);
           trajectory = prepared.trajectory;
           composition = prepared.provenance;
         } else {
@@ -173,7 +178,7 @@ export function registerSim2RealWorkshopRoutes(
         );
       }
       const failureLocation = (frame: number | null) => {
-        if (!composition || frame === null) return {};
+        if (!composition?.ranges.length || frame === null) return {};
         const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
         if (block >= 0) return { blockNumber: block + 1, motionId: composition.ranges[block].id };
         const after = composition.ranges.findIndex(({ from }) => from >= frame);
@@ -210,6 +215,7 @@ export function registerSim2RealWorkshopRoutes(
         token: selected.runnerToken,
         accountId: owner ?? 'local-dev',
         trajectory,
+        stanceProfile: composition?.stanceProfile,
       }).catch(() => {
         throw new ExperimentError(
           'ORIGINMAN_REFERENCE_SCREEN_FAILED',
@@ -217,6 +223,13 @@ export function registerSim2RealWorkshopRoutes(
           503,
         );
       });
+      if (result.unsupportedStance) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_STANCE_UNAVAILABLE',
+          '所选 Worker 还不支持原版站姿标定，请换用云端仿真 Worker 或更新本地 Worker。',
+          409,
+        );
+      }
       if (result.busy) {
         throw new ExperimentError(
           'ORIGINMAN_REFERENCE_SCREEN_BUSY',
@@ -234,6 +247,7 @@ export function registerSim2RealWorkshopRoutes(
               framesExpected: trajectory.joint_pos.length,
               framesEvaluated: 0,
               firstFailedFrame: frame,
+              ...(result.stanceProfile && { stanceProfile: result.stanceProfile }),
               limitViolation: result.violation,
               failureLocation: failureLocation(frame),
               message: `第 ${frame} 帧的 ${joint} 目标角度超出所选场景的执行器限位。`,

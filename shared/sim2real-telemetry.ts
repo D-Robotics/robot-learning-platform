@@ -127,6 +127,8 @@ export interface Sim2RealRunMetrics {
     qualityGatePassed: boolean;
     referenceSha256: string;
     sceneSha256: string;
+    stanceProfile?: 'source-neutral-v1';
+    calibrationSha256?: string;
   };
   /**
    * True only when the training backend actually ran on CUDA. A requested but

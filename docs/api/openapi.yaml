@@ -277,7 +277,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/OriginmanMotionComposition" }
       responses:
-        "200": { description: Frame count, duration, extended transitions, curve samples, and trajectory SHA-256 }
+        "200": { description: Frame count, duration, original-reference mode when available, extended transitions, curve samples, and trajectory SHA-256 }
         "400": { description: Invalid or unknown composition }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "422": { description: The selected trajectory exceeded range or motion limits }
@@ -329,6 +329,7 @@ paths:
                 trajectory: { $ref: "#/components/schemas/OriginmanReferenceTrajectory" }
                 composition: { $ref: "#/components/schemas/OriginmanMotionComposition" }
                 expectedTrajectorySha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                expectedStanceProfile: { type: string, enum: [source-neutral-v1] }
                 computeResourceId: { type: string }
       responses:
         "200": { description: Screen result with optional physical failure reasons or actuator limit violation bound to the checked trajectory }

@@ -4961,12 +4961,18 @@ export function createSim2RealRouter(
           composition: recipe,
           trajectory,
           expectedTrajectorySha256,
+          expectedStanceProfile,
           ...trainingOptions
         } = draft as Record<string, unknown>;
         try {
           if (body.taskId !== ORIGINMAN_REFERENCE_TASK || trajectory !== undefined)
             throw new OriginmanMotionError('编排与上传轨迹只能选择其中一种。');
           const prepared = await preparePinnedOriginmanMotion(recipe, expectedTrajectorySha256);
+          if (
+            expectedStanceProfile !== undefined &&
+            expectedStanceProfile !== prepared.provenance.stanceProfile
+          )
+            throw new OriginmanMotionError('参考站姿已更新，请重新预览。', 409);
           composition = prepared.provenance;
           body.training = {
             ...(body.training as Record<string, unknown>),
