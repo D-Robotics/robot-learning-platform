@@ -1,5 +1,6 @@
-export function mountOriginmanMotion({ api, changed, initialMode }) {
+export function mountOriginmanMotion({ api, changed, initialMode, document = globalThis.document }) {
   const byId = (name) => document.getElementById('reference-' + name);
+  const { Option } = document.defaultView;
   const mode = byId('mode');
   const controls = byId('motion-panel');
   const catalogSource = byId('motion-source');
@@ -14,6 +15,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   const category = byId('motion-category');
   const add = byId('motion-add');
   const sequence = byId('motion-sequence');
+  const draftStatus = byId('motion-draft-status');
   const bpm = byId('motion-bpm');
   const transition = byId('motion-transition');
   const prepare = byId('motion-prepare');
@@ -28,6 +30,8 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   let generation = 0;
   let loading = false;
   let locked = false;
+  let draftKey;
+  let draftLoaded = false;
   const blocks = [];
   mode.value = ['preset', 'blocks'].includes(initialMode) ? initialMode : 'upload';
 
@@ -37,6 +41,55 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     : blocks.length && bpm.value && bpm.validity.valid && transition.value && transition.validity.valid
       ? { blocks: blocks.map(({ id, repeats }) => ({ id, repeats })), bpm: Number(bpm.value), transitionSeconds: Number(transition.value) }
       : null;
+
+  function saveDraft() {
+    if (!draftKey || !draftLoaded) return;
+    try {
+      const storage = document.defaultView.localStorage;
+      if (blocks.length) {
+        storage.setItem(draftKey, JSON.stringify({
+          blocks: blocks.map(({ id, repeats }) => ({ id, repeats })),
+          bpm: Number(bpm.value),
+          transitionSeconds: Number(transition.value),
+        }));
+      } else {
+        storage.removeItem(draftKey);
+      }
+      draftStatus.textContent = blocks.length ? '编排草稿已保存在此设备。' : '';
+    } catch {
+      draftStatus.textContent = '此设备无法保存草稿。请保持此页面打开。';
+    }
+  }
+
+  function restoreDraft() {
+    if (!draftKey || draftLoaded) return;
+    draftLoaded = true;
+    try {
+      const saved = JSON.parse(document.defaultView.localStorage.getItem(draftKey));
+      if (!Array.isArray(saved?.blocks) || saved.blocks.length > 128) return;
+      const motions = new Map(catalog.motions.map((motion) => [motion.id, motion]));
+      for (const block of saved.blocks) {
+        const motion = motions.get(block?.id);
+        if (motion && Number.isInteger(block.repeats) && block.repeats >= 1 && block.repeats <= 8) {
+          blocks.push({ id: motion.id, motion, repeats: block.repeats });
+        }
+      }
+      for (const [input, value] of [[bpm, saved.bpm], [transition, saved.transitionSeconds]]) {
+        if (!Number.isFinite(value)) continue;
+        const initialValue = input.value;
+        input.value = String(value);
+        if (!input.validity.valid) input.value = initialValue;
+      }
+      if (blocks.length) draftStatus.textContent = '已恢复草稿。提交前请重新预览和筛查。';
+      if (blocks.length !== saved.blocks.length) {
+        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览和筛查。';
+      }
+      renderSequence();
+      if (mode.value === 'blocks') invalidate();
+    } catch {
+      draftStatus.textContent = '未能读取此设备上的草稿。';
+    }
+  }
 
   function setPrepareState() {
     prepare.disabled = locked || !recipe() || isUpload() ||
@@ -111,10 +164,16 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       const repeats = document.createElement('input');
       Object.assign(repeats, { type: 'number', min: '1', max: '8', value: block.repeats, disabled: locked });
       repeats.setAttribute('aria-label', '第 ' + (index + 1) + ' 段重复次数');
+      const updateRepeats = () => {
+        if (!repeats.value || !repeats.validity.valid || Number(repeats.value) === block.repeats) return;
+        block.repeats = Number(repeats.value);
+        saveDraft();
+        invalidate();
+      };
+      repeats.addEventListener('input', updateRepeats);
       repeats.addEventListener('change', () => {
         if (!repeats.value || !repeats.validity.valid) repeats.value = block.repeats;
-        block.repeats = Number(repeats.value);
-        invalidate();
+        updateRepeats();
       });
       const button = (name, disabled, onClick) => {
         const control = document.createElement('button');
@@ -123,6 +182,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
         control.addEventListener('click', () => {
           onClick();
           renderSequence();
+          saveDraft();
           invalidate();
           (sequence.children[Math.min(index, blocks.length - 1)]?.querySelector('input') ?? add).focus();
         });
@@ -166,6 +226,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
             : displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
       const categories = [...new Set(catalog.motions.map((item) => item.category))];
       category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
+      restoreDraft();
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
       populateActions();
       setPrepareState();
@@ -190,7 +251,11 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
 
   mode.addEventListener('change', showMode);
   retry.addEventListener('click', () => loadCatalog(true));
-  for (const input of [preset, bpm, transition]) input.addEventListener('change', invalidate);
+  preset.addEventListener('change', invalidate);
+  for (const input of [bpm, transition]) input.addEventListener('input', () => {
+    if (input.value && input.validity.valid) saveDraft();
+    invalidate();
+  });
   search.addEventListener('input', populateActions);
   category.addEventListener('change', populateActions);
   add.addEventListener('click', () => {
@@ -198,6 +263,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     if (!motion || locked || blocks.length >= 128) return;
     blocks.push({ id: motion.id, motion, repeats: 1 });
     renderSequence();
+    saveDraft();
     invalidate();
   });
   joint.addEventListener('change', plot);
@@ -247,7 +313,10 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   });
 
   return {
-    start: showMode,
+    start(scope) {
+      if (/^[a-f0-9]{64}$/.test(scope ?? '')) draftKey = 'originman-choreography.v1.' + scope;
+      return showMode();
+    },
     isUpload,
     submission: () => isUpload() ? undefined : submission,
     setLocked(value) {

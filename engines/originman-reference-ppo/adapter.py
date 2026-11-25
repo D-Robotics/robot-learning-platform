@@ -333,15 +333,17 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                       batch_size=128, n_epochs=4, learning_rate=3e-4,
                       policy_kwargs={"net_arch": [128, 128], "log_std_init": -2.8})
         checkpoints = []
+        best = None
+        candidate_weights = output / "candidate.zip"
+        candidate_policy = output / "candidate.onnx"
         progress = WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE)
         while learner.num_timesteps < budget:
             learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
                           reset_num_timesteps=False,
                           callback=progress)
-            learner.save(output / "final")
-            policy_path = output / "policy.onnx"
-            policy_sha = write_onnx(output / "final.zip", policy_path, 96)
-            session = ReferenceEvaluator(onnx.load(policy_path))
+            learner.save(candidate_weights)
+            policy_sha = write_onnx(candidate_weights, candidate_policy, 96)
+            session = ReferenceEvaluator(onnx.load(candidate_policy))
             parity_error = 0.0
 
             def predict(observation):
@@ -361,12 +363,21 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                     raise ValueError("exported ONNX failed the reference policy parity check")
             checkpoints.append({"steps": learner.num_timesteps, "policySha256": policy_sha,
                                 **result})
+            score = (result["qualityGatePassed"], result["framesEvaluated"],
+                     -result["trackingRmseRad"], -result["maxTiltDeg"])
+            if best is None or score > best[0]:
+                candidate_weights.replace(output / "final.zip")
+                candidate_policy.replace(output / "policy.onnx")
+                best = (score, policy_sha, {**result, "selectedCheckpointSteps": learner.num_timesteps}, frames)
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
             if result["qualityGatePassed"] and not ranges:
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
+        candidate_weights.unlink(missing_ok=True)
+        candidate_policy.unlink(missing_ok=True)
+        _, policy_sha, result, frames = best
         return str(learner.device), device_name, learner.num_timesteps, policy_sha, result, frames, checkpoints
     finally:
         sim.close()

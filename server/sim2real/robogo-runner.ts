@@ -604,7 +604,10 @@ function safeReferenceSections(value: unknown) {
   return rows;
 }
 
-function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanReference'] {
+function safeReferenceMetrics(
+  value: unknown,
+  trainingSteps: number | undefined,
+): Sim2RealRunMetrics['originmanReference'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const { replay, video: safeVideo } = safeDanceMetrics(value) ?? {};
   const rawVideo = (value as Record<string, unknown>).video as Record<string, unknown> | undefined;
@@ -636,6 +639,7 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     stanceProfile,
     calibrationSha256,
     checkpointEvaluations,
+    selectedCheckpointSteps,
   } = value as Record<string, unknown>;
   if (
     typeof framesExpected !== 'number' ||
@@ -707,6 +711,11 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     checkpointEvaluations <= 64
       ? { checkpointEvaluations }
       : {}),
+    ...(typeof selectedCheckpointSteps === 'number' &&
+      selectedCheckpointSteps >= 8192 &&
+      selectedCheckpointSteps % 4096 === 0 &&
+      trainingSteps !== undefined &&
+      selectedCheckpointSteps <= trainingSteps && { selectedCheckpointSteps }),
     ...(replay && { replay }),
     ...(video && { video }),
   };
@@ -764,6 +773,7 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     : undefined;
   const originmanDance =
     engine === 'originman-dance-ppo' ? safeDanceMetrics(source.originmanDance) : undefined;
+  const trainingSteps = bounded('trainingSteps', 1, 10_000_000);
   return {
     contractValid,
     observationSize,
@@ -806,11 +816,9 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     ...(workshop ? { originmanWorkshop: workshop } : {}),
     ...(originmanDance ? { originmanDance } : {}),
     ...(engine === ORIGINMAN_REFERENCE_ENGINE
-      ? { originmanReference: safeReferenceMetrics(source.originmanReference) }
+      ? { originmanReference: safeReferenceMetrics(source.originmanReference, trainingSteps) }
       : {}),
-    ...(bounded('trainingSteps', 1, 10_000_000) == null
-      ? {}
-      : { trainingSteps: bounded('trainingSteps', 1, 10_000_000) }),
+    ...(trainingSteps == null ? {} : { trainingSteps }),
     ...(trainingDevice ? { trainingDevice } : {}),
     ...(trainingDeviceName ? { trainingDeviceName } : {}),
     ...(bounded('trainChunkMse', 0, 1_000_000) == null

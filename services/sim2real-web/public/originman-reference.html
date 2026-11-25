@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-7"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-8"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -47,6 +47,7 @@
               <p><label>动作 <select id="reference-motion-action" disabled></select></label>
               <button id="reference-motion-add" type="button" disabled>添加到编排</button></p>
               <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
+              <p id="reference-motion-draft-status" role="status"></p>
               <details id="reference-motion-unavailable" class="experiment-details" hidden>
                 <summary id="reference-motion-unavailable-summary">暂不可训练的素材</summary>
                 <ul id="reference-motion-unavailable-list"></ul>
@@ -92,7 +93,8 @@
           <form id="reference-form">
             <p><label for="reference-worker">训练 Worker</label>
               <select id="reference-worker" required aria-describedby="reference-worker-hint"><option value="">请选择</option></select>
-              <button id="reference-worker-check" type="button" disabled>检查连接</button></p>
+              <button id="reference-worker-check" type="button" disabled>检查连接</button>
+              <button id="reference-worker-refresh" type="button" disabled>刷新负载</button></p>
             <p><label for="reference-steps">预算</label>
               <select id="reference-steps">
                 <option value="8192">快检 · 8,192 步</option>
@@ -115,7 +117,7 @@
               <p id="reference-screen-status" role="status" aria-live="polite"></p>
               <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
             </details>
-            <p>标准与长训每 32,768 步评测一次。预置和自由编排跑完所选预算。上传轨迹可在完整度、倾角和偏航达标后提前结束。</p>
+            <p>标准与长训每 32,768 步评测一次，并用评测最佳的检查点生成回放和策略。预置和自由编排跑完所选预算。上传轨迹达标后可提前结束。</p>
             <p id="reference-screen-blocker" role="status" hidden>当前轨迹未通过所选 Worker 的物理筛查。请调整轨迹或重新筛查后再提交。</p>
             <p id="reference-training-error" class="experiment-error" role="alert" hidden></p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>

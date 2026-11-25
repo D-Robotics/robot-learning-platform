@@ -144,7 +144,7 @@ const jobs = new Map();
 const pendingJobWrites = new WeakMap();
 const queuedJobs = [];
 const activeJobs = new Set();
-let screening = null;
+let screening = false;
 let workerShuttingDown = false;
 const jobChildren = new Map();
 const cancellationBarriers = new Map();
@@ -1136,15 +1136,12 @@ async function pumpQueue() {
   }
   while (
     !workerShuttingDown &&
-    activeJobs.size + Number(Boolean(screening)) + Number(Boolean(preflightInFlight)) <
-      limits.total &&
+    activeJobs.size + Number(Boolean(preflightInFlight)) < limits.total &&
     queuedJobs.length
   ) {
     // A second job from a running account must not block the next eligible account.
     const index = queuedJobs.findIndex(
-      (job) =>
-        job.status === 'queued' &&
-        activeAccountJobs(job.accountId) + Number(screening === job.accountId) < limits.perAccount,
+      (job) => job.status === 'queued' && activeAccountJobs(job.accountId) < limits.perAccount,
     );
     if (index < 0) return;
     const [job] = queuedJobs.splice(index, 1);
@@ -1290,23 +1287,19 @@ async function handleTrain(request, response) {
 }
 
 async function handleReferenceScreen(request, response) {
-  const owner = accountId(request, {});
+  accountId(request, {});
   await ensureJobsLoaded();
   const engine = engineFor({ training: { engine: REFERENCE_ENGINE } });
   if (!engineExecutableReady(engine.executable)) {
     throw fail('reference engine executable is unavailable', 503, 'engine_executable_unavailable');
   }
-  const limits = concurrencyLimits();
-  if (
-    preflightInFlight ||
-    screening ||
-    queuedJobs.length ||
-    activeJobs.size >= limits.total ||
-    activeAccountJobs(owner) >= limits.perAccount
-  ) {
+  concurrencyLimits();
+  // Reference screening uses a separate, single CPU process so a user can
+  // validate a recipe and queue training even when all GPU slots are occupied.
+  if (preflightInFlight || screening) {
     throw fail('reference worker is busy', 409, 'reference_screen_busy');
   }
-  screening = owner;
+  screening = true;
   try {
     const trajectory = await bodyJson(request, MAX_REFERENCE_BODY);
     const input = JSON.stringify(trajectory);
@@ -1315,12 +1308,15 @@ async function handleReferenceScreen(request, response) {
         detached: process.platform !== 'win32',
         cwd: DATA_DIR,
         stdio: ['pipe', 'pipe', 'ignore'],
-        env: childEnvironment({
-          dir: DATA_DIR,
-          runId: 'reference-screen',
-          contractId: 'reference-screen',
-          profile: 'smoke',
-        }),
+        env: {
+          ...childEnvironment({
+            dir: DATA_DIR,
+            runId: 'reference-screen',
+            contractId: 'reference-screen',
+            profile: 'smoke',
+          }),
+          CUDA_VISIBLE_DEVICES: '',
+        },
       });
       activeChildren.add(child);
       let stdout = '';
@@ -1352,7 +1348,7 @@ async function handleReferenceScreen(request, response) {
       referenceSha256: createHash('sha256').update(input).digest('hex'),
     });
   } finally {
-    screening = null;
+    screening = false;
     void pumpQueue();
   }
 }

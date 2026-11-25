@@ -789,6 +789,14 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
       }))`,
       ],
     },
+    'originman-reference-ppo': {
+      executable: process.execPath,
+      args: [
+        '-e',
+        "if (process.env.CUDA_VISIBLE_DEVICES !== '') process.exit(1); console.log(JSON.stringify({ gate: { completed: true } }));",
+        '--',
+      ],
+    },
   });
   const recoveryPreflight = async (owner) => {
     const response = await fetch(workerBase + '/engines/originman-recovery/preflight', {
@@ -838,6 +846,18 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   assert.equal(poolHealth.maxConcurrentJobsPerAccount, 1);
   assert.equal(poolHealth.activeJobs, 2);
   assert.equal(poolHealth.queuedJobs, 2);
+  const screenWhileFull = await fetch(workerBase + '/originman-reference/screen', {
+    method: 'POST',
+    headers: {
+      'x-sim2real-account': 'charlie',
+      authorization: 'Bearer worker-test-token',
+      'content-type': 'application/json',
+    },
+    body: '{}',
+  });
+  assert.equal(screenWhileFull.status, 200);
+  assert.equal((await screenWhileFull.json()).gate.completed, true);
+  assert.equal((await (await fetch(workerBase + '/healthz')).json()).activeJobs, 2);
   const results = await Promise.all([
     awaitTerminal(aliceFirst),
     awaitTerminal(aliceNext),

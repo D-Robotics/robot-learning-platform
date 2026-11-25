@@ -2354,52 +2354,6 @@
       </div>
     </dialog>
 
-    <dialog class="onboarding-card" id="originman-course-guide" aria-labelledby="originman-course-guide-title">
-      <header class="onboarding-card-top">
-        <h2 id="originman-course-guide-title">OriginMan 课程指引</h2>
-        <form method="dialog">
-          <button class="button button-ghost button-small" type="submit">关闭</button>
-        </form>
-      </header>
-      <p id="originman-course-progress" role="status">第 1 / 8 步</p>
-      <section data-course-step>
-        <h3 tabindex="-1" autofocus>确认账号与本组编号</h3>
-        <p>登录自己的账号，按讲师要求记录本组编号。小组编号用于区分课程实验，实验访问权限由账号控制。先观看讲师参考，确认机器人受推后的恢复目标。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">配置本次 SAC 训练</h3>
-        <p>在课堂中选择支持受扰恢复的执行资源，再选训练预算。主实验为 50 万步，短训练用于检查流程。需要调整训练步数、随机种子或训练侧推上限时，在自定义训练参数中配置。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">提交一次，保留原 Run</h3>
-        <p>先确认本轮算力和配方，再提交训练。保留 Run，查看实际步数、奖励和日志。提交响应不明确时，使用课程页面恢复原请求，避免重复训练。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">评测所选训练权重</h3>
-        <p>查看本轮同源评测，核对来源 Run、策略摘要与评测条件。在执行资源支持时，比较原 PD、调参后反馈、冻结输出与实时强化学习策略在固定条件下的表现。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">检查收益、退化和回放</h3>
-        <p>查看固定条件的恢复数、逐条件退化、身体倾角与髋踝修正，再播放本轮视频。保留未达标结果。导出后在本机打开，核对曲线与视频。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">从原实验复制参数，在新组复训</h3>
-        <p>先查看退化条件，再从本轮开启参数对照。一次只改一个训练变量，确认配方差异后提交。原实验和原权重可继续查阅。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">对同条件复评的两轮结果逐项比较</h3>
-        <p>选择原训练和复训各自的评测，核对模型契约、策略 SHA 和评测协议，再查看恢复数、改善与退化。缺少协议摘要时，对两轮原权重各复评一次。</p>
-      </section>
-      <section data-course-step hidden>
-        <h3 tabindex="-1">需要时切换课前验收结果</h3>
-        <p>训练未完成或效果不足时，可以回看课堂的讲师参考。留存本组 Run 与失败原因，并核对参考实验的来源。</p>
-      </section>
-      <div class="model-actions">
-        <button class="button button-ghost button-small" id="originman-course-previous" type="button" disabled>上一步</button>
-        <button class="button button-primary button-small" id="originman-course-next" type="button">下一步</button>
-      </div>
-    </dialog>
-
     <!--
       Keep these as classic scripts instead of ES modules.  The standalone
       artifact is also opened directly from file:// during demos/review.  A
@@ -2421,6 +2375,6 @@
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-20"></script>
-    <script defer src="./onboarding.js?v=onboarding-10"></script>
+    <script defer src="./onboarding.js?v=onboarding-11"></script>
   </body>
 </html>
