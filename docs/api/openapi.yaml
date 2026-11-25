@@ -263,7 +263,7 @@ paths:
       operationId: listOriginManMotion
       summary: Read the configured OriginMan preset and motion IDs without submitting a run
       responses:
-        "200": { description: Presets, motions, source, and composition limits }
+        "200": { description: Presets, motions with optional poseOnly flag, source, and composition limits }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "503": { description: The configured catalog is unavailable }
   /api/v1/duck/originman-motion/preview:
@@ -277,7 +277,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/OriginmanMotionComposition" }
       responses:
-        "200": { description: Frame count, duration, curve samples, and trajectory SHA-256 }
+        "200": { description: Frame count, duration, extended transitions, curve samples, and trajectory SHA-256 }
         "400": { description: Invalid or unknown composition }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "422": { description: The selected trajectory exceeded range or motion limits }
@@ -331,7 +331,7 @@ paths:
                 expectedTrajectorySha256: { type: string, pattern: "^[a-f0-9]{64}$" }
                 computeResourceId: { type: string }
       responses:
-        "200": { description: Screen result or limit violation bound to the checked trajectory }
+        "200": { description: Screen result with optional physical failure reasons or actuator limit violation bound to the checked trajectory }
         "400": { description: Invalid trajectory }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "409": { description: Compatible Worker is unavailable or busy, or preview has changed }
@@ -3825,7 +3825,7 @@ components:
                   id: { type: string }
                   repeats: { type: integer, minimum: 1, maximum: 8 }
             bpm: { type: number, minimum: 80, maximum: 140 }
-            transitionSeconds: { type: number, minimum: 0, maximum: 2 }
+            transitionSeconds: { type: number, minimum: 0, maximum: 2, description: Minimum duration of each blend. The compiler may extend a blend to respect the joint speed limit. }
     OriginmanReferenceTrajectory:
       type: object
       required: [schemaVersion, fps, joint_names, joint_pos, joint_vel]

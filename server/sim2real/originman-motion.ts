@@ -17,6 +17,7 @@ import {
 const FPS = 50;
 const MAX_FRAMES = FPS * 90;
 const MAX_BLOCKS = 128;
+const SPEED_LIMIT = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const demo = originmanReferenceExample();
@@ -38,6 +39,7 @@ type Motion = {
   frames: number;
   sha256: string;
   clipped: boolean;
+  poseOnly?: true;
 };
 type Block = { id: string; repeats: number };
 type Preset = {
@@ -132,7 +134,15 @@ async function loadCatalog(): Promise<Catalog> {
     )
       throw Error('Invalid catalog schema');
     const safeMotions = motions.map((entry): Motion => {
-      const { id, displayName, category, frames, sha256, clipped = false } = record(entry);
+      const {
+        id,
+        displayName,
+        category,
+        frames,
+        sha256,
+        clipped = false,
+        poseOnly,
+      } = record(entry);
       if (
         typeof id !== 'string' ||
         !ID.test(id) ||
@@ -144,7 +154,8 @@ async function loadCatalog(): Promise<Catalog> {
         frames > MAX_FRAMES ||
         typeof sha256 !== 'string' ||
         !SHA256.test(sha256) ||
-        typeof clipped !== 'boolean'
+        typeof clipped !== 'boolean' ||
+        (poseOnly !== undefined && typeof poseOnly !== 'boolean')
       )
         throw Error('Invalid motion metadata');
       return {
@@ -154,6 +165,7 @@ async function loadCatalog(): Promise<Catalog> {
         frames,
         sha256,
         clipped,
+        ...(poseOnly === true && { poseOnly }),
       };
     });
     const safePresets = presets.map((entry): Preset => {
@@ -187,7 +199,7 @@ async function loadCatalog(): Promise<Catalog> {
   }
 }
 
-function plannedFrames(sequence: Block[], transitionSeconds: number, catalog: Catalog) {
+function minimumFrames(sequence: Block[], transitionSeconds: number, catalog: Catalog) {
   const framesById = new Map(catalog.motions.map(({ id, frames }) => [id, frames]));
   const count = sequence.reduce((sum, item) => sum + item.repeats, 0);
   const frames = sequence.reduce((sum, item) => sum + framesById.get(item.id)! * item.repeats, 0);
@@ -206,7 +218,7 @@ export async function listOriginmanMotion() {
       id: preset.id,
       displayName: preset.displayName,
       bpm: preset.bpm,
-      seconds: plannedFrames(preset.blocks, preset.transitionSeconds, catalog) / FPS,
+      seconds: minimumFrames(preset.blocks, preset.transitionSeconds, catalog) / FPS,
       blocks: preset.blocks.reduce((sum, block) => sum + block.repeats, 0),
     })),
     limits: { maxBlocks: MAX_BLOCKS, maxSeconds: MAX_FRAMES / FPS, maxRepeats: 8 },
@@ -251,14 +263,17 @@ export async function prepareOriginmanMotion(input: unknown) {
   const tempo = preset?.bpm ?? bpm;
   if (typeof tempo !== 'number' || !Number.isFinite(tempo) || tempo < 80 || tempo > 140)
     throw new OriginmanMotionError('节奏须在 80–140 BPM 之间。');
-  if (plannedFrames(selected, seconds, catalog) > MAX_FRAMES)
+  const minimumTotal = minimumFrames(selected, seconds, catalog);
+  if (minimumTotal > MAX_FRAMES)
     throw new OriginmanMotionError('编排总时长不能超过 90 秒，请减少动作或重复次数。');
 
   const motions = new Map(catalog.motions.map((motion) => [motion.id, motion]));
   const positions: number[][] = [];
   const ranges: { id: string; from: number; to: number }[] = [];
   const cache = new Map<string, OriginmanReferenceTrajectory>();
-  const transitionFrames = Math.round(seconds * FPS);
+  const requestedFrames = Math.round(seconds * FPS);
+  let extraFrames = 0;
+  const adjustedTransitions: { afterBlock: number; seconds: number }[] = [];
   for (const item of selected) {
     const metadata = motions.get(item.id)!;
     let clip = cache.get(item.id);
@@ -270,6 +285,24 @@ export async function prepareOriginmanMotion(input: unknown) {
       const last = positions.at(-1);
       if (last) {
         const first = clip.joint_pos[0];
+        const maxDelta = Math.max(...first.map((angle, joint) => Math.abs(angle - last[joint])));
+        // The derivative of cubic smoothstep peaks at 1.5. A direct step fits
+        // when the entire change can be made in a single 50 Hz sample.
+        const requiredFrames =
+          maxDelta * FPS <= SPEED_LIMIT ? 1 : Math.ceil((maxDelta * 1.5 * FPS) / SPEED_LIMIT);
+        const transitionFrames = Math.max(requestedFrames, requiredFrames);
+        const added = Math.max(0, transitionFrames - 1) - Math.max(0, requestedFrames - 1);
+        if (added > 0) {
+          extraFrames += added;
+          if (minimumTotal + extraFrames > MAX_FRAMES) {
+            const previous = motions.get(ranges.at(-1)!.id)!;
+            throw new OriginmanMotionError(
+              `「${previous.displayName}」到「${metadata.displayName}」延长过渡后超过 90 秒。请减少片段或重复次数。`,
+              422,
+            );
+          }
+          adjustedTransitions.push({ afterBlock: ranges.length, seconds: transitionFrames / FPS });
+        }
         for (let index = 1; index < transitionFrames; index++) {
           const t = index / transitionFrames;
           const weight = t * t * (3 - 2 * t);
@@ -283,7 +316,7 @@ export async function prepareOriginmanMotion(input: unknown) {
       ranges.push({ id: item.id, from, to: positions.length });
     }
   }
-  const speedLimit = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
+
   if (positions.length < FPS)
     throw new OriginmanMotionError('编排至少需要 1 秒，请增加片段或重复次数。', 422);
   const velocities = positions.map((row, index) => {
@@ -292,11 +325,13 @@ export async function prepareOriginmanMotion(input: unknown) {
     return row.map((_, joint) => {
       const speed = ((positions[after][joint] - positions[before][joint]) * FPS) / (after - before);
       // Match the trajectory validator's tolerance for sampled position deltas.
-      return Math.abs(speed) <= speedLimit + 1e-4
-        ? Math.max(-speedLimit, Math.min(speedLimit, Number(speed.toFixed(8))))
+      return Math.abs(speed) <= SPEED_LIMIT + 1e-4
+        ? Math.max(-SPEED_LIMIT, Math.min(SPEED_LIMIT, Number(speed.toFixed(8))))
         : speed;
     });
   });
+  if (selected.every(({ id }) => motions.get(id)?.poseOnly))
+    throw new OriginmanMotionError('定格片段需要与至少一个动态动作搭配。', 422);
   let trajectory;
   try {
     trajectory = validateOriginmanReferenceTrajectory({
@@ -320,7 +355,7 @@ export async function prepareOriginmanMotion(input: unknown) {
     trajectorySha256,
     trajectoryDigestVersion: REFERENCE_DIGEST_VERSION,
   };
-  return { trajectory, provenance };
+  return { trajectory, provenance, adjustedTransitions, extraTransitionSeconds: extraFrames / FPS };
 }
 
 export async function preparePinnedOriginmanMotion(recipe: unknown, expectedDigest: unknown) {
@@ -353,6 +388,8 @@ export function summarizeOriginmanMotion(
     seconds: frames / trajectory.fps,
     bpm: provenance.bpm,
     beats: ((frames / trajectory.fps) * provenance.bpm) / 60,
+    extraTransitionSeconds: prepared.extraTransitionSeconds,
+    adjustedTransitions: prepared.adjustedTransitions,
     trajectorySha256: provenance.trajectorySha256,
     trajectoryDigestVersion: provenance.trajectoryDigestVersion,
     frameIndices: sampleFrames,

@@ -85,10 +85,13 @@ def main():
                 raise ValueError(f"{key}: {error}") from error
             data = encode(trajectory)
             (stage / (key + ".json")).write_bytes(data)
+            positions = np.asarray(trajectory["joint_pos"])
+            pose_only = not np.any(positions != positions[0])
             converted.append({
                 "id": key, "displayName": motion["displayName"], "category": motion["category"],
                 "frames": len(trajectory["joint_pos"]), "sha256": hashlib.sha256(data).hexdigest(),
                 "clipped": motion.get("clipped", False),
+                **({"poseOnly": True} if pose_only else {}),
             })
         (stage / "catalog.json").write_bytes(encode({
             "schemaVersion": 1, "motions": converted, "presets": source["presets"],

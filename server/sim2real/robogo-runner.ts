@@ -1126,6 +1126,37 @@ export async function requestRobogoTraining(input: {
   }
 }
 
+function referenceFailure(value: unknown) {
+  const entry = value as Partial<{
+    nonFootContacts: unknown;
+    tilt: { actualDeg: number; limitDeg: number };
+    height: { actualM: number; limitM: number };
+  }> | null;
+  if (!entry || typeof entry !== 'object') return undefined;
+  const names = entry.nonFootContacts;
+  const nonFootContacts =
+    Array.isArray(names) &&
+    names.length > 0 &&
+    names.length <= 64 &&
+    names.every((name) => typeof name === 'string' && /^[\w.-]{1,80}$/.test(name))
+      ? (names as string[])
+      : undefined;
+  const { tilt, height } = entry;
+  return {
+    ...(nonFootContacts && { nonFootContacts }),
+    ...(tilt &&
+      [tilt.actualDeg, tilt.limitDeg].every((n) => Number.isFinite(n) && n >= 0 && n <= 180) &&
+      tilt.actualDeg >= tilt.limitDeg && {
+        tilt: { actualDeg: tilt.actualDeg, limitDeg: tilt.limitDeg },
+      }),
+    ...(height &&
+      [height.actualM, height.limitM].every((n) => Number.isFinite(n) && Math.abs(n) <= 10) &&
+      height.actualM < height.limitM && {
+        height: { actualM: height.actualM, limitM: height.limitM },
+      }),
+  };
+}
+
 export async function screenOriginmanReferenceWithWorker(input: {
   runnerUrl: string;
   token?: string;
@@ -1212,6 +1243,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
     framesEvaluated: Number(gate.framesEvaluated),
     maxTiltDeg: Number(gate.maxTiltDeg),
     firstFailedFrame: gate.completed ? null : Number(gate.firstFailedFrame),
+    ...(!gate.completed && { failure: referenceFailure(gate.failure) }),
     passed:
       gate.completed &&
       gate.framesEvaluated === gate.framesExpected &&

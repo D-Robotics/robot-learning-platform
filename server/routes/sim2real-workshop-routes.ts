@@ -175,8 +175,16 @@ export function registerSim2RealWorkshopRoutes(
       const failureLocation = (frame: number | null) => {
         if (!composition || frame === null) return {};
         const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
-        return block >= 0
-          ? { blockNumber: block + 1, motionId: composition.ranges[block].id }
+        if (block >= 0) return { blockNumber: block + 1, motionId: composition.ranges[block].id };
+        const after = composition.ranges.findIndex(({ from }) => from >= frame);
+        return after > 0
+          ? {
+              betweenBlocks: true,
+              fromBlockNumber: after,
+              toBlockNumber: after + 1,
+              fromMotionId: composition.ranges[after - 1].id,
+              toMotionId: composition.ranges[after].id,
+            }
           : { betweenBlocks: true };
       };
       const selected = await getSim2RealComputeResourceSecret(

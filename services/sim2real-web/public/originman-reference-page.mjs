@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=4';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=5';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
@@ -288,13 +288,25 @@ async function screenBatch(entries) {
         if (result.passed) passed++;
         const location = result.failureLocation;
         const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
-          : location?.betweenBlocks ? '，发生在两段过渡处' : '';
+          : location?.fromBlockNumber
+            ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
+            : location?.betweenBlocks ? '，发生在两段过渡处' : '';
         const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
         const violation = result.limitViolation;
         if (violation) {
           row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
         } else {
           row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
+          const reasons = result.failure;
+          if (reasons?.nonFootContacts?.length) {
+            row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
+          }
+          if (reasons?.tilt) {
+            row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
+          }
+          if (reasons?.height) {
+            row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
+          }
         }
         const detail = document.createElement('small');
         detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;

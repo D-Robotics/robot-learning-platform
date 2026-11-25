@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -62,6 +62,48 @@ describe('OriginMan reference choreography', () => {
     expect((await prepareOriginmanMotion({ presetId: 'full-dance' })).provenance).toEqual(
       prepared.provenance,
     );
+  });
+
+  it('keeps original keyframes and extends only a seam that exceeds the joint speed', async () => {
+    const directory = await library();
+    const hold = originmanReferenceExample();
+    hold.joint_pos = Array.from({ length: 32 }, () =>
+      hold.joint_pos[0].map((q, index) => (index === 12 ? 1.5 : q || 0)),
+    );
+    hold.joint_vel = Array.from({ length: 32 }, () => hold.joint_pos[0].map(() => 0));
+    const data = JSON.stringify(hold);
+    await writeFile(path.join(directory, 'hold.json'), data);
+    const catalogPath = path.join(directory, 'catalog.json');
+    const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+    catalog.motions.push({
+      id: 'hold',
+      displayName: '抬手定格',
+      category: '定格',
+      frames: 32,
+      sha256: createHash('sha256').update(data).digest('hex'),
+      poseOnly: true,
+    });
+    await writeFile(catalogPath, JSON.stringify(catalog));
+    expect((await listOriginmanMotion()).motions.at(-1)).toMatchObject({ poseOnly: true });
+    await expect(prepareOriginmanMotion({ blocks: [{ id: 'hold', repeats: 2 }] })).rejects.toThrow(
+      '动态动作',
+    );
+
+    const result = await prepareOriginmanMotion({
+      blocks: [{ id: 'arms' }, { id: 'hold', repeats: 2 }],
+      transitionSeconds: 0.2,
+    });
+    const preview = summarizeOriginmanMotion(result);
+    expect(preview.adjustedTransitions).toEqual([{ afterBlock: 1, seconds: 0.38 }]);
+    expect(preview.extraTransitionSeconds).toBe(0.18);
+    const [first, second, third] = result.provenance.ranges;
+    expect(first.to).toBe(100);
+    expect(second).toEqual({ id: 'hold', from: 118, to: 150 });
+    expect(third.from - second.to).toBe(9);
+    expect(result.trajectory.joint_pos.slice(second.from, second.to)).toEqual(hold.joint_pos);
+    const samples = result.trajectory.joint_pos;
+    const speed = samples.slice(1).map((row, index) => Math.abs(row[12] - samples[index][12]) * 50);
+    expect(Math.max(...speed)).toBeLessThanOrEqual(6.0001);
   });
 
   it('rejects mutually exclusive inputs, unknown IDs, excessive duration and altered files', async () => {

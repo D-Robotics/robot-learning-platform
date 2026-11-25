@@ -167,8 +167,19 @@ class ReferenceTracking(gym.Env):
         tilt = math.degrees(math.acos(np.clip(rotation[2, 2], -1, 1)))
         contacts = {c.geom2 if c.geom1 == self.floor else c.geom1 for c in self.data.contact
                     if self.floor in (c.geom1, c.geom2)}
-        failed = bool(contacts - self.feet or tilt >= PROFILE["evaluation"]["maxTiltDeg"] or
-                      self.data.qpos[2] < self.stance[2] * .66)
+        other_contacts = contacts - self.feet
+        tilt_limit = PROFILE["evaluation"]["maxTiltDeg"]
+        height = float(self.data.qpos[2])
+        height_limit = float(self.stance[2] * .66)
+        failure = {}
+        if other_contacts:
+            failure["nonFootContacts"] = sorted(self.model.geom(geom).name or f"geom_{geom}"
+                                                for geom in other_contacts)
+        if tilt >= tilt_limit:
+            failure["tilt"] = {"actualDeg": tilt, "limitDeg": tilt_limit}
+        if height < height_limit:
+            failure["height"] = {"actualM": height, "limitM": height_limit}
+        failed = bool(failure)
         error = self.data.qpos[self.qpos] - desired
         velocity_error = self.data.qvel[self.qvel] - self.target_vel[self.tick]
         reward = (2 * math.exp(-12 * np.mean(error ** 2)) +
@@ -180,6 +191,7 @@ class ReferenceTracking(gym.Env):
         return self.observe(), reward, failed, complete and not failed, {
             "episodeDone": complete or failed,
             "taskSuccess": complete and not failed,
+            "failure": failure,
             "tilt": tilt,
             "yaw": math.degrees(yaw),
             "jointAbsError": float(np.mean(np.abs(error))),
@@ -219,6 +231,7 @@ def evaluate(env, policy, ranges=()):
         "framesEvaluated": len(errors),
         "completed": bool(complete and not failed),
         "firstFailedFrame": len(errors) if failed else None,
+        **({"failure": data["failure"]} if failed else {}),
         "trackingMaeRad": float(np.mean(errors)),
         "trackingRmseRad": float(np.sqrt(np.mean(squared))),
         **({"sections": sections} if sections else {}),

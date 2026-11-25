@@ -47,11 +47,12 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     const frames = blocks.reduce((sum, item) => sum + item.motion.frames * item.repeats, 0) +
       Math.max(0, count - 1) * Math.max(0, Math.round(Number(transition.value) * 50) - 1);
     estimate.textContent = mode.value === 'blocks' && count
-      ? count + ' 段 · 约 ' + (frames / 50).toFixed(1) + ' 秒（含过渡）' : '';
-    estimate.dataset.invalidDuration = String(count > 0 && (frames < 50 || frames > 4500));
+      ? count + ' 段 · 至少 ' + (frames / 50).toFixed(2) + ' 秒（以预览为准）' : '';
+    estimate.dataset.invalidDuration = String(frames > 4500 || (count === 1 && frames < 50) || (count > 0 && blocks.every(({ motion }) => motion.poseOnly)));
     setPrepareState();
     if (mode.value === 'blocks' && count > 0) {
-      if (frames < 50) status.textContent = '至少需要 1 秒，请增加片段或重复次数。';
+      if (blocks.every(({ motion }) => motion.poseOnly)) status.textContent = '请搭配至少一个动态动作。';
+      else if (count === 1 && frames < 50) status.textContent = '至少需要 1 秒，请增加片段或重复次数。';
       else if (frames > 4500) status.textContent = '超过 90 秒，请减少动作或重复次数。';
     }
     changed();
@@ -64,7 +65,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       (!category.value || group === category.value) &&
       [id, displayName, group].some((value) => value.toLowerCase().includes(query))) ?? [];
     action.replaceChildren(...motions.map((motion) =>
-      new Option(motion.displayName + ' · ' + motion.category + (motion.clipped ? ' · 已限幅' : ''), motion.id)));
+      new Option(motion.displayName + ' · ' + motion.category + (motion.poseOnly ? ' · 定格' : '') + (motion.clipped ? ' · 已限幅' : ''), motion.id)));
     if (motions.some(({ id }) => id === selection)) action.value = selection;
     add.disabled = !action.value || locked || blocks.length >= 128;
   }
@@ -73,7 +74,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     sequence.replaceChildren(...blocks.map((block, index) => {
       const row = document.createElement('li');
       const title = document.createElement('span');
-      title.textContent = block.motion.displayName + (block.motion.clipped ? '（已限幅）' : '') + ' ';
+      title.textContent = block.motion.displayName + (block.motion.poseOnly ? '（定格）' : '') + (block.motion.clipped ? '（已限幅）' : '') + ' ';
       const repeats = document.createElement('input');
       Object.assign(repeats, { type: 'number', min: '1', max: '8', value: block.repeats, disabled: locked });
       repeats.setAttribute('aria-label', '第 ' + (index + 1) + ' 段重复次数');
@@ -120,7 +121,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
         ? '当前提供教学示例。已有动作文件可在「导入自己的轨迹」中使用。'
         : catalog.presets.length + ' 支预置 · ' + catalog.motions.length + ' 个动作';
       preset.replaceChildren(...catalog.presets.map(({ id, displayName, seconds, bpm: tempo }) =>
-        new Option(displayName + ' · ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
+        new Option(displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
       const categories = [...new Set(catalog.motions.map((item) => item.category))];
       category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
@@ -173,6 +174,11 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
         track.max - track.min > tracks[best].max - tracks[best].min ? index : best, 0);
       joint.value = String(mostActive);
       status.textContent = preview.seconds.toFixed(2) + ' 秒 · ' + preview.frames + ' 帧 · 约 ' + preview.beats.toFixed(1) + ' 拍。';
+      if (preview.adjustedTransitions?.length) {
+        const count = preview.adjustedTransitions.length;
+        status.textContent += ' 为满足关节速度上限，已延长 ' + count + ' 处过渡，共增加 ' +
+          preview.extraTransitionSeconds.toFixed(2) + ' 秒。';
+      }
       result.hidden = false;
       plot();
     } catch (error) {
