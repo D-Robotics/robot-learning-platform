@@ -800,7 +800,7 @@ assert.deepEqual(
   'reference tracking must return through the OriginMan Workshop',
 );
 assert.match(workshopPage, /OriginMan 舞蹈 Workshop/);
-for (const id of ['dance-reference-play', 'dance-budget-quick', 'dance-budget-formal'])
+for (const id of ['dance-reference-video', 'dance-budget-quick', 'dance-budget-formal'])
   assert.match(workshopPage, new RegExp('id="' + id + '"'));
-assert.doesNotMatch(workshopPage, /受扰恢复|course=recovery|id="workshop-main"/);
+assert.doesNotMatch(workshopPage, /受扰恢复|course=recovery|id="workshop-main"|<canvas\b/);
 assert.doesNotMatch(workshopPage, /\son\w+\s*=|javascript:/i);

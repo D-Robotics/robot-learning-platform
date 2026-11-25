@@ -988,3 +988,33 @@ test('public Workshop is dance-only with safe routing for retired links', async 
   assert.equal(workshopRedirect(base + '?course=recovery&start=1'), base + '?course=dance&start=1');
   assert.equal(workshopRedirect(base + '?course=dance&start=1'), null);
 });
+
+test('public Workshop plays the catalog replay and keeps training available if playback fails', async (t) => {
+  const page = new URL('./public/workshop.html', import.meta.url);
+  const dom = new JSDOM(await fs.readFile(page, 'utf8'), {
+    url: 'https://platform.test/learning/workshop.html',
+  });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+  showWorkshopEntry(document, location.href);
+  const video = document.querySelector('#dance-reference-video');
+  const status = document.querySelector('#dance-reference-error');
+  assert.equal(video.controls, true);
+  assert.equal(video.hasAttribute('autoplay'), false);
+  assert.equal(
+    video.getAttribute('src'),
+    './originman-dance-references/alternating-arms/replay.mp4',
+  );
+  await fs.access(new URL(video.getAttribute('src'), page));
+  await fs.access(new URL(video.getAttribute('poster'), page));
+  assert.equal(status.hidden, true);
+
+  Object.defineProperty(video, 'error', { configurable: true, value: { code: 2 } });
+  video.dispatchEvent(new dom.window.Event('error'));
+  assert.equal(status.hidden, false);
+  assert.equal(document.querySelector('#dance-budget-quick').hash, '#train/configure');
+
+  delete video.error;
+  video.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  assert.equal(status.hidden, true);
+});

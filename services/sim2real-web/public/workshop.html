@@ -6,8 +6,8 @@
     <title>OriginMan 舞蹈 Workshop · RDK Robot Learning</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <link rel="stylesheet" href="./workshop.css" />
-    <script type="module" src="./workshop-entry-page.mjs?v=dance"></script>
+    <link rel="stylesheet" href="./workshop.css?v=dance-replay" />
+    <script type="module" src="./workshop-entry-page.mjs?v=dance-replay"></script>
   </head>
   <body>
     <a class="skip-link" id="workshop-skip" href="#dance-workshop-main">跳到 Workshop 内容</a>
@@ -16,16 +16,26 @@
     </header>
     <main id="dance-workshop-main" class="workshop-shell">
       <h1>OriginMan 舞蹈 Workshop</h1>
-      <p>第一次来？先看摆臂示意，再去配置快检。</p>
+      <p>先看一段机器人舞蹈回放，准备好后就可以配置快检。</p>
       <section id="dance-reference" aria-labelledby="dance-reference-title">
-        <h2 id="dance-reference-title">看一段交替摆臂</h2>
+        <h2 id="dance-reference-title">交替摆臂 · OriginMan 仿真回放</h2>
         <figure>
-          <canvas id="dance-reference-canvas" width="640" height="260" hidden role="img" aria-label="交替摆臂动作示意。左、右手轮流向前。"></canvas>
-          <figcaption>动作示意 · 100 BPM · 8 拍。每拍左右手交换一次。此处展示编排目标，实际动作可在训练回放中查看。</figcaption>
+          <video
+            id="dance-reference-video"
+            controls
+            playsinline
+            preload="metadata"
+            width="640"
+            height="480"
+            src="./originman-dance-references/alternating-arms/replay.mp4"
+            poster="./originman-dance-references/alternating-arms/poster.jpg"
+            aria-labelledby="dance-reference-title"
+            aria-describedby="dance-reference-caption"
+          ></video>
+          <figcaption id="dance-reference-caption">100 BPM · 4 拍</figcaption>
         </figure>
-        <button id="dance-reference-play" type="button" hidden>播放动作示意</button>
-        <button id="dance-reference-stop" type="button" hidden>停止示意</button>
-        <p id="dance-reference-status" role="status"></p>
+        <p id="dance-reference-error" role="status" hidden>视频暂时无法播放。请刷新页面重试，或打开动作库查看其他回放。</p>
+        <a href="./originman-dance-references/index.html">查看全部动作回放</a>
       </section>
       <section aria-labelledby="dance-budget-title">
         <h2 id="dance-budget-title">选这轮训练多久</h2>
