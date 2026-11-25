@@ -835,10 +835,11 @@ test('beginner guide starts fresh and routes known tasks without reading old Run
       .structuredContent;
   assert.equal((await guide({ intent: 'new' })).stage, 'task');
   assert.equal((await guide({ intent: 'new', task: 'dance' })).stage, 'movement');
-  assert.deepEqual((await guide({ intent: 'new', task: 'recovery' })).nextArguments, {
-    intent: 'new',
-    course: 'recovery',
+  const retired = await dispatch('tools/call', {
+    name: 'rdk_learning_guide',
+    arguments: { intent: 'new', task: 'recovery' },
   });
+  assert.equal(retired.isError, true);
   assert.equal(
     (await guide({ task: 'imitation' })).links.workbench,
     'https://platform.test/robotics-learning/?learningMode=imitation#overview',

@@ -217,7 +217,6 @@ async function boot(
     workspaceContext?: Record<string, unknown>;
     /** Override the document URL so hash deep links (#train/configure) can be tested. */
     url?: string;
-    originmanMount?: () => { refresh: () => void };
   } = {},
 ) {
   const dom = new JSDOM(html, {
@@ -440,7 +439,6 @@ async function boot(
     scrollTo: vi.fn(),
     structuredClone: globalThis.structuredClone,
     TextDecoder: globalThis.TextDecoder,
-    OriginmanWorkshop: options.originmanMount ? { mount: options.originmanMount } : undefined,
   });
   window.requestAnimationFrame = (callback) => {
     callback(Date.now());
@@ -500,80 +498,39 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(row?.querySelector('[data-action="disconnect"]')?.textContent).toBe('断开');
   });
 
-  it.each(['?robot=originman#simulate/simulate', '#classroom/simulate'])(
-    'opens the actual OriginMan scene from %s without submitting a run',
-    async (location) => {
-      const mount = vi.fn(() => ({ refresh: vi.fn() }));
-      const { window, requests, errors } = await boot({
-        url: `http://127.0.0.1:3000/sim2real/${location}`,
-        originmanMount: mount,
+  it('shows the OriginMan training setup without the retired course or a submission', async () => {
+    const { window, requests, errors } = await boot({
+      url: 'http://127.0.0.1:3000/sim2real/?robot=originman#train/configure',
+    });
+    expect(window.document.body.dataset.activeView).toBe('train');
+    expect(
+      window.document.querySelector('#originman-workshop, #originman-configure-recovery'),
+    ).toBeNull();
+    expect(
+      requests.some((item) => item.method === 'POST' && /\/runs|\/sessions/.test(item.url)),
+    ).toBe(false);
+    expect(errors).toEqual([]);
+  });
+
+  it.each(['microduck', 'originbot'])(
+    'keeps the simulation view available for %s',
+    async (product) => {
+      const { window, errors } = await boot({
+        url: 'http://127.0.0.1:3000/sim2real/?robot=originman#train/configure',
       });
-      const panel = window.document.querySelector<HTMLDetailsElement>('#originman-workshop')!;
-      expect(panel.hidden).toBe(false);
-      expect(panel.open).toBe(true);
-      expect(panel.closest<HTMLElement>('[data-view-section]')?.hidden).toBe(false);
+      const select = window.document.querySelector<HTMLSelectElement>('#product-select')!;
+      select.value = product;
+      select.dispatchEvent(new window.Event('change', { bubbles: true }));
+      window.document
+        .querySelector<HTMLButtonElement>('.sidebar [data-flow-child="simulate"]')
+        ?.click();
+      expect(window.document.body.dataset.activeView).toBe('simulate');
       expect(
         window.document.querySelector<HTMLElement>('[data-view-section="simulate"]')?.hidden,
-      ).toBe(true);
-      expect(window.document.querySelector('#flow-context-description')?.textContent).toContain(
-        'OriginMan',
-      );
-      expect(
-        window.document
-          .querySelector('.sidebar [data-flow-child="simulate"]')
-          ?.getAttribute('aria-current'),
-      ).toBe('page');
-      expect(mount).toHaveBeenCalledOnce();
-      expect(
-        requests.some((item) => item.method === 'POST' && /\/runs|\/sessions/.test(item.url)),
       ).toBe(false);
       expect(errors).toEqual([]);
     },
   );
-
-  it.each(['microduck', 'originbot'])(
-    'resolves simulation after switching from OriginMan to %s and back',
-    async (product) => {
-      const mount = vi.fn(() => ({ refresh: vi.fn() }));
-      const { window, errors } = await boot({
-        url: 'http://127.0.0.1:3000/sim2real/?robot=originman#simulate/simulate',
-        originmanMount: mount,
-      });
-      const select = window.document.querySelector<HTMLSelectElement>('#product-select')!;
-      const panel = window.document.querySelector<HTMLDetailsElement>('#originman-workshop')!;
-      for (const next of [product, 'originman']) {
-        select.value = next;
-        select.dispatchEvent(new window.Event('change', { bubbles: true }));
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(panel.hidden).toBe(next !== 'originman');
-        expect(
-          window.document.querySelector<HTMLElement>('[data-view-section="simulate"]')?.hidden,
-        ).toBe(next === 'originman');
-      }
-      expect(mount).toHaveBeenCalledOnce();
-      expect(errors).toEqual([]);
-    },
-  );
-
-  it('reuses the OriginMan classroom when navigating away from and back to simulation', async () => {
-    const mount = vi.fn(() => ({ refresh: vi.fn() }));
-    const { window, errors } = await boot({
-      url: 'http://127.0.0.1:3000/sim2real/?robot=originman#simulate/simulate',
-      originmanMount: mount,
-    });
-    const panel = window.document.querySelector<HTMLDetailsElement>('#originman-workshop')!;
-    window.document
-      .querySelector<HTMLButtonElement>('.sidebar [data-flow-child="configure"]')
-      ?.click();
-    expect(panel.hidden).toBe(true);
-    window.document
-      .querySelector<HTMLButtonElement>('.sidebar [data-flow-child="simulate"]')
-      ?.click();
-    expect(panel.hidden).toBe(false);
-    expect(panel.closest<HTMLElement>('[data-view-section]')?.hidden).toBe(false);
-    expect(mount).toHaveBeenCalledOnce();
-    expect(errors).toEqual([]);
-  });
 
   it('enables only explicitly registered engines when the CPU worker also reports default', async () => {
     const { window, errors } = await boot({

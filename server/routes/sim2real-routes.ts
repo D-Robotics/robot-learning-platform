@@ -86,6 +86,7 @@ import {
 import {
   buildBoardPreflightCommand,
   isForeignOwnedDevice,
+  isWebCloudDeployment,
   readDevices,
   requestOwnsDevice,
   safeStudioOrigin,
@@ -3223,6 +3224,15 @@ export function createSim2RealRouter(
       input.taskId === 'originman-recovery' ||
       input.engine === 'originman-recovery-reflect' ||
       input.engine === 'originman-recovery';
+    if (originman && isWebCloudDeployment()) {
+      sendApiError(
+        response,
+        410,
+        'SIM2REAL_WORKSHOP_RETIRED',
+        '该课程已下线，新实验请打开 OriginMan 舞蹈 Workshop。',
+      );
+      return null;
+    }
     if (
       input.engine !== undefined &&
       !['microduck-rl', 'originman-recovery', 'originman-recovery-reflect'].includes(
@@ -4950,6 +4960,20 @@ export function createSim2RealRouter(
         datasetIds: requestedDatasetIds,
         requestedVia,
       } = parsed;
+      if (
+        isWebCloudDeployment() &&
+        (taskId === 'originman-recovery' ||
+          training?.originmanWorkshop ||
+          isOriginmanWorkshopEngine(training?.engine))
+      ) {
+        sendApiError(
+          response,
+          410,
+          'SIM2REAL_WORKSHOP_RETIRED',
+          '该课程已下线。已有训练和评测保留在运行记录中。新实验请打开 OriginMan 舞蹈 Workshop。',
+        );
+        return;
+      }
       const model = await getSim2RealModel(modelId, owner);
       if (!model) {
         response.status(404).json({

@@ -34,8 +34,7 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
   const back = $('return-workshop');
   if (back) {
     const destination = new URL('./workshop.html', location.href);
-    destination.searchParams.set('course', 'recovery');
-    if (validContext) destination.searchParams.set('context', contextId);
+    destination.searchParams.set('course', 'dance');
     back.href = destination.href;
   }
   if (validContext) {
@@ -76,11 +75,11 @@ export async function startExperimentView({ document, location, fetchImpl = fetc
     $('experiment-data').hidden = true;
     $('experiment-error').hidden = false; $('experiment-error').textContent = error.message;
     const recovery = !validContext
-      ? { status: '请先选实验', next: '返回课程，从实验历史中选一轮。' }
+      ? { status: '请先选实验', next: '返回工作台，从运行记录中选一轮。' }
       : {
           401: { status: '需要登录', next: '用原账号登录，登录后自动返回本次实验。' },
-          403: { status: '无法访问此实验', next: '确认当前账号有权查看原实验。可从课程的实验历史中重新选择。' },
-          404: { status: '找不到此实验', next: '返回课程，从当前账号的实验历史重新打开原实验。' },
+          403: { status: '无法访问此实验', next: '确认当前账号有权查看原实验。可从运行记录中重新选择。' },
+          404: { status: '找不到此实验', next: '从当前账号的运行记录重新打开原实验。' },
         }[error.status] ?? { status: '结果暂不可读', next: '点「重试读取本次实验」，重新读取原结果。' };
     $('connection-status').textContent = recovery.status;
     $('next-action').textContent = recovery.next;

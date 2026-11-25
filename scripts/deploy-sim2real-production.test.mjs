@@ -344,32 +344,24 @@ ${remoteEntrySection}`,
   const publicDir = 'dist-server/services/sim2real-web/public';
   const legacyClassroom = '<section id="originman-classroom-slot"></section>';
   write(`server/releases/previous/${publicDir}/index.html`, legacyClassroom);
-  write(
-    `server/releases/next/${publicDir}/index.html`,
-    '<section data-view-section="classroom"></section>',
-  );
-  const preflightClassroom = () =>
+  write(`server/releases/next/${publicDir}/index.html`, '<main></main>');
+  const preflightWorkshop = () =>
     bash(`${unitFixture}\n${remoteBlocks[1]}`, [base, 'next', ...threeUnits.split(' ')]);
-  assert.match(preflightClassroom().stderr, /候选缺少现网 OriginMan 原课堂视图/);
-  const modules = ['workshop', 'simulator', 'round-comparison'];
-  write(
-    `server/releases/next/${publicDir}/index.html`,
-    legacyClassroom +
-      modules.map((name) => `<script src="./originman-${name}.v97.js"></script>`).join(''),
-  );
-  assert.match(preflightClassroom().stderr, /缺少现网 OriginMan 课堂模块/);
-  for (const name of modules)
-    write(`server/releases/next/${publicDir}/originman-${name}.v97.js`, 'void 0;');
-  assert.match(preflightClassroom().stderr, /候选缺少 OriginMan 课堂运行文件/);
-  for (const file of [
-    'server/routes/originman-classroom-routes.js',
-    'server/routes/originman-simulator-routes.js',
-    'server/sim2real/originman-teleop-rehearsal.mjs',
-    'engines/originman-straight/interactive_sim.py',
-    'engines/originman-straight/experiments/standing-residual.json',
+  assert.match(preflightWorkshop().stderr, /缺少 OriginMan 入口文件 workshop.html/);
+  for (const asset of [
+    'workshop-entry-page.mjs',
+    'originman-reference.html',
+    'experiment.html',
+    'experiment-view.mjs',
   ])
-    write(`server/releases/next/dist-server/${file}`);
-  assert.equal(preflightClassroom().status, 0);
+    write(`server/releases/next/${publicDir}/${asset}`, 'fixture');
+  write(`server/releases/next/${publicDir}/workshop.html`, '<main id="workshop-main"></main>');
+  assert.match(preflightWorkshop().stderr, /新建入口必须统一到舞蹈 Workshop/);
+  write(
+    `server/releases/next/${publicDir}/workshop.html`,
+    '<main id="dance-workshop-main"></main>',
+  );
+  assert.equal(preflightWorkshop().status, 0);
   fs.rmSync(path.join(base, 'releases', 'previous', publicDir, 'index.html'));
   assert.equal(
     [...source.matchAll(/"\$\{DEPLOY_UNITS\[@\]\}" <<'REMOTE'/g)].length,

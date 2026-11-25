@@ -1,18 +1,7 @@
 export function showWorkshopEntry(document, url) {
   const { searchParams } = new URL(url);
-  const course = searchParams.get('course');
-  // Bookmarked experiments and the legacy post-login setup link already refer
-  // to recovery. Generic start links from older Studio installs go to dance.
-  const recovery = searchParams.has('context') || course === 'recovery' ||
-    (searchParams.get('start') === '1' && searchParams.get('setup') === '1');
-  document.getElementById('dance-workshop-main').hidden = recovery;
-  document.getElementById('workshop-main').hidden = !recovery;
-  document.getElementById('recovery-workshop-label').hidden = !recovery;
-  document.getElementById('connection-status').hidden = !recovery;
-  document.getElementById('workshop-skip').href = recovery ? '#workshop-main' : '#dance-workshop-main';
-  document.title = recovery ? 'OriginMan 受扰恢复课程 · RDK Robot Learning' : 'OriginMan 舞蹈 Workshop · RDK Robot Learning';
   const computeResourceId = searchParams.get('computeResourceId');
-  if (!recovery && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(computeResourceId ?? '')) {
+  if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(computeResourceId ?? '')) {
     for (const id of ['dance-budget-quick', 'dance-budget-formal']) {
       const link = document.getElementById(id);
       const destination = new URL(link.getAttribute('href'), url);
@@ -20,12 +9,32 @@ export function showWorkshopEntry(document, url) {
       link.href = destination.href;
     }
   }
-  return recovery;
+}
+
+export function workshopRedirect(url) {
+  const target = new URL(url);
+  const context = target.searchParams.get('context');
+  if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(context ?? '')) {
+    const record = new URL('./experiment.html', target);
+    record.searchParams.set('context', context);
+    return record.href;
+  }
+  if (target.searchParams.has('context') || target.searchParams.has('setup') || target.searchParams.get('course') === 'recovery') {
+    target.searchParams.delete('context');
+    target.searchParams.delete('setup');
+    target.searchParams.set('course', 'dance');
+    return target.href;
+  }
+  return null;
 }
 
 if (typeof window !== 'undefined') {
-  if (showWorkshopEntry(document, window.location.href)) void import('./workshop-page.mjs');
-  else mountDanceReference(document, window);
+  const redirect = workshopRedirect(window.location.href);
+  if (redirect) window.location.replace(redirect);
+  else {
+    showWorkshopEntry(document, window.location.href);
+    mountDanceReference(document, window);
+  }
 }
 
 export function mountDanceReference(document, window) {

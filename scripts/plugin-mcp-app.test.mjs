@@ -53,8 +53,12 @@ test('negotiated Apps expose a self-contained resource and keep write tools mode
   assert.equal(resume._meta.ui.resourceUri, UI_URI);
   assert.deepEqual(resume._meta.ui.visibility, ['model', 'app']);
   assert.deepEqual(
-    catalog.tools.find((t) => t.name === 'rdk_originman_short_train')._meta.ui.visibility,
+    catalog.tools.find((t) => t.name === 'rdk_experiment_remember')._meta.ui.visibility,
     ['model'],
+  );
+  assert.equal(
+    catalog.tools.some((t) => t.name === 'rdk_originman_short_train'),
+    false,
   );
   const resource = await f.proxy('resources/read', { uri: UI_URI });
   assert.equal(resource.contents[0].text, html);

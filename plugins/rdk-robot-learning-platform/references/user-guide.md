@@ -2,7 +2,7 @@
 
 **版本：0.6.90** · 适用：Qoder、RDK Studio，以及支持 MCP 与 Markdown 链接的 Agent 宿主。
 
-这是通用机器人学习平台的跨宿主插件，支持按机型和任务组织学习流程。OriginMan 舞蹈和受扰恢复是可选任务。
+这是通用机器人学习平台的跨宿主插件，支持按机型和任务组织学习流程。OriginMan Workshop 提供预置舞蹈和动作组自由编排。
 
 本手册说明插件能做什么、如何安装连接、常见任务怎么说、每个 Skill 和 MCP 工具负责什么，以及结果应如何判读。学员日常使用自然语言即可；工具名和 ID 主要供维护者排查。每次操作仍以当前平台实际返回的 `tools/list`、账号权限和运行结果为准。
 
@@ -50,21 +50,9 @@
 
 ## 3. 快速开始
 
-### Workshop：受扰恢复课程
+### OriginMan 舞蹈 Workshop
 
-在新聊天中说：
-
-> 带我开始 Workshop
-
-只说“开始 Workshop”会打开 OriginMan 舞蹈入口。明确选择受扰恢复会打开该课程的新实验准备页，先看讲师参考，再选择算力和预算。明确点击开始后才训练，随后平台对同一策略做仿真评测。页面可以查看训练曲线、基线对比、轮次、日志和回放。
-
-- **继续**：接续当前账号已选实验，查询原 Run；不会重新提交。
-- **看看效果**：直接打开本轮结果和质量证据。
-- **开始新实验 / 改一个参数再试**：保留旧实验，复制成新实验后只调整已确认的变量。
-- **换算力机**：明确说“用「机器名称」开始 Workshop”；新实验才会使用新资源。
-- **暂停后续步骤**：只暂停自动接续，不会取消已经提交的 Worker 任务。
-
-预算选择：8192 步适合确认流程链路，不保证效果；50 万步是正式预算选项，不等于质量通过。自定义预算、seed 或扰动配置须先检查页面展示的配方并确认。
+在新聊天中说「带我开始 OriginMan Workshop」。打开工作台后选择预置舞蹈或自由编排，选共享 GPU 和预算，再确认提交。已有实验从原 Run 查看。
 
 ### OriginMan 强化学习跳舞
 
@@ -223,8 +211,6 @@ Skill 是按任务使用的操作说明，不是权限提升。实际工具、�
 | `rdk_development_targets` | 查看算力机和板卡，测试算力机或连接明确板卡。 |
 | `rdk_classroom_guide` / `rdk_robot_onboarding_guide` / `rdk_robot_acceptance_assess` | 课堂分步提问、新机器人指南和验收字段覆盖检查。 |
 | `rdk_auth_login` / `rdk_auth_switch_account` / `rdk_auth_status` / `rdk_auth_logout` | 登录、切换、查看和退出插件账号连接。 |
-| `rdk_originman_train` / `rdk_originman_evaluate` | OriginMan 受扰恢复高级训练和原策略同源评测。 |
-| `rdk_originman_short_train` / `rdk_originman_short_evaluate` | 固定配方的仿真快检和同源评测。 |
 | `rdk_training_wait` | 对已提交 Run 等待到终态或一个有界时间窗口。 |
 | `rdk_experiment_remember` / `rdk_experiment_resume` | 保存明确实验 Run 引用并按该引用恢复；不会查找或替换为全局最新。 |
 | `rdk_originman_evaluation_read` | 读取指定 OriginMan 评测结果和来源。 |

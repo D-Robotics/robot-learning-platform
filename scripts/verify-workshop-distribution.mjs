@@ -350,114 +350,42 @@ try {
   assert.equal(fresh.submission.training, false);
   const continued = await call('rdk_workshop', { intent: 'continue' });
   assert.equal(continued.contextId, 'ws-owned-fixture');
-  assert.equal(new URL(continued.links.workshop).searchParams.get('course'), 'recovery');
+  const history = new URL(continued.links.workshop);
+  assert.match(history.pathname, /experiment\.html$/);
+  assert.equal(history.searchParams.get('context'), 'ws-owned-fixture');
   assert.equal(continued.submission.training, false);
   assert.equal(state.writes.length, 0);
   const guide = await call('rdk_experience_guide');
-  const contextId = guide.shortTraining.operation.contextId;
-  const train = await call('rdk_originman_short_train', {
-    contextId,
-    computeResourceId: 'worker-fixture',
-  });
-  assert.equal(train.submission.runId, 'train-fixture');
-  assert.equal(train.recipeSource.newModelRegistered, true);
-  assert.equal(state.writes.length, 1);
-  assert.equal(state.historyRequests, 0);
-  assert.equal(state.models.length, 1);
-  if (failureCase) {
-    const failed = await call('rdk_training_wait', { runId: train.submission.runId });
-    assert.equal(failed.status, 'failed');
-    assert.equal(failed.stopWorkflow, true);
-    await assert.rejects(
-      call('rdk_originman_short_train', {
-        contextId,
-        computeResourceId: 'worker-fixture',
-      }),
-      /绑定原Run/,
-    );
-    await assert.rejects(
-      call('rdk_training_submit', { sourceRunId: train.submission.runId }),
-      /绑定原Run/,
-    );
-    await assert.rejects(call('rdk_originman_short_evaluate', { contextId }), /绑定原Run/);
-    assert.equal(state.writes.length, 1);
-    console.log(
-      JSON.stringify({
-        passed: true,
-        fixtureOnly: true,
-        failureGuardPassed: true,
-        trainingSubmissions: 1,
-        evaluationSubmissions: 0,
-        failedContextAndBoundRawSubmitBlocked: true,
-      }),
-    );
-  } else {
-    assert.equal(
-      (await call('rdk_training_wait', { runId: train.submission.runId })).status,
-      'completed',
-    );
-    await client.close();
-    client = open();
-    await init();
-    assert.equal((await call('rdk_auth_status')).authenticated, true);
-    const repeated = await call('rdk_originman_short_train', {
-      contextId,
-      computeResourceId: 'worker-fixture',
-    });
-    assert.equal(repeated.alreadySubmitted, true);
-    assert.equal(state.writes.length, 1);
-    const evaluation = await call('rdk_originman_short_evaluate', { contextId });
-    assert.equal(evaluation.submission.runId, 'eval-fixture');
-    assert.equal((await call('rdk_training_wait', { runId: 'eval-fixture' })).status, 'completed');
-    const result = await call('rdk_experiment_resume', { contextId });
-    assert.equal(result.association.executionVerified, true);
-    assert.equal(result.quality.clearGain, false);
-    assert.equal(result.playback.state, 'recorded');
-    assert.equal(result.playback.verifiedInPlayer, false);
-    assert.equal(
-      result.links.video,
-      origin + '/robotics-learning/api/v1/duck/runs/eval-fixture/workshop-video?format=webm',
-    );
-    assert.equal(state.mediaRequests, 0);
-    await call('rdk_originman_short_evaluate', { contextId });
-    assert.equal(state.writes.length, 2);
-    await client.close();
-    client = open();
-    await init();
-    const restored = await call('rdk_experiment_resume', { contextId });
-    assert.equal(restored.training.runId, 'train-fixture');
-    assert.equal(restored.evaluation.runId, 'eval-fixture');
-    await assert.rejects(call('rdk_replay_video', { runId: 'eval-fixture' }), /OriginMan评测视频/);
-    assert.equal(state.writes.length, 2);
-    state.brokenDigest = true;
-    await assert.rejects(call('rdk_experiment_resume', { contextId }), /摘要/);
-    assert.equal(state.writes.length, 2);
-    console.log(
-      JSON.stringify({
-        passed: true,
-        fixtureOnly: true,
-        realLearningVerified: false,
-        realVideoPlaybackVerified: false,
-        version: result.pluginRuntime.version,
-        toolCount: catalog.tools.length,
-        firstLogin: true,
-        authorizationSurvivedMcpRestart: true,
-        confirmationCodesIssued: state.authStarts,
-        firstCourseModelRegistered: true,
-        historyRequired: false,
-        trainingSubmissions: 1,
-        evaluationSubmissions: 1,
-        restartRecovery: true,
-        resumedCourseRejectsTelemetryRender: true,
-        repeatSubmissionPrevented: true,
-        parentAndDigestVerified: true,
-        changedDigestRejected: true,
-        qualityNotOverclaimed: true,
-        videoLinkCorrect: true,
-        mediaNotFetchedByPlugin: true,
-      }),
-    );
-  }
+  assert.equal(guide.course.entryTool, 'rdk_workshop');
+  assert.equal(guide.shortTraining, undefined);
+  const legacyRequest = await call('rdk_workshop', { intent: 'new', course: 'recovery' });
+  assert.match(legacyRequest.links.workshop, /workshop\.html\?course=dance&start=1$/);
+  assert.ok(
+    !catalog.tools.some(({ name }) => /^(rdk_originman_(?:short_)?(?:train|evaluate))$/.test(name)),
+  );
+  await assert.rejects(
+    call('rdk_originman_short_train', { contextId: 'retired-fixture' }),
+    /未知工具/,
+  );
+  assert.equal(state.writes.length, 0);
+  assert.equal(state.mediaRequests, 0);
+  await client.close();
+  client = open();
+  await init();
+  assert.equal((await call('rdk_auth_status')).authenticated, true);
+  assert.equal((await call('rdk_workshop', { intent: 'continue' })).contextId, 'ws-owned-fixture');
+  console.log(
+    JSON.stringify({
+      passed: true,
+      fixtureOnly: true,
+      toolCount: catalog.tools.length,
+      authorizationSurvivedMcpRestart: true,
+      danceOnlyNewWorkshop: true,
+      historicalExperimentAccessible: true,
+      retiredTrainingHidden: true,
+      submissions: state.writes.length,
+    }),
+  );
 } finally {
   await client?.close();
   if (server) {

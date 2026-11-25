@@ -32,16 +32,9 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 结果核对本轮 `metrics.originmanDance.qualityGatePassed` 与各 BPM 的舞段成绩。出现平台返回的同源 `links.danceVideo` 时用宿主播放器打开本次仿真视频；实际播放和训练、风格达标分别报告。没有媒体链接时保留原结果，不构造未验证的媒体地址，也不为补回放重新训练。舞蹈仿真通过不授权真机部署。
 
-## OriginMan 受扰恢复训练预算与结果口径
+## 历史实验和原 Run
 
-明确选择受扰恢复课程后，使用 `rdk_workshop` 打开按钮工作台，预算在页面选择；不要在聊天重复问。以下仅用于用户明确的高级手动或独立训练：先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
-
-预算单位是训练步：8192 步不是8192次优化或外层迭代。旧进度字段iteration也可能记录步数，按本引擎回执说明单位。
-
-8192 步快检只验训练→评测→回放链路，可能比基线差；50 万步正式效果实验用 `rdk_originman_train({contextId,timesteps:500000})` 和 `rdk_originman_evaluate`，不能落到固定短训工具。预算改变须新实验，原实验用工具返回引用恢复，不手抄或猜 UUID。完整 Workshop 仍先看基础 PD 参考，再按已选预算执行。
-
-分别报告：流程执行是否完成、同源仿真效果是否达到收益判据、实体效果是否验证。`completed` 仅说明执行结束。必须读取本轮 `rdk_originman_evaluation_read`，核对来源、两组条件与 original/tuned/rl 实际恢复数；`clearGain=false` 明确“效果未达标”，无评测或来源未核对保持待验证，仿真成功不代表真机成功。历史结果不能当本组成绩。正常回答三句以内加实验页链接；历史解释只在追问时读 [预算对照证据](../../references/workshop-training-evidence.md)，不要重复读整包。
-
+已有实验按原账号和 Run 查询。旧评测的基线、恢复指标和预算只用于解释该条历史记录，见[历史预算与证据](../../references/workshop-training-evidence.md)。
 
 # 训练与 Run
 

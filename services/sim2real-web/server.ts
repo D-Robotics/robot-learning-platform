@@ -1817,6 +1817,33 @@ export function createSim2RealWebApp(): Express {
       .send(gpuAgentInstallScript(origin, agentUrl));
   });
 
+  app.get('/workshop.html', (request, response, next) => {
+    const context = typeof request.query.context === 'string' ? request.query.context : '';
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(context)) {
+      response.setHeader('Cache-Control', 'no-store');
+      response.redirect(
+        302,
+        publicPath('/experiment.html') + '?context=' + encodeURIComponent(context),
+      );
+      return;
+    }
+    if (
+      request.query.course !== 'recovery' &&
+      request.query.setup === undefined &&
+      request.query.context === undefined
+    )
+      return next();
+    const query = new URLSearchParams({ course: 'dance', start: '1' });
+    const computeResourceId = request.query.computeResourceId;
+    if (
+      typeof computeResourceId === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(computeResourceId)
+    )
+      query.set('computeResourceId', computeResourceId);
+    response.setHeader('Cache-Control', 'no-store');
+    response.redirect(302, publicPath('/workshop.html') + '?' + query);
+  });
+
   app.use('/help', createUsageManualRouter(path.resolve(SERVICE_ROOT, '../../docs'), publicPath));
 
   app.use(

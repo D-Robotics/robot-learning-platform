@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
-import { showWorkshopEntry } from './public/workshop-entry-page.mjs';
-const html = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
+import { showWorkshopEntry, workshopRedirect } from './public/workshop-entry-page.mjs';
+const html = await fs.readFile(new URL('./fixtures/workshop-legacy.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
 function fixture({
   lost = false,
@@ -17,7 +17,7 @@ function fixture({
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
   });
-  showWorkshopEntry(dom.window.document, dom.window.location.href);
+  dom.window.document.getElementById('workshop-main').hidden = false;
   const state = {
     contextId: 'ws-test',
     modelId: 'm',
@@ -969,22 +969,22 @@ for (const outcome of [
   });
 }
 
-test('public Workshop routes default to dance and preserve an explicitly selected Worker', async (t) => {
+test('public Workshop is dance-only with safe routing for retired links', async (t) => {
   const base = 'https://platform.test/learning/workshop.html';
-  const dance = new JSDOM(html, { url: base });
-  const recovery = new JSDOM(html, { url: base });
-  t.after(() => {
-    dance.window.close();
-    recovery.window.close();
-  });
+  const live = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
+  const dance = new JSDOM(live, { url: base });
+  t.after(() => dance.window.close());
   const d = dance.window.document;
-  assert.equal(showWorkshopEntry(d, base + '?computeResourceId=worker-1'), false);
+  showWorkshopEntry(d, base + '?computeResourceId=worker-1');
   assert.equal(d.getElementById('dance-workshop-main').hidden, false);
-  assert.equal(d.getElementById('workshop-main').hidden, true);
+  assert.equal(d.getElementById('workshop-main'), null);
   const quick = new URL(d.getElementById('dance-budget-quick').href);
   assert.equal(quick.searchParams.get('computeResourceId'), 'worker-1');
   assert.equal(quick.hash, '#train/configure');
-  assert.equal(showWorkshopEntry(recovery.window.document, base + '?context=lesson-1'), true);
-  assert.equal(recovery.window.document.getElementById('workshop-main').hidden, false);
-  assert.equal(recovery.window.document.getElementById('dance-workshop-main').hidden, true);
+  assert.equal(
+    workshopRedirect(base + '?context=lesson-1'),
+    'https://platform.test/learning/experiment.html?context=lesson-1',
+  );
+  assert.equal(workshopRedirect(base + '?course=recovery&start=1'), base + '?course=dance&start=1');
+  assert.equal(workshopRedirect(base + '?course=dance&start=1'), null);
 });

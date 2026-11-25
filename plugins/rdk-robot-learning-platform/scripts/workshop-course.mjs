@@ -135,7 +135,6 @@ const learningFields = {
       'replay',
       'deployment',
       'dance',
-      'recovery',
     ],
   },
   robot: { type: 'string', minLength: 1, maxLength: 120 },
@@ -412,11 +411,6 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       robot: answers.robot ?? null,
     });
   }
-  if (answers.task === 'recovery')
-    return progress('recovery', '先打开受扰恢复课程，看看参考动作。', {
-      nextTool: 'rdk_workshop',
-      nextArguments: { intent: answers.intent === 'new' ? 'new' : 'start', course: 'recovery' },
-    });
   if (!answers.dance && !answers.movement) {
     const availableActions = DANCE_SECTION_TYPES.map((type) => ({
       type,
@@ -536,7 +530,7 @@ export function courseBrief(args = {}) {
     scope: 'local-course-explanation-only',
     motionAuthorized: false,
     studentReply:
-      '恢复课8192步用于流程快检、50万步用于效果对比；舞蹈课默认50万步，8192步只作明确要求的链路快检。\nRun完成不等于风格达标；舞蹈轨迹仍是回放待验，真机效果需单独验收。',
+      '舞蹈课可选8192步快检或50万步正式实验；效果以本轮评测为准。\nRun完成不等于风格达标；舞蹈轨迹仍是回放待验，真机效果需单独验收。',
     delivery:
       '原样展示studentReply两句，不另加标题、数字倍率、历史成绩或下一步问题，不读取更多资料；用户明确追问依据时才按需读取workshop-training-evidence.md。实际成绩必须读本轮同源评测，不能从预算推出。',
   };

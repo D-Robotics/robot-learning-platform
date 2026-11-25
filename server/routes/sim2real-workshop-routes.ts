@@ -23,6 +23,7 @@ import {
   getSim2RealComputeResourceSecret,
   findSim2RealRunByIdempotency,
 } from '../sim2real/sim2real-store.js';
+import { isWebCloudDeployment } from '../sim2real/standalone-adapters.js';
 import { wrapAsync, sendApiError } from '../sim2real/http-helpers.js';
 import { screenOriginmanReferenceWithWorker } from '../sim2real/robogo-runner.js';
 // The public platform validates manifest-defined robots under the custom profile.
@@ -72,6 +73,14 @@ export function registerSim2RealWorkshopRoutes(
         else sendApiError(s, 503, 'WORKSHOP_UNAVAILABLE', '课程暂不可用，保留原实验，不重新提交。');
       }
     });
+  const requireActiveCourse = () => {
+    if (isWebCloudDeployment())
+      throw new ExperimentError(
+        'WORKSHOP_RETIRED',
+        '该课程已下线，新实验请打开 OriginMan 舞蹈 Workshop。',
+        410,
+      );
+  };
   const referenceApi = options.prefix + '/originman-reference';
   router.get(
     referenceApi,
@@ -220,7 +229,6 @@ export function registerSim2RealWorkshopRoutes(
     options.prefix + '/model-templates/originman',
     handle(async () => ({
       templates: [
-        { id: 'recovery', name: '受扰恢复', algorithm: 'SAC', manifest: originManManifest },
         { id: 'dance', name: '舞蹈编排', algorithm: 'PPO', manifest: originManDanceManifest },
       ],
     })),
@@ -238,6 +246,7 @@ export function registerSim2RealWorkshopRoutes(
   router.post(
     api(''),
     handle(async (r, owner) => {
+      requireActiveCourse();
       const b = r.body ?? {};
       const model = await getSim2RealModel(String(b.modelId ?? ''), owner);
       const resource = await getSim2RealComputeResource(String(b.computeResourceId ?? ''), owner);
@@ -259,38 +268,42 @@ export function registerSim2RealWorkshopRoutes(
   );
   router.get(
     api('/setup'),
-    handle(async (_r, owner) => ({
-      accountId: owner ?? null,
-      resources: (await listSim2RealComputeResources(owner, { refreshShared: true }))
-        .filter((resource) => resource.source !== 'local-agent')
-        .map(
-          ({
-            id,
-            name,
-            status,
-            engines,
-            cuda,
-            mock,
-            activeJobs,
-            queuedJobs,
-            maxConcurrentJobs,
-          }) => ({
-            id,
-            name,
-            status,
-            activeJobs,
-            queuedJobs,
-            maxConcurrentJobs,
-            ...(Array.isArray(engines) ? { engines } : {}),
-            ...(typeof cuda === 'boolean' ? { cuda } : {}),
-            ...(typeof mock === 'boolean' ? { mock } : {}),
-          }),
-        ),
-    })),
+    handle(async (_r, owner) => {
+      requireActiveCourse();
+      return {
+        accountId: owner ?? null,
+        resources: (await listSim2RealComputeResources(owner, { refreshShared: true }))
+          .filter((resource) => resource.source !== 'local-agent')
+          .map(
+            ({
+              id,
+              name,
+              status,
+              engines,
+              cuda,
+              mock,
+              activeJobs,
+              queuedJobs,
+              maxConcurrentJobs,
+            }) => ({
+              id,
+              name,
+              status,
+              activeJobs,
+              queuedJobs,
+              maxConcurrentJobs,
+              ...(Array.isArray(engines) ? { engines } : {}),
+              ...(typeof cuda === 'boolean' ? { cuda } : {}),
+              ...(typeof mock === 'boolean' ? { mock } : {}),
+            }),
+          ),
+      };
+    }),
   );
   router.post(
     api('/setup'),
     handle(async (r, owner) => {
+      requireActiveCourse();
       const b = r.body ?? {};
       if (
         Object.keys(b).some((key) => !['accountId', 'computeResourceId'].includes(key)) ||
@@ -383,9 +396,10 @@ export function registerSim2RealWorkshopRoutes(
   );
   router.post(
     api('/:contextId/continue'),
-    handle(async (r, owner) => ({
-      session: await sessions.continue(String(r.params.contextId), owner),
-    })),
+    handle(async (r, owner) => {
+      requireActiveCourse();
+      return { session: await sessions.continue(String(r.params.contextId), owner) };
+    }),
   );
   router.post(
     api('/:contextId/pause'),
@@ -395,13 +409,14 @@ export function registerSim2RealWorkshopRoutes(
   );
   router.post(
     api('/:contextId/claim/:phase'),
-    handle(async (r, owner) =>
-      sessions.claim(
+    handle(async (r, owner) => {
+      requireActiveCourse();
+      return sessions.claim(
         String(r.params.contextId),
         String(r.params.phase) as 'train' | 'evaluate',
         r.body,
         owner,
-      ),
-    ),
+      );
+    }),
   );
 }

@@ -5,9 +5,11 @@ import { expect, it, vi } from 'vitest';
 it('ignores keyless modifier events without interrupting the simulation input handlers', async () => {
   const base = new URL('./public/', import.meta.url);
   const [html, teleop, simulator] = await Promise.all(
-    ['index.html', 'originman-teleop-link.js', 'originman-simulator.js'].map((name) =>
-      readFile(new URL(name, base), 'utf8'),
-    ),
+    [
+      '../fixtures/originman-simulator.html',
+      'originman-teleop-link.js',
+      'originman-simulator.js',
+    ].map((name) => readFile(new URL(name, base), 'utf8')),
   );
   const dom = new JSDOM(html, { runScripts: 'outside-only', url: 'https://example.test/' });
   const errors: unknown[] = [];

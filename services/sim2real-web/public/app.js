@@ -1531,7 +1531,6 @@ const VIEW_ANNOUNCEMENTS = {
   deploy: '部署与反馈',
   records: '证据与记录',
   station: '设备控制台',
-  classroom: 'OriginMan 受扰恢复课堂',
 };
 
 // One polite live region for view-switch announcements: nav buttons keep
@@ -2168,7 +2167,6 @@ const VIEW_STAGE_LABELS = {
   deploy: '设备与发布',
   records: '证据与记录',
   station: '设备与发布',
-  classroom: '课堂实验',
 };
 
 // Sidebar child entries are real workflow nodes. A node may share a top-level
@@ -2191,11 +2189,6 @@ const FLOW_CHILD_CONTEXTS = {
 // 无侧栏子项的落地位置（从进度条、对象链或深链直接进入视图）复用的横幅文案。
 // 名称与侧边栏入口保持一致，避免同一视图出现多套叫法。
 const VIEW_BANNERS = {
-  classroom: {
-    kicker: '课程 · OriginMan',
-    title: '课堂实验',
-    description: '在同一课堂查看受扰恢复仿真、训练记录、评测与回放。',
-  },
   simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。' },
   records: { kicker: '证据中心', title: '证据与记录', description: '轨迹、训练 Run、评测证据、模型制品和部署记录统一管理；点击一条记录可继续回放或查看详情。' },
   resources: { kicker: '证据中心', title: '执行资源', description: '管理本机 Agent、远程 GPU 和云端算力；训练页只选资源，不混入训练配置。' },
@@ -2215,7 +2208,7 @@ function parseHashLocation() {
   const raw = decodeURIComponent(window.location.hash.slice(1));
   const [view, child] = raw.split('/');
   return {
-    view: view === 'classroom' || WORKFLOW_VIEWS.includes(view) ? view : 'overview',
+    view: (view === 'classroom' || WORKFLOW_VIEWS.includes(view)) ? view : 'overview',
     child: child && FLOW_CHILD_CONTEXTS[child] ? child : '',
   };
 }
@@ -2278,14 +2271,14 @@ function renderFlowBanner() {
     : ctx.description);
 }
 
-let originmanClassroom;
-
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
-  // OriginMan's existing scene lives in the classroom section. Every shared
-  // simulation entry (sidebar, bookmark and shortcut) must resolve to it.
-  const originmanSimulation = view === 'simulate' && state.productId === 'originman';
-  const enteringClassroom = (view === 'classroom' || originmanSimulation) && state.productId === 'originman';
-  const wanted = enteringClassroom ? 'classroom' : WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  if (view === 'classroom' || (view === 'simulate' && state.productId === 'originman')) {
+    const dance = new URL('./workshop.html?course=dance&start=1', window.location.href);
+    if (view === 'classroom') window.location.replace(dance);
+    else window.location.assign(dance);
+    return;
+  }
+  const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
@@ -2295,22 +2288,6 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
   });
-  const classroomPanel = $('originman-workshop');
-  if (classroomPanel) {
-    classroomPanel.dataset.originmanView = wanted;
-    classroomPanel.hidden = !enteringClassroom;
-    if (enteringClassroom) {
-      originmanClassroom ??= window.OriginmanWorkshop?.mount({
-        request,
-        apiPath,
-        onConfigure: () => showTrainStep('configure'),
-        onPreview: (runId) => void originmanClassroom?.preview(runId),
-        onSubmitted: () => void loadOverview({ quiet: true }),
-      });
-      classroomPanel.open = true;
-      if (!changed) void originmanClassroom?.refresh();
-    }
-  }
   // 子界面分割默认值：进入多模块视图而未指定子项时落到第一个模块，
   // 保证「一次只看到一个子项的内容」（D-002）。
   applySubinterfacePartition(wanted, document.body.dataset.flowChild || '');
@@ -2381,13 +2358,11 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // while focus already lives in the main content (e.g. deep link boot).
   if (changed && focus) {
     const main = $('main-content');
-    if (enteringClassroom) $('originman-classroom-title')?.focus({ preventScroll: true });
-    else if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
+    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
     announce(`已切换到：${VIEW_ANNOUNCEMENTS[wanted] || wanted}`);
   }
   // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
   // 避免后台空转。
-  if (originmanSimulation) setFlowChild('simulate', { updateHash, focus: false });
   syncScopedPolls();
   // 窄屏下从抽屉里点了一个目的地就收起抽屉，否则正文仍被盖住。
   closeSidebarDrawer({ restoreFocus: false });
@@ -7622,9 +7597,9 @@ function renderNextAction() {
     view = guest ? 'simulate' : 'train';
     title = guest ? '先体验 OriginMan 仿真' : '选择 OriginMan 的训练任务';
     copy = guest
-      ? '在受扰恢复课堂观察机器人如何重新站稳。登录后可以发起训练并查看记录。'
-      : '选择预置舞蹈、从空作品编排动作组，也可以打开受扰恢复课堂或导入参考轨迹跟跳。';
-    label = guest ? '打开受扰恢复课堂 →' : '选择 OriginMan 任务 →';
+      ? '先看 OriginMan 舞蹈动作示意。登录后可以发起训练并查看记录。'
+      : '选择预置舞蹈、从空作品编排动作组，或导入参考轨迹跟跳。';
+    label = guest ? '打开舞蹈 Workshop →' : '选择 OriginMan 任务 →';
   } else if (goldenNext) {
     const stageOrder = { simulate: 0, train: 1, evaluate: 2, deploy: 3 };
     const currentKey = onboardingProgress().currentKey;
@@ -7984,7 +7959,7 @@ function renderOnboardChecklist() {
   const currentKey = progress.currentKey;
   const doneCount = progress.doneCount;
   const stepMeta = {
-    simulate: { view: 'simulate', cta: '打开仿真 →', copy: '运行仿真，录制一段可回放轨迹', originman: '在受扰恢复课堂观察机器人如何重新站稳' },
+    simulate: { view: 'simulate', cta: '打开仿真 →', copy: '运行仿真，录制一段可回放轨迹', originman: '在舞蹈 Workshop 查看动作示意' },
     train: { view: 'train', cta: '去发起训练 →', copy: '用 starter 模板提交 PPO 任务，跟踪奖励曲线', originman: '选择预置舞蹈、自由编排或参考轨迹跟跳' },
     evaluate: { view: 'evaluate', cta: '查看评测 →', copy: '检查成功率、跌倒率与控制延迟', originman: '按 Run 查看训练评测、策略与仿真回放' },
     deploy: { view: 'deploy', cta: '生成预检 →', copy: '只读预检通过后，把策略推进 RDK 板卡', originman: '选择设备并检查该任务的发布条件' },
@@ -8172,7 +8147,6 @@ async function refreshOriginmanContract() {
   if (state.productId !== 'originman' || !$('originman-contract-template')) return;
   const select = $('originman-contract-template');
   const selected = select.value;
-  $('originman-recovery-class').hidden = selected !== 'recovery';
   $('originman-use-contract').disabled = !selected || originmanRunState.choosingContract;
   setText('originman-contract-status', selected ? '正在读取任务契约…' : '尚未选择训练任务。');
   try {
@@ -8347,7 +8321,6 @@ function bindOriginmanTrainingWorkbench() {
     if (originmanContractType() !== 'dance')
       showToast($('originman-contract-status').textContent, 'error');
   });
-  $('originman-configure-recovery')?.addEventListener('click', () => setView('classroom'));
   $('originman-configure-run')?.addEventListener('click', () => void submitOriginmanDance());
   $('originman-check-compute')?.addEventListener('click', () => void checkSelectedOriginmanResource());
   $('originman-manage-compute')?.addEventListener('click', () => {
@@ -8357,7 +8330,6 @@ function bindOriginmanTrainingWorkbench() {
   document.addEventListener('click', (event) => {
     if (event.target instanceof Element && event.target.closest('[data-originman-configure]')) showTrainStep('configure');
   });
-  $('originman-recovery-class')?.addEventListener('click', () => setView('classroom'));
   $('originman-contract-template')?.addEventListener('change', () => {
     const editor = $('manifest-editor');
     if (originmanRunState.templateText === editor?.value) editor.value = '';
@@ -12208,12 +12180,11 @@ function wireEvents() {
     }
     state.productId = next;
     const activeView = document.body.dataset.activeView;
-    const sharedSimulation = activeView === 'simulate' ||
-      (activeView === 'classroom' && document.body.dataset.flowChild === 'simulate');
+    const sharedSimulation = activeView === 'simulate';
     if (sharedSimulation) {
       setView('simulate');
       setFlowChild('simulate', { focus: false });
-    } else if (next !== 'originman' && activeView === 'classroom') setView('overview');
+    }
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
     // model for the newly selected product; otherwise return to the account
