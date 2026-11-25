@@ -3987,6 +3987,7 @@ components:
         name: { type: string, maxLength: 120 }
         kind: { type: string, const: local-gpu }
         source: { type: string, enum: [server-runner, local-agent] }
+        classroomShared: { type: boolean, const: true, readOnly: true, description: Registered by the server-administered classroom GPU pool. }
         runnerUrl: { type: string, format: uri }
         tokenConfigured: { type: boolean }
         status: { type: string, enum: [online, offline, unknown] }
@@ -5242,6 +5243,12 @@ components:
         run: { $ref: "#/components/schemas/Run" }
         idempotentReplay: { type: boolean }
         reconciled: { type: boolean }
+        queue:
+          type: object
+          description: Latest queue information returned by the bound real Worker on a queued Run GET. Omitted if the Worker does not supply it. Position may change as the Worker schedules accounts.
+          properties:
+            position: { type: integer, minimum: 1, maximum: 1000 }
+            queuedAt: { type: string, format: date-time }
         workshopEvidenceIssue:
           type: string
           description: Why a completed workshop run still lacks independently matched worker evidence. Run status is preserved.

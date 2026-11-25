@@ -217,6 +217,7 @@ export function registerSim2RealWorkshopRoutes(
         runnerUrl: resource.runnerUrl,
         token: selected.runnerToken,
         accountId: owner ?? 'local-dev',
+        resourceId: resource.id,
         trajectory,
         stanceProfile: composition?.stanceProfile,
       }).catch(() => {

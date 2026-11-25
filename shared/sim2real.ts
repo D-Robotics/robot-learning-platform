@@ -781,13 +781,15 @@ export interface Sim2RealLocalWorkerIntegration {
  */
 export type Sim2RealComputeResourceSource = 'server-runner' | 'local-agent';
 
-/** A user-owned training endpoint registered in the workspace. */
+/** A training endpoint visible in the workspace. */
 export interface Sim2RealComputeResource {
   id: string;
   name: string;
   kind: 'local-gpu';
   /** Defaults to `server-runner` for ledger rows written before this field. */
   source?: Sim2RealComputeResourceSource;
+  /** Declared by the server-administered classroom GPU pool. */
+  classroomShared?: true;
   runnerUrl: string;
   tokenConfigured: boolean;
   status: 'online' | 'offline' | 'unknown';

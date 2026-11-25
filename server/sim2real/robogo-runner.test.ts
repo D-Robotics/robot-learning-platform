@@ -308,6 +308,26 @@ describe('RoboGo Sim2Real runner adapter', () => {
     expect(result.failureDetail).toBeUndefined();
   });
 
+  it('reports validated queue evidence only while the Worker job is queued', async () => {
+    const createdAt = '2025-06-01T01:23:45.000Z';
+    const read = (status: string, queuePosition: unknown, timestamp: string) =>
+      requestRobogoTrainingStatus({
+        accountId: 'alice',
+        externalRunId: 'queue-job',
+        runnerUrl: 'https://runner.example.test/train',
+        fetchImpl: async () =>
+          Response.json({ status, runId: 'queue-job', queuePosition, createdAt: timestamp }),
+      });
+    expect((await read('queued', 3, createdAt)).queue).toEqual({
+      position: 3,
+      queuedAt: createdAt,
+    });
+    expect((await read('queued', '3', createdAt)).queue).toEqual({ queuedAt: createdAt });
+    expect((await read('queued', 1, '2099-01-01T00:00:00.000Z')).queue).toEqual({ position: 1 });
+    expect((await read('queued', 1001, 'invalid')).queue).toBeUndefined();
+    expect((await read('running', 2, createdAt)).queue).toBeUndefined();
+  });
+
   it('polls a runner job and accepts bounded checkpoint, artifact, and metrics metadata', async () => {
     let capturedUrl = '';
     const result = await requestRobogoTrainingStatus({

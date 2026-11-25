@@ -355,6 +355,7 @@ test('preset and custom compositions keep independent drafts and can reorder all
     request: async () => ({ plans: [] }),
     readContext: () => ({ productId: 'originman' }),
     refreshControls() {},
+    onDraftChange() {},
   });
   const { document, Event } = workspace.window;
   const input = (element, value) => {
@@ -605,6 +606,126 @@ test('changing a Worker inside the dance editor preserves the selection until ch
   resource.dispatchEvent(new f.window.Event('input', { bubbles: true }));
   resource.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   assert.equal(selected, 'gpu');
+});
+
+test('queued reference Run displays Worker evidence and offers a read-only check of compatible capacity', async (t) => {
+  const template = fs.readFileSync(
+    new URL('./public/originman-reference-run.html', import.meta.url),
+    'utf8',
+  );
+  const dom = new JSDOM(template, {
+    url: 'https://platform.test/robotics-learning/originman-reference-run.html?runId=run_waiting',
+    pretendToBeVisual: true,
+  });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+  dom.window.HTMLMediaElement.prototype.pause = () => {};
+  dom.window.HTMLMediaElement.prototype.load = () => {};
+  const now = Date.parse('2026-11-25T12:00:00Z');
+  const original = {
+    id: 'run_waiting',
+    taskId: 'originman-reference-track',
+    status: 'queued',
+    computeResourceId: 'original-worker',
+    backend: 'local',
+    externalRunId: 'worker-job',
+    createdAt: new Date(now - 180000).toISOString(),
+  };
+  const free = {
+    id: 'free-worker',
+    name: '课堂 GPU 2',
+    source: 'server-runner',
+    classroomShared: true,
+    status: 'online',
+    mock: false,
+    engines: ['originman-reference-ppo'],
+    lastCheckedAt: new Date(now).toISOString(),
+    cuda: null,
+    activeJobs: 1,
+    maxConcurrentJobs: 2,
+    queuedJobs: 0,
+  };
+  let poll;
+  let attempts = 0;
+  const requests = [];
+  const page = await startRunDetail({
+    document,
+    location,
+    now: () => now,
+    setTimeoutImpl: (callback) => {
+      poll = callback;
+      return 1;
+    },
+    clearTimeoutImpl: () => {
+      poll = undefined;
+    },
+    fetchImpl: async (url, init) => {
+      const path = new URL(url).pathname;
+      requests.push([path, init.method ?? 'GET']);
+      if (path.endsWith('/compute-resources')) {
+        return Response.json({
+          ok: true,
+          computeResources: [
+            { ...free, id: 'original-worker', cuda: true },
+            { ...free, id: 'backlogged-worker', cuda: true, queuedJobs: 1 },
+            { ...free, id: 'incompatible-worker', cuda: true, engines: ['another-engine'] },
+            { ...free, id: 'stale-worker', cuda: true, lastCheckedAt: original.createdAt },
+            { ...free, id: 'cpu-worker', cuda: false, activeJobs: 0 },
+            { ...free, id: 'unknown-private-worker', classroomShared: undefined, activeJobs: 0 },
+            free,
+          ],
+        });
+      }
+      attempts += 1;
+      if (attempts === 1)
+        return Response.json({
+          run: original,
+          queue: {
+            position: 2,
+            queuedAt: new Date(now - 120000).toISOString(),
+          },
+        });
+      if (attempts === 2) return Response.json({}, { status: 503 });
+      return Response.json({ run: { ...original, status: 'running' } });
+    },
+  });
+  t.after(() => page.dispose());
+
+  const queue = document.getElementById('run-queue-panel');
+  const status = document.getElementById('run-queue-status');
+  const alternative = document.getElementById('run-queue-alternative');
+  assert.equal(queue.hidden, false);
+  assert.equal(status.textContent, '当前队列第 2 位 · 已等待 2 分钟');
+  document.getElementById('run-queue-check-workers').click();
+  await new Promise(setImmediate);
+  assert.equal(alternative.hidden, false);
+  assert.equal(new URL(alternative.href).searchParams.get('computeResourceId'), free.id);
+  assert.equal(
+    new URL(document.getElementById('run-workshop-home').href).searchParams.get(
+      'computeResourceId',
+    ),
+    original.computeResourceId,
+  );
+  assert.match(document.getElementById('run-queue-worker-status').textContent, /确认已取消原 Run/);
+
+  const nextPoll = async () => {
+    assert.equal(typeof poll, 'function');
+    const callback = poll;
+    poll = undefined;
+    callback();
+    await new Promise(setImmediate);
+  };
+  await nextPoll();
+  assert.equal(status.textContent, '暂未取得队列位置 · 提交至今 3 分钟');
+  await nextPoll();
+  assert.equal(queue.hidden, true);
+  assert.equal(alternative.hasAttribute('href'), false);
+  assert.deepEqual(requests, [
+    ['/robotics-learning/api/v1/duck/runs/run_waiting', 'GET'],
+    ['/robotics-learning/api/v1/duck/compute-resources', 'GET'],
+    ['/robotics-learning/api/v1/duck/runs/run_waiting', 'GET'],
+    ['/robotics-learning/api/v1/duck/runs/run_waiting', 'GET'],
+  ]);
 });
 
 test('reference playback seeks only to evaluated sections and handles old and mismatched digests', async (t) => {

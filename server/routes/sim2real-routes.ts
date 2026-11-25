@@ -178,6 +178,7 @@ import {
   screenOriginmanReferenceWithWorker,
   normalizeComputeRunnerUrl,
   resolvedTaskPack,
+  type Sim2RealRobogoRunResult,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
@@ -3821,6 +3822,7 @@ export function createSim2RealRouter(
       }
       const evidence = await readWorkshopRunEvidence(run, owner);
       let current = evidence.run;
+      let workerQueue: Sim2RealRobogoRunResult['queue'];
       if (
         (run.backend === 'local' || run.backend === 'robogo') &&
         ['queued', 'running', 'cancelling'].includes(run.status) &&
@@ -3902,6 +3904,15 @@ export function createSim2RealRouter(
                 : {}),
             };
             current = (await updateSim2RealRun(run.id, update, owner)) ?? run;
+            if (
+              current.status === 'queued' &&
+              run.backend === 'local' &&
+              run.mock !== true &&
+              latest.mock !== true &&
+              latest.externalRunId === run.externalRunId
+            ) {
+              workerQueue = latest.queue;
+            }
             // The poll only runs while the ledger copy is queued/running, so a
             // completed status here is always the first observed completion:
             // pull the engine's evaluation telemetry into the replay pipeline
@@ -3975,6 +3986,7 @@ export function createSim2RealRouter(
       response.json({
         ok: true,
         artifactRetention: await getRunPolicyRetention(current, owner),
+        ...(workerQueue ? { queue: workerQueue } : {}),
         ...(evidence.workshopEvidenceIssue && {
           workshopEvidenceIssue: evidence.workshopEvidenceIssue,
         }),
@@ -5205,6 +5217,7 @@ export function createSim2RealRouter(
           runnerUrl: credentials.resource.runnerUrl,
           token: credentials.runnerToken,
           accountId: owner ?? 'local-dev',
+          resourceId: credentials.resource.id,
           trajectory: training.originmanReference.trajectory,
           stanceProfile: composition.stanceProfile,
         }).catch(() => null);

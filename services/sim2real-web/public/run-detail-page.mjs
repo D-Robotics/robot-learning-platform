@@ -1,4 +1,5 @@
 import { renderDanceReferenceLinks } from './dance-reference-links.mjs';
+import { anotherWorkshopWorker } from './originman-worker-capacity.mjs';
 
 const RUN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/;
 const REFERENCE_TASK = 'originman-reference-track';
@@ -595,6 +596,23 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }
 
+function renderReferenceQueue(document, run, queue, now) {
+  const panel = document.getElementById('run-queue-panel');
+  if (!panel) return;
+  panel.hidden = run.taskId !== REFERENCE_TASK || run.status !== 'queued';
+  if (panel.hidden) return;
+  const position = Number.isInteger(queue?.position) && queue.position >= 1 && queue.position <= 1000
+    ? `当前队列第 ${queue.position} 位` : '暂未取得队列位置';
+  const workerTime = Date.parse(queue?.queuedAt ?? '');
+  const hasWorkerTime = Number.isFinite(workerTime) && workerTime <= now;
+  const elapsed = now - (hasWorkerTime ? workerTime : Date.parse(run.createdAt ?? ''));
+  const elapsedMinutes = Math.floor(elapsed / 60000);
+  const wait = elapsedMinutes >= 60 ? `${Math.floor(elapsedMinutes / 60)} 小时 ${elapsedMinutes % 60} 分钟`
+    : elapsedMinutes > 0 ? `${elapsedMinutes} 分钟` : '不到 1 分钟';
+  text(document, 'run-queue-status', elapsed >= 0
+    ? `${position} · ${hasWorkerTime ? '已等待' : '提交至今'} ${wait}` : position);
+}
+
 async function showResimulatedReplay(document, location, fetchImpl, run) {
   const panel = document.getElementById('resimulated-replay');
   const video = document.getElementById('resimulated-video');
@@ -618,13 +636,15 @@ export async function startRunDetail({
   fetchImpl = fetch,
   setTimeoutImpl = setTimeout,
   clearTimeoutImpl = clearTimeout,
+  now = Date.now,
 } = {}) {
   const runId = new URLSearchParams(location?.search ?? '').get('runId') ?? '';
   const error = document?.getElementById('run-error');
   let timer = null;
   let disposed = false;
-  let loaded = false;
+  let lastRun;
   let active = false;
+  let loading = false;
   const fail = (message) => {
     if (error) {
       error.textContent = message;
@@ -644,6 +664,47 @@ export async function startRunDetail({
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
+  const queueButton = document.getElementById('run-queue-check-workers');
+  const queueWorkerStatus = document.getElementById('run-queue-worker-status');
+  const queueAlternative = document.getElementById('run-queue-alternative');
+  const clearQueueAlternative = () => {
+    if (!queueAlternative) return;
+    queueAlternative.hidden = true;
+    queueAlternative.removeAttribute('href');
+    queueWorkerStatus.hidden = true;
+  };
+  const checkQueueWorkers = async () => {
+    const originalWorkerId = lastRun?.computeResourceId;
+    if (!active || lastRun?.taskId !== REFERENCE_TASK || lastRun.status !== 'queued' || !originalWorkerId) return;
+    clearQueueAlternative();
+    queueButton.disabled = true;
+    queueWorkerStatus.hidden = false;
+    queueWorkerStatus.textContent = '正在读取当前账号可用的算力…';
+    const stillQueued = () => !disposed && active && lastRun?.status === 'queued' && lastRun.computeResourceId === originalWorkerId;
+    try {
+      const url = new URL('./api/v1/duck/compute-resources', location.href);
+      const response = await fetchImpl(url.href, { credentials: 'same-origin', cache: 'no-store' });
+      const payload = await response.json();
+      if (!response.ok || payload?.ok !== true || !Array.isArray(payload.computeResources)) throw new Error();
+      if (!stillQueued()) return;
+      const alternative = anotherWorkshopWorker(payload.computeResources, originalWorkerId, now());
+      if (!alternative) {
+        queueWorkerStatus.textContent = '最近没有发现有空位的兼容算力。';
+        return;
+      }
+      const href = new URL('./originman-reference.html', location.href);
+      href.searchParams.set('computeResourceId', alternative.id);
+      queueAlternative.href = href.href;
+      queueAlternative.textContent = `查看 ${alternative.name} 的训练设置`;
+      queueAlternative.hidden = false;
+      queueWorkerStatus.textContent = '查询时这项算力有空位。原 Run 仍在所选算力排队。如需换卡，先确认已取消原 Run，再提交新的训练。';
+    } catch {
+      if (stillQueued()) queueWorkerStatus.textContent = '暂时无法核对其他算力，请稍后重试。';
+    } finally {
+      queueButton.disabled = false;
+    }
+  };
+  queueButton?.addEventListener('click', checkQueueWorkers);
   const logsButton = document.getElementById('run-logs-load');
   const loadLogs = async () => {
     logsButton.disabled = true;
@@ -673,7 +734,8 @@ export async function startRunDetail({
     }, 10000);
   };
   const loadRun = async (quiet = false) => {
-    if (disposed) return;
+    if (disposed || loading) return;
+    loading = true;
     if (!quiet) {
       if (error) error.hidden = true;
       text(document, 'run-connection-status', '正在读取本次运行');
@@ -686,34 +748,51 @@ export async function startRunDetail({
         headers: { accept: 'application/json' },
       });
       const payload = await response.json().catch(() => null);
+      if (disposed) return;
       if (!response.ok) {
+        if ([401, 403, 404, 409].includes(response.status)) active = false;
         if (response.status === 401) throw new Error('当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
-        if (response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
+        if (response.status === 403 || response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
         throw new Error('平台暂时无法读取这条 Run。请保留原链接，稍后刷新本页。');
       }
       const run = payload?.run;
-      if (!run || run.id !== runId) throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
-      loaded = true;
+      if (!run || run.id !== runId) {
+        active = false;
+        throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
+      }
+      if (run.status !== 'queued' || run.computeResourceId !== lastRun?.computeResourceId) clearQueueAlternative();
+      lastRun = run;
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId, payload.workshopEvidenceIssue);
+      renderReferenceQueue(document, run, payload.queue, now());
+      if (queueButton) queueButton.hidden = !run.computeResourceId;
       void showResimulatedReplay(document, location, fetchImpl, run);
-      schedule();
     } catch (cause) {
-      if (!quiet || !loaded) fail(cause instanceof Error ? cause.message : '运行读取失败。');
+      if (lastRun) renderReferenceQueue(document, lastRun, undefined, now());
+      if (!active) {
+        clearQueueAlternative();
+        if (queueButton) queueButton.hidden = true;
+      }
+      if (!quiet || !lastRun || !active) fail(cause instanceof Error ? cause.message : '运行读取失败。');
       else text(document, 'run-connection-status', '状态刷新失败 · 显示最近一次已读取结果');
+    } finally {
+      loading = false;
+      schedule();
     }
   };
-  document.getElementById('refresh-run')?.addEventListener('click', () => {
+  const refreshButton = document.getElementById('refresh-run');
+  const refreshRun = () => {
     if (timer !== null) clearTimeoutImpl(timer);
     timer = null;
     void loadRun();
-  });
+  };
+  refreshButton?.addEventListener('click', refreshRun);
   const onVisibility = () => {
     if (document.visibilityState === 'hidden') {
       if (timer !== null) clearTimeoutImpl(timer);
       timer = null;
-    } else if (loaded) schedule();
+    } else if (lastRun) schedule();
   };
   document.addEventListener('visibilitychange', onVisibility);
   await loadRun();
@@ -725,6 +804,8 @@ export async function startRunDetail({
       if (timer !== null) clearTimeoutImpl(timer);
       timer = null;
       document.removeEventListener('visibilitychange', onVisibility);
+      refreshButton?.removeEventListener('click', refreshRun);
+      queueButton?.removeEventListener('click', checkQueueWorkers);
       logsButton?.removeEventListener('click', loadLogs);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },

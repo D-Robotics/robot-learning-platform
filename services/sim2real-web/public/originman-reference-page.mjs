@@ -1,6 +1,9 @@
 import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=10';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
+  anotherWorkshopWorker, freshWorkshopWorkerLoad, workshopWorkerReady,
+} from './originman-worker-capacity.mjs';
+import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
 } from './originman-reference-compose.mjs?v=2';
 
@@ -20,6 +23,7 @@ const exportButton = byId('reference-export');
 const checkWorker = byId('reference-worker-check');
 const refreshWorkers = byId('reference-worker-refresh');
 const workerHint = byId('reference-worker-hint');
+const workerSuggestion = byId('reference-worker-suggestion');
 const screenCurrent = byId('reference-screen-current');
 const screenFiles = byId('reference-screen-files');
 const screenCancel = byId('reference-screen-cancel');
@@ -137,6 +141,7 @@ function refresh() {
   worker.disabled = submitting || checking || Boolean(screening);
   checkWorker.disabled = worker.disabled || !worker.value;
   refreshWorkers.disabled = worker.disabled;
+  showWorkerSuggestion();
   screenCurrent.disabled = editing || checking || !ready || !selectedWorkerReady();
   screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
   screenCancel.hidden = !screening;
@@ -151,15 +156,33 @@ function selectedWorkerReady() {
 
 function showWorkerHint() {
   const selected = resources.find(({ id }) => id === worker.value);
+  const load = freshWorkshopWorkerLoad(selected);
   if (!resources.length) {
     workerHint.textContent = '当前账号未找到支持本课程的算力。可在工作台的「执行资源」中核对。';
   } else if (!selected?.ready) {
     workerHint.textContent = '选择算力并检查连接，确认支持参考轨迹训练。';
-  } else if (selected.activeJobs >= selected.maxConcurrentJobs && selected.maxConcurrentJobs > 0) {
-    workerHint.textContent = '所选算力的运行名额已满，提交后将在这张卡上排队。';
+  } else if (load && load.activeJobs === load.maxConcurrentJobs) {
+    workerHint.textContent = '查询时所选算力的运行名额已满。提交后以 Worker 的当前队列为准。';
+  } else if (load?.queuedJobs > 0) {
+    workerHint.textContent = '所选算力最近已有任务排队，提交后以 Worker 的安排为准。';
+  } else if (!load) {
+    workerHint.textContent = '算力已连接。当前缺少实时负载，可刷新负载后再判断是否需要排队。';
   } else {
-    workerHint.textContent = '算力已连接，可以筛查当前轨迹。负载为最近一次查询的快照。';
+    workerHint.textContent = '所选算力最近有空位。提交时仍会核对当前负载和账号名额。';
   }
+}
+
+function workerAlternative() {
+  const load = freshWorkshopWorkerLoad(resources.find(({ id }) => id === worker.value));
+  return !load || load.activeJobs === load.maxConcurrentJobs || load.queuedJobs > 0
+    ? anotherWorkshopWorker(resources, worker.value)
+    : undefined;
+}
+
+function showWorkerSuggestion() {
+  const alternative = workerAlternative();
+  byId('reference-worker-suggestion-panel').hidden = worker.disabled || !alternative;
+  workerSuggestion.textContent = alternative ? '选择 ' + alternative.name + '（最近有空位）' : '';
 }
 
 async function loadWorkers(selection) {
@@ -167,15 +190,12 @@ async function loadWorkers(selection) {
   resources = computeResources
     .filter(({ source, mock, engines }) => source !== 'local-agent' && mock !== true &&
       (!engines?.length || engines.includes('originman-reference-ppo')))
-    .map(({ id, name, status, mock, cuda, engines, activeJobs, maxConcurrentJobs, queuedJobs }) => ({
-      id, name, cuda, activeJobs, maxConcurrentJobs, queuedJobs,
-      ready: status === 'online' && mock === false && engines?.includes('originman-reference-ppo'),
-    }));
+    .map((resource) => ({ ...resource, ready: workshopWorkerReady(resource) }));
   worker.replaceChildren(new Option('请选择', ''));
   for (const value of resources) {
-    const measured = value.ready && Number.isInteger(value.activeJobs) && value.maxConcurrentJobs > 0;
-    const state = measured ? `运行 ${value.activeJobs}/${value.maxConcurrentJobs}` : value.ready ? '可用' : '待检查';
-    const queue = value.ready && Number.isInteger(value.queuedJobs) ? ` · 排队 ${value.queuedJobs}` : '';
+    const load = freshWorkshopWorkerLoad(value);
+    const state = load ? `运行 ${load.activeJobs}/${load.maxConcurrentJobs}` : value.ready ? '负载待刷新' : '待检查';
+    const queue = load ? ` · 排队 ${load.queuedJobs}` : '';
     const option = new Option(`${value.name} · ${state}${queue}`, value.id);
     option.dataset.cuda = String(value.cuda === true);
     worker.append(option);
@@ -272,6 +292,17 @@ async function updateWorkers(testConnection) {
 }
 checkWorker.addEventListener('click', () => void updateWorkers(true));
 refreshWorkers.addEventListener('click', () => void updateWorkers(false));
+workerSuggestion.addEventListener('click', () => {
+  if (worker.disabled) return;
+  const alternative = workerAlternative();
+  if (!alternative) {
+    void updateWorkers(false);
+    return;
+  }
+  worker.value = alternative.id;
+  worker.dispatchEvent(new Event('change'));
+  worker.focus();
+});
 
 async function readClip(incoming) {
   if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');

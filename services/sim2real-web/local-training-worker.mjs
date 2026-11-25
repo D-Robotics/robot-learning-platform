@@ -16,7 +16,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { accessSync, constants, createReadStream, realpathSync, statSync } from 'node:fs';
+import {
+  accessSync,
+  constants,
+  createReadStream,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 import process from 'node:process';
@@ -37,6 +46,9 @@ const MAX_BODY = 2 * 1024 * 1024;
 const MAX_REFERENCE_BODY = 16 * 1024 * 1024;
 const REFERENCE_ENGINE = 'originman-reference-ppo';
 const REFERENCE_TASK = 'originman-reference-track';
+const REFERENCE_SCREEN_TTL_MS = 5 * 60_000;
+const MAX_REFERENCE_SCREEN_RECEIPTS = 128;
+const MAX_REFERENCE_BASIS_ENTRIES = 12_000;
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_DANCE_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -147,6 +159,8 @@ const pendingJobWrites = new WeakMap();
 const queuedJobs = [];
 const activeJobs = new Set();
 let screening = false;
+let referenceScreenRequests = 0;
+const referenceScreenReceipts = new Map();
 let workerShuttingDown = false;
 const jobChildren = new Map();
 const cancellationBarriers = new Map();
@@ -1337,8 +1351,146 @@ async function handleTrain(request, response) {
   json(response, 202, publicJob(job));
 }
 
+// Only the repository's file-based reference adapter has a known screening
+// basis. Custom wrappers still get the original, live simulation check.
+function referenceScreenBasis(engine) {
+  if (
+    process.platform === 'win32' ||
+    ['PYTHONPATH', 'PYTHONHOME', 'LD_LIBRARY_PATH', 'LD_PRELOAD', 'MUJOCO_PLUGIN_PATH'].some(
+      (key) => process.env[key],
+    )
+  )
+    return null;
+  const assignment = 'RDK_ORIGINMAN_DANCE_BUNDLE_DIR=';
+  let bundle = process.env.RDK_ORIGINMAN_DANCE_BUNDLE_DIR;
+  let python = engine.executable;
+  let [adapter] = engine.args;
+  if (engine.executable === '/usr/bin/env' && engine.args.length === 3) {
+    if (!engine.args[0].startsWith(assignment)) return null;
+    bundle = engine.args[0].slice(assignment.length);
+    [, python, adapter] = engine.args;
+  } else if (engine.args.length !== 1) return null;
+  if (
+    !bundle ||
+    !adapter ||
+    ![bundle, adapter, python].every((file) => path.isAbsolute(file)) ||
+    !adapter.endsWith('/engines/originman-reference-ppo/adapter.py') ||
+    !/\/bin\/python(?:3(?:\.\d+)?)?$/.test(python)
+  )
+    return null;
+
+  try {
+    const engineRoot = path.dirname(adapter);
+    const root = path.resolve(engineRoot, '../..');
+    const danceRoot = path.join(root, 'engines/originman-dance-ppo');
+    const calibration = path.join(
+      root,
+      'plugins/rdk-robot-learning-platform/references/originman-reference-calibration.json',
+    );
+    const venv = path.resolve(path.dirname(python), '..');
+    const pyvenv = path.join(venv, 'pyvenv.cfg');
+    if (!/^include-system-site-packages\s*=\s*false\s*$/im.test(readFileSync(pyvenv, 'utf8')))
+      return null;
+    const lib = path.join(venv, 'lib');
+    const versions = readdirSync(lib).filter((name) => /^python3\.\d+$/.test(name));
+    if (versions.length !== 1) return null;
+    const site = path.join(lib, versions[0], 'site-packages');
+    const siteEntries = readdirSync(site);
+    const profile = readFileSync(calibration);
+    const maxTiltDeg = JSON.parse(profile.toString('utf8')).evaluation?.maxTiltDeg;
+    if (!Number.isFinite(maxTiltDeg) || maxTiltDeg <= 0 || maxTiltDeg > 180) return null;
+
+    const hash = createHash('sha256');
+    let files = 0;
+    function stamp(filename, walk = false, model = false) {
+      if (++files > MAX_REFERENCE_BASIS_ENTRIES) throw Error('screen basis too large');
+      const info = lstatSync(filename, { bigint: true });
+      if (!info.isFile() && !info.isDirectory()) throw Error('unknown screen basis entry');
+      hash.update(
+        JSON.stringify([
+          filename,
+          String(info.dev),
+          String(info.ino),
+          String(info.mode),
+          String(info.size),
+          String(info.mtimeNs),
+          String(info.ctimeNs),
+        ]),
+      );
+      if (model && info.isFile() && filename.endsWith('.xml')) {
+        const xml = readFileSync(filename, 'utf8');
+        if (
+          /<!DOCTYPE|<!ENTITY/i.test(xml) ||
+          [...xml.matchAll(/\b(?:file|meshdir|texturedir|assetdir)\s*=\s*(["'])(.*?)\1/gi)].some(
+            ([, , entry]) =>
+              entry.startsWith('/') || /[:\\&]/.test(entry) || entry.split('/').includes('..'),
+          )
+        )
+          throw Error('external screen asset');
+      }
+      if (!walk || !info.isDirectory()) return;
+      for (const child of readdirSync(filename).sort()) {
+        stamp(path.join(filename, child), true, model);
+      }
+    }
+    hash.update(JSON.stringify([engine, python, bundle]));
+    for (const file of [realpathSync(python), pyvenv, site, calibration]) stamp(file);
+    if (engine.executable !== python) stamp(realpathSync(engine.executable));
+    for (const folder of [engineRoot, danceRoot]) {
+      stamp(folder);
+      for (const name of readdirSync(folder)
+        .filter((entry) => entry.endsWith('.py') || entry === '__pycache__')
+        .sort())
+        stamp(path.join(folder, name), name === '__pycache__');
+    }
+    // Wheels can keep native simulation or BLAS dependencies beside the Python folders.
+    const dependencies = ['gymnasium', 'mujoco', 'numpy', 'scipy'];
+    for (const folder of dependencies) stamp(path.join(site, folder), true);
+    for (const name of siteEntries.sort()) {
+      if (dependencies.some((dep) => name === dep + '.libs' || name.startsWith(dep + '-')))
+        stamp(path.join(site, name), true);
+      else if (/\.pth$|^(?:site|user)customize\.py$|^__pycache__$/.test(name))
+        stamp(path.join(site, name), true);
+    }
+    const scene = path.join(bundle, 'model', 'scene.xml');
+    stamp(bundle, true, true);
+    return {
+      key: hash.digest('hex'),
+      maxTiltDeg,
+      profile,
+      sceneSha256: createHash('sha256').update(readFileSync(scene)).digest('hex'),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function successfulReferenceScreen(report, trajectory, basis) {
+  if (!basis || report.invalid !== undefined || report.stanceProfile !== trajectory.stanceProfile)
+    return false;
+  const gate = report.gate;
+  const calibration = createHash('sha256').update(basis.profile);
+  if (typeof report.stanceProfile === 'string') calibration.update('\0' + report.stanceProfile);
+  return (
+    report.sceneSha256 === basis.sceneSha256 &&
+    report.calibrationSha256 === calibration.digest('hex') &&
+    typeof report.trajectorySha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(report.trajectorySha256) &&
+    gate?.completed === true &&
+    gate.firstFailedFrame === null &&
+    Number.isSafeInteger(gate.framesExpected) &&
+    gate.framesExpected > 0 &&
+    Array.isArray(trajectory.joint_pos) &&
+    gate.framesExpected === trajectory.joint_pos.length &&
+    gate.framesEvaluated === gate.framesExpected &&
+    Number.isFinite(gate.maxTiltDeg) &&
+    gate.maxTiltDeg >= 0 &&
+    gate.maxTiltDeg < basis.maxTiltDeg
+  );
+}
+
 async function handleReferenceScreen(request, response) {
-  accountId(request, {});
+  const owner = accountId(request, {});
   await ensureJobsLoaded();
   const engine = engineFor({ training: { engine: REFERENCE_ENGINE } });
   if (!engineExecutableReady(engine.executable)) {
@@ -1347,13 +1499,39 @@ async function handleReferenceScreen(request, response) {
   concurrencyLimits();
   // Reference screening uses a separate, single CPU process so a user can
   // validate a recipe and queue training even when all GPU slots are occupied.
-  if (preflightInFlight || screening) {
+  if (referenceScreenRequests >= 2) {
     throw fail('reference worker is busy', 409, 'reference_screen_busy');
   }
-  screening = true;
+  referenceScreenRequests++;
+  let live = false;
   try {
     const trajectory = await bodyJson(request, MAX_REFERENCE_BODY);
     const input = JSON.stringify(trajectory);
+    const referenceSha256 = createHash('sha256').update(input).digest('hex');
+    const resourceId = request.headers['x-sim2real-screen-resource'];
+    const basis =
+      typeof resourceId === 'string' && /^[A-Za-z0-9][\w.-]{0,127}$/.test(resourceId)
+        ? referenceScreenBasis(engine)
+        : null;
+    // The input digest includes the stance. The Worker process itself and the
+    // effective screening files are part of the identity, alongside the owner
+    // and platform resource. A restart discards this memory-only cache.
+    const cacheKey = basis ? JSON.stringify([owner, resourceId, referenceSha256]) : null;
+    const previous = cacheKey && referenceScreenReceipts.get(cacheKey);
+    if (
+      previous &&
+      previous.basis === basis.key &&
+      Date.now() - previous.screenedAt >= 0 &&
+      Date.now() - previous.screenedAt < REFERENCE_SCREEN_TTL_MS
+    ) {
+      json(response, 200, { ...previous.result, cached: true });
+      return;
+    }
+    if (cacheKey) referenceScreenReceipts.delete(cacheKey);
+    if (preflightInFlight || screening) {
+      throw fail('reference worker is busy', 409, 'reference_screen_busy');
+    }
+    screening = live = true;
     const report = await new Promise((resolve, reject) => {
       const child = spawn(engine.executable, [...engine.args, '--screen-reference'], {
         detached: process.platform !== 'win32',
@@ -1367,6 +1545,7 @@ async function handleReferenceScreen(request, response) {
             profile: 'smoke',
           }),
           CUDA_VISIBLE_DEVICES: '',
+          ...(basis && { PYTHONDONTWRITEBYTECODE: '1' }),
         },
       });
       activeChildren.add(child);
@@ -1393,14 +1572,27 @@ async function handleReferenceScreen(request, response) {
         }
       });
     });
-    json(response, 200, {
+    const result = {
       ...report,
       ok: true,
-      referenceSha256: createHash('sha256').update(input).digest('hex'),
-    });
+      referenceSha256,
+    };
+    if (
+      cacheKey &&
+      successfulReferenceScreen(result, trajectory, basis) &&
+      referenceScreenBasis(engine)?.key === basis.key
+    ) {
+      if (referenceScreenReceipts.size >= MAX_REFERENCE_SCREEN_RECEIPTS)
+        referenceScreenReceipts.delete(referenceScreenReceipts.keys().next().value);
+      referenceScreenReceipts.set(cacheKey, { basis: basis.key, screenedAt: Date.now(), result });
+    }
+    json(response, 200, result);
   } finally {
-    screening = false;
-    void pumpQueue();
+    referenceScreenRequests--;
+    if (live) {
+      screening = false;
+      void pumpQueue();
+    }
   }
 }
 

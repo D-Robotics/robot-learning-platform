@@ -8,8 +8,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
+import { originmanReferenceDigest } from '../sim2real/originman-reference-digest.js';
 import {
   appendSim2RealTelemetry,
+  createSim2RealComputeResource,
   createSim2RealRun,
   reserveSim2RealRun,
   storeSim2RealRelayArtifact,
@@ -70,6 +72,136 @@ async function fixture() {
   process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
   return createSim2RealRouter();
 }
+
+it('uses the same trusted Worker resource for manual and submit screening, and skips both on Run replay', async () => {
+  const router = await fixture();
+  const resource = await createSim2RealComputeResource({
+    name: 'reference-worker',
+    kind: 'local-gpu',
+    source: 'server-runner',
+    runnerUrl: 'http://127.0.0.1:19091/train',
+    status: 'online',
+    engines: ['originman-reference-ppo'],
+    mock: false,
+    lastCheckedAt: new Date().toISOString(),
+  });
+  const preset = { presetId: 'example-arms-preset' };
+  const preview = await invoke(router, 'post', '/api/sim2real/originman-motion/preview', {
+    body: preset,
+  });
+  expect(preview.statusCode).toBe(200);
+  const pinned = {
+    composition: preset,
+    expectedTrajectorySha256: preview.body.preview.trajectorySha256,
+  };
+  const model = await invoke(router, 'post', '/api/sim2real/originman-reference/model', {
+    body: { computeResourceId: resource.id },
+  });
+  expect(model.statusCode).toBe(200);
+  const originalFetch = globalThis.fetch;
+  const screened: { owner: string | null; resource: string | null; body: string }[] = [];
+  let launches = 0;
+  let statusReads = 0;
+  const queuedAt = new Date().toISOString();
+  globalThis.fetch = (async (input, init) => {
+    const pathname = new URL(String(input)).pathname;
+    if (pathname === '/originman-reference/screen') {
+      const body = String(init?.body);
+      const headers = new Headers(init?.headers);
+      screened.push({
+        owner: headers.get('x-sim2real-account'),
+        resource: headers.get('x-sim2real-screen-resource'),
+        body,
+      });
+      const trajectory = JSON.parse(body);
+      const frames = trajectory.joint_pos.length;
+      return Response.json({
+        ok: true,
+        ...(screened.length > 1 && { cached: true }),
+        referenceSha256: createHash('sha256').update(body).digest('hex'),
+        trajectorySha256: originmanReferenceDigest(trajectory),
+        sceneSha256: '1'.repeat(64),
+        calibrationSha256: '2'.repeat(64),
+        gate: {
+          completed: true,
+          framesExpected: frames,
+          framesEvaluated: frames,
+          firstFailedFrame: null,
+          maxTiltDeg: 1,
+        },
+      });
+    }
+    if (pathname === '/runs/reference-run-1') {
+      expect(new Headers(init?.headers).get('x-sim2real-account')).toBe('local-dev');
+      statusReads++;
+      return Response.json({
+        status: 'queued',
+        runId: 'reference-run-1',
+        queuePosition: 2,
+        createdAt: queuedAt,
+        mock: false,
+      });
+    }
+    expect(pathname).toBe('/train');
+    launches++;
+    return Response.json({ status: 'queued', runId: 'reference-run-1' }, { status: 202 });
+  }) as typeof fetch;
+  const submit = () =>
+    invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        modelId: model.body.modelId,
+        backend: 'local',
+        taskId: 'originman-reference-track',
+        computeResourceId: resource.id,
+        idempotencyKey: 'reference-screen-retry',
+        training: {
+          profile: 'smoke',
+          engine: 'originman-reference-ppo',
+          algorithm: 'ppo',
+          video: true,
+          numEnvs: 4,
+          maxIterations: 2,
+          originmanReference: { ...pinned, trainingSteps: 8192, seed: 7 },
+        },
+      },
+    });
+  try {
+    const manual = await invoke(router, 'post', '/api/sim2real/originman-reference/screen', {
+      body: { ...pinned, computeResourceId: resource.id },
+    });
+    expect(manual.body).toMatchObject({ ok: true, result: { passed: true } });
+    const run = await submit();
+    expect(run.statusCode).toBe(201);
+    expect(run.body.run).toMatchObject({ status: 'queued', externalRunId: 'reference-run-1' });
+    expect(screened).toHaveLength(2);
+    expect(screened[0]).toMatchObject({ owner: 'local-dev', resource: resource.id });
+    expect(screened[1]).toEqual(screened[0]);
+    const retry = await submit();
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body).toMatchObject({ idempotentReplay: true, run: { id: run.body.run.id } });
+    expect(screened).toHaveLength(2);
+    expect(launches).toBe(1);
+    const runPath = '/api/sim2real/runs/:id';
+    const params = { id: run.body.run.id };
+    const status = await invoke(router, 'get', runPath, { params });
+    expect(status.body).toMatchObject({ queue: { position: 2, queuedAt } });
+    expect(status.body.run).not.toHaveProperty('queue');
+
+    const foreignRouter = createSim2RealRouter({
+      auth: {
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: () => ({ accountId: 'other-account' }),
+        resolveAccessToken: () => null,
+      },
+    });
+    const foreignStatus = await invoke(foreignRouter, 'get', runPath, { params });
+    expect(foreignStatus.statusCode).toBe(404);
+    expect(foreignStatus.body).not.toHaveProperty('queue');
+    expect(statusReads).toBe(1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 describe('imitation training input', () => {
   it.each(['act', 'diffusion-policy'])(
