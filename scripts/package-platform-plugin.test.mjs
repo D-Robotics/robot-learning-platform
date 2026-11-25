@@ -47,7 +47,7 @@ function fixture(testContext, target) {
   write(path.join(root, '.agents/plugins/marketplace.json'), '{}');
 
   const universal = target === 'universal';
-  const targets = universal ? ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64'] : [target];
+  const targets = universal ? ['darwin-arm64', 'win32-x64'] : [target];
   const runtimeTargets = {};
   const runtimeFiles = {};
   for (const current of targets) {
@@ -102,7 +102,7 @@ else:
   return { runtime: runtimeFiles[target], runtimeFiles, output, args };
 }
 
-for (const target of ['darwin-arm64', 'win32-x64']) {
+for (const target of ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64']) {
   test(`exports a self-contained stock Studio ${target} ZIP and retains a generic ZIP`, (t) => {
     const { args, output } = fixture(t, target);
     const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
@@ -150,7 +150,7 @@ test('rejects a changed runtime archive before publishing any ZIP', (t) => {
   assert.deepEqual(fs.readdirSync(output), []);
 });
 
-test('exports one Studio ZIP for all four targets with launchers and complete provenance', (t) => {
+test('exports one Studio ZIP for Windows x64 and Apple Silicon with complete provenance', (t) => {
   const { args, output } = fixture(t, 'universal');
   const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
   assert.equal(report.archives.length, 3);
@@ -170,17 +170,21 @@ with zipfile.ZipFile(portable) as archive:
         assert launcher in guide
     assert root + 'setup-studio-windows.ps1' in archive.namelist()
     assert root + 'mcp/runtime/provenance.json' not in archive.namelist()
-    for platform in ['win32', 'darwin']:
-        for arch in ['x64', 'arm64']:
-            target = platform + '-' + arch
-            directory = root + 'mcp/runtime/' + target + '/'
-            path = directory + ('node.exe' if platform == 'win32' else 'node')
-            provenance = json.loads(archive.read(directory + 'provenance.json'))
-            assert provenance['target'] == target
-            assert target in provenance['archive']
-            assert provenance['binarySha256'] == hashlib.sha256(archive.read(path)).hexdigest()
-            assert archive.getinfo(path).external_attr >> 16 & 0o111 == 0o111
-            assert archive.read(directory + 'LICENSE') == b'license fixture'
+    runtime_root = root + 'mcp/runtime/'
+    assert {
+        entry[len(runtime_root):].split('/')[0]
+        for entry in archive.namelist() if entry.startswith(runtime_root)
+    } == {'darwin-arm64', 'win32-x64'}
+    assert 'Windows x64' in guide and 'Apple 芯片 Mac' in guide
+    for target, binary in [('win32-x64', 'node.exe'), ('darwin-arm64', 'node')]:
+        directory = runtime_root + target + '/'
+        path = directory + binary
+        provenance = json.loads(archive.read(directory + 'provenance.json'))
+        assert provenance['target'] == target
+        assert target in provenance['archive']
+        assert provenance['binarySha256'] == hashlib.sha256(archive.read(path)).hexdigest()
+        assert archive.getinfo(path).external_attr >> 16 & 0o111 == 0o111
+        assert archive.read(directory + 'LICENSE') == b'license fixture'
     inventory = dict(line.split('  ', 1)[::-1] for line in archive.read(root + 'FILES.sha256').decode().splitlines())
     entries = [name for name in archive.namelist() if name != root + 'FILES.sha256']
     assert set(inventory) == {name[len(root):] for name in entries}

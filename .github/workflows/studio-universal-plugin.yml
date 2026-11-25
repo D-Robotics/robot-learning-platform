@@ -38,7 +38,8 @@ jobs:
           import path from 'node:path';
           import { pipeline } from 'node:stream/promises';
           const manifest = JSON.parse(fs.readFileSync('plugins/rdk-robot-learning-platform/runtime-downloads.json'));
-          await Promise.all(Object.values(manifest.targets).map(async ({ url }) => {
+          await Promise.all(['darwin-arm64', 'win32-x64'].map(async (target) => {
+            const { url } = manifest.targets[target];
             const source = new URL(url);
             const filename = path.posix.basename(source.pathname);
             if (source.origin !== 'https://nodejs.org' || source.pathname !== '/dist/v' + manifest.version + '/' + filename) {
@@ -70,8 +71,6 @@ jobs:
       matrix:
         include:
           - { runner: windows-latest, target: win32-x64, arch: x64 }
-          - { runner: windows-11-arm, target: win32-arm64, arch: arm64 }
-          - { runner: macos-15-intel, target: darwin-x64, arch: x64 }
           - { runner: macos-15, target: darwin-arm64, arch: arm64 }
     steps:
       - uses: actions/checkout@v7

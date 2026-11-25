@@ -17,7 +17,7 @@ const [
 ] = process.argv.slice(2);
 const target = process.platform + '-' + process.arch;
 assert.ok(
-  archiveArg && expectedTarget === target && /^(win32|darwin)-(x64|arm64)$/.test(target),
+  archiveArg && expectedTarget === target && ['win32-x64', 'darwin-arm64'].includes(target),
   'Usage: node scripts/verify-universal-studio-bundle.mjs <zip> <native-platform-architecture>',
 );
 const archive = path.resolve(archiveArg);
@@ -75,7 +75,22 @@ try {
   fs.mkdirSync(data);
   fs.mkdirSync(download);
   const extracted = windows
-    ? run('tar.exe', ['-xf', archive, '-C', download])
+    ? run(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory($env:RDK_UNIVERSAL_FIXTURE_ZIP, $env:RDK_UNIVERSAL_FIXTURE_DOWNLOAD)",
+        ],
+        {
+          env: {
+            ...env,
+            RDK_UNIVERSAL_FIXTURE_ZIP: archive,
+            RDK_UNIVERSAL_FIXTURE_DOWNLOAD: download,
+          },
+        },
+      )
     : run('/usr/bin/unzip', ['-q', archive, '-d', download]);
   requireExit(extracted, 0);
   const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));

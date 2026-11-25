@@ -1,8 +1,8 @@
 # Studio 自带运行时安装包
 
-同一份 `-studio-universal.zip` 适用于 Windows x64、Windows ARM64、Intel Mac 和 Apple 芯片 Mac。安装器会自动选择本机架构，所需的 Node.js 已包含在包内。
+同一份 `-studio-universal.zip` 适用于 Windows x64 和 Apple 芯片 Mac。安装器会自动加载对应的 Node.js 运行时。
 
-把 `plugins/rdk-robot-learning-platform/runtime-downloads.json` 锁定的四份 Node 归档按原文件名放进同一目录。构建器会核对每份归档的摘要，提取运行时和许可证，并将两种系统的安装入口打进同一份 ZIP。
+把 `plugins/rdk-robot-learning-platform/runtime-downloads.json` 锁定的 `win32-x64` 和 `darwin-arm64` Node 归档按原文件名放进同一目录。构建器会核对两份归档的摘要，提取运行时和许可证，并将两种系统的安装入口打进同一份 ZIP。
 
 ```bash
 npm run package:plugin -- --out-dir <制品目录> --studio-universal-runtime-dir <Node归档目录>

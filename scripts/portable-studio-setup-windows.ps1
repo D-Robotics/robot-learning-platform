@@ -42,7 +42,10 @@ public static class RdkPortableStudioArchitecture {
 $root = [IO.Path]::GetDirectoryName($env:RDK_PORTABLE_STUDIO_SETUP_FILE)
 $directory = Join-Path $root 'mcp/runtime'
 if (-not (Test-Path -LiteralPath (Join-Path $directory 'provenance.json') -PathType Leaf)) {
-  $directory = Join-Path $directory ('win32-' + (Get-NativeArchitecture))
+  if ((Get-NativeArchitecture) -ne 'x64') {
+    throw 'The Windows runtime in this combined package requires Windows x64.'
+  }
+  $directory = Join-Path $directory 'win32-x64'
 }
 $node = Join-Path $directory 'node.exe'
 $runtime = Get-Content -LiteralPath (Join-Path $directory 'provenance.json') -Raw | ConvertFrom-Json

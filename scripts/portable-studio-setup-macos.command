@@ -11,15 +11,12 @@ trap finish EXIT
 root="$(cd "$(dirname "$0")" && pwd)"
 runtime="$root/mcp/runtime"
 if [ ! -f "$runtime/provenance.json" ]; then
-  if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
-    runtime="$runtime/darwin-arm64"
-  else
-    case "$(/usr/bin/uname -m)" in
-      arm64) runtime="$runtime/darwin-arm64" ;;
-      x86_64) runtime="$runtime/darwin-x64" ;;
-      *) printf '此安装包需要 64 位 macOS。\n' >&2; exit 1 ;;
-    esac
+  if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" != 1 ] &&
+    [ "$(/usr/bin/uname -m)" != arm64 ]; then
+    printf '此通用安装包的 macOS 运行时适用于 Apple 芯片 Mac。\n' >&2
+    exit 1
   fi
+  runtime="$runtime/darwin-arm64"
 fi
 node_path="$runtime/node"
 expected="$(/usr/bin/plutil -extract binarySha256 raw -o - "$runtime/provenance.json")"

@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
   console.log(
-    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE | --studio-universal-runtime-dir DIR]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nTo produce one Studio ZIP for Windows and macOS, place all four pinned Node archives from runtime-downloads.json in DIR under their original names.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
+    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE | --studio-universal-runtime-dir DIR]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nTo produce one Studio ZIP for Windows x64 and Apple Silicon Mac, place the pinned win32-x64 and darwin-arm64 Node archives from runtime-downloads.json in DIR under their original names.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
   );
   process.exit(0);
 }
@@ -106,9 +106,7 @@ if (studioTarget || universalRuntimeDirectory) {
     fs.readFileSync(path.join(pluginRoot, 'runtime-downloads.json'), 'utf8'),
   );
   const universal = Boolean(universalRuntimeDirectory);
-  const targets = universal
-    ? ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64']
-    : [studioTarget];
+  const targets = universal ? ['darwin-arm64', 'win32-x64'] : [studioTarget];
   const runtimes = targets.map((target) => {
     const runtime =
       Object.hasOwn(runtimeManifest.targets, target) && runtimeManifest.targets[target];
@@ -226,7 +224,7 @@ def write_studio_entries(add, studio):
             directory += item['target'] + '/'
         write_runtime(add, item, directory)
     if studio['universal']:
-        platform = '此包适用于 64 位 Windows 和 macOS，包含 Windows x64、Windows ARM64、Intel Mac 和 Apple 芯片 Mac 的 Node.js 运行时。'
+        platform = '此包适用于 Windows x64 和 Apple 芯片 Mac，已包含这两种机型的 Node.js 运行时。'
         launcher = 'Windows 双击 setup-studio-windows.cmd，macOS 双击 setup-studio-macos.command。安装器会选择本机架构的运行时。'
     else:
         target = studio['runtimes'][0]['target']
