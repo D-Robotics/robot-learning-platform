@@ -76,9 +76,27 @@ export function configurePlugin({
     studioPermissions,
   });
   const target = path.join(root, '.mcp.json');
+  const publication = structuredClone(manifest);
+  if (studioPermissions) {
+    // Studio copies imported packages. Resolve the script and any bundled Node
+    // relative to the imported copy, while direct connections use manifest's absolute paths.
+    const paths = platform === 'win32' ? path.win32 : path.posix;
+    const entry = publication.mcpServers[LEARNING_CONNECTION_NAME];
+    const nodeRelative = paths.relative(root, nodePath);
+    if (
+      nodeRelative &&
+      !paths.isAbsolute(nodeRelative) &&
+      !nodeRelative.split(paths.sep).includes('..')
+    )
+      entry.command = './' + nodeRelative.split(paths.sep).join('/');
+    entry.args = ['./scripts/experience-mcp.mjs'];
+  }
   const temp = target + '.' + randomBytes(8).toString('hex') + '.tmp';
   try {
-    fs.writeFileSync(temp, JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600, flag: 'wx' });
+    fs.writeFileSync(temp, JSON.stringify(publication, null, 2) + '\n', {
+      mode: 0o600,
+      flag: 'wx',
+    });
     fs.renameSync(temp, target);
   } finally {
     fs.rmSync(temp, { force: true });

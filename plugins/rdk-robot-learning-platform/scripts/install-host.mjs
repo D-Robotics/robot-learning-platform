@@ -65,7 +65,8 @@ export function mergeStudioConnection(
           ...connection,
           env,
           ...(previous.permissions && { permissions: previous.permissions }),
-          managedPlugin: LEARNING_CONNECTION_NAME,
+          // Studio discards managed MCP entries and resolves them from its
+          // plugin registry. Setup writes an independent user connection.
         },
       },
     },
