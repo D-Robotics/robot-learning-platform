@@ -1,3 +1,4 @@
+import { showWorkshopEntry } from './public/workshop-entry-page.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -401,8 +402,29 @@ test('dance reference page and replay assets cover every supported action', (t) 
     ORIGINMAN_DANCE_SECTION_TYPES,
   );
 
-  const referencePage = new JSDOM(fs.readFileSync(new URL('index.html', directory), 'utf8'));
+  const pageUrl = 'https://platform.test/learning/originman-dance-references/index.html';
+  const referencePage = new JSDOM(fs.readFileSync(new URL('index.html', directory), 'utf8'), {
+    url: pageUrl,
+  });
   t.after(() => referencePage.window.close());
+  const document = referencePage.window.document;
+  showWorkshopEntry(document, pageUrl + '?computeResourceId=worker-1');
+  assert.match(document.querySelector('h1').textContent, /教学动作回放/);
+  assert.deepEqual(
+    [...document.querySelectorAll('[data-workshop-resource]')].map((link) => {
+      const url = new URL(link.href);
+      return [
+        url.pathname,
+        url.searchParams.get('mode'),
+        url.searchParams.get('computeResourceId'),
+      ];
+    }),
+    [
+      ['/learning/workshop.html', null, 'worker-1'],
+      ['/learning/originman-reference.html', 'preset', 'worker-1'],
+      ['/learning/originman-reference.html', 'blocks', 'worker-1'],
+    ],
+  );
   for (const reference of catalog.references) {
     const section = referencePage.window.document.getElementById(reference.type);
     assert.equal(section.querySelector('video').getAttribute('src'), reference.video);

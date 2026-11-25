@@ -2,8 +2,7 @@ export function showWorkshopEntry(document, url) {
   const { searchParams } = new URL(url);
   const computeResourceId = searchParams.get('computeResourceId');
   if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(computeResourceId ?? '')) {
-    for (const id of ['dance-budget-quick', 'dance-budget-formal']) {
-      const link = document.getElementById(id);
+    for (const link of document.querySelectorAll('a[data-workshop-resource]')) {
       const destination = new URL(link.getAttribute('href'), url);
       destination.searchParams.set('computeResourceId', computeResourceId);
       link.href = destination.href;
@@ -37,7 +36,9 @@ export function workshopRedirect(url) {
 }
 
 if (typeof window !== 'undefined') {
-  const redirect = workshopRedirect(window.location.href);
+  const redirect = document.getElementById('dance-workshop-main')
+    ? workshopRedirect(window.location.href)
+    : null;
   if (redirect) window.location.replace(redirect);
   else showWorkshopEntry(document, window.location.href);
 }

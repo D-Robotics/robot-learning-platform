@@ -975,7 +975,23 @@ test('public Workshop is dance-only with safe routing for retired links', async 
   const dance = new JSDOM(live, { url: base });
   t.after(() => dance.window.close());
   const d = dance.window.document;
+  const workerLinks = [...d.querySelectorAll('a[data-workshop-resource]')];
+  showWorkshopEntry(d, base + '?computeResourceId=wrong%2Fid');
+  assert.equal(workerLinks.length, 6);
+  assert.ok(workerLinks.every((link) => !new URL(link.href).searchParams.has('computeResourceId')));
   showWorkshopEntry(d, base + '?computeResourceId=worker-1');
+  assert.ok(
+    workerLinks.every(
+      (link) => new URL(link.href).searchParams.get('computeResourceId') === 'worker-1',
+    ),
+  );
+  const referenceLinks = workerLinks
+    .map((link) => new URL(link.href))
+    .filter((link) => link.pathname.endsWith('/originman-reference.html'));
+  assert.deepEqual(
+    referenceLinks.map((link) => link.searchParams.get('mode')),
+    ['preset', 'blocks', null],
+  );
   assert.equal(d.getElementById('dance-workshop-main').hidden, false);
   assert.equal(d.getElementById('workshop-main'), null);
   const quick = new URL(d.getElementById('dance-budget-quick').href);

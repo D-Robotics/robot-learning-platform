@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
     <link rel="stylesheet" href="./workshop.css?v=dance-replay" />
-    <script type="module" src="./workshop-entry-page.mjs?v=dance-replay"></script>
+    <script type="module" src="./workshop-entry-page.mjs?v=reference-navigation"></script>
   </head>
   <body>
     <a class="skip-link" id="workshop-skip" href="#dance-workshop-main">跳到 Workshop 内容</a>
@@ -34,8 +34,8 @@
           ></video>
           <figcaption id="dance-reference-caption">100 BPM · 4 拍</figcaption>
         </figure>
-        <p id="dance-reference-error" role="status" hidden>视频暂时无法播放。请刷新页面重试，或打开动作库查看其他回放。</p>
-        <a href="./originman-dance-references/index.html">查看全部动作回放</a>
+        <p id="dance-reference-error" role="status" hidden>视频暂时无法播放。请刷新页面重试，或查看其他教学动作回放。</p>
+        <a href="./originman-dance-references/index.html" data-workshop-resource>查看教学动作回放</a>
       </section>
       <section aria-labelledby="dance-budget-title">
         <h2 id="dance-budget-title">选这轮训练多久</h2>
@@ -43,20 +43,20 @@
           <div>
             <h3>快检 · 8,192 步</h3>
             <p>第一次选这档。练习从提交训练到看回放、下载策略。</p>
-            <a id="dance-budget-quick" class="workshop-action-primary" href="./?robot=originman&amp;danceBudget=quick#train/configure">配置快检</a>
+            <a id="dance-budget-quick" data-workshop-resource class="workshop-action-primary" href="./?robot=originman&amp;danceBudget=quick#train/configure">配置快检</a>
           </div>
           <div>
             <h3>正式实验 · 50 万步</h3>
             <p>想比较不同舞段或参数的效果时选这档。效果看本轮评测。</p>
-            <a id="dance-budget-formal" href="./?robot=originman&amp;danceBudget=formal#train/configure">配置正式实验</a>
+            <a id="dance-budget-formal" data-workshop-resource href="./?robot=originman&amp;danceBudget=formal#train/configure">配置正式实验</a>
           </div>
         </div>
         <p>选择一档会打开训练配置页。两档默认同时运行 64 个仿真场景。到提交页确认后才会开始训练。</p>
         <div class="workshop-actions">
           <a href="./?robot=originman#train/submit">查看训练记录</a>
-          <a href="./originman-reference.html?mode=preset">选一支预置参考舞蹈</a>
-          <a href="./originman-reference.html?mode=blocks">用参考动作组自由编排</a>
-          <a href="./originman-reference.html">导入自己的参考轨迹</a>
+          <a href="./originman-reference.html?mode=preset" data-workshop-resource>选一支预置参考舞蹈</a>
+          <a href="./originman-reference.html?mode=blocks" data-workshop-resource>用参考动作组自由编排</a>
+          <a href="./originman-reference.html" data-workshop-resource>导入自己的参考轨迹</a>
         </div>
       </section>
     </main>

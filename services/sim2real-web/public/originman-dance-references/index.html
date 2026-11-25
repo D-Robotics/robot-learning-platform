@@ -3,15 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OriginMan 舞蹈参考 · RDK Robot Learning</title>
+    <title>OriginMan 教学动作回放 · RDK Robot Learning</title>
     <link rel="stylesheet" href="../tokens.css" />
     <link rel="stylesheet" href="../experiment.css" />
+    <script type="module" src="../workshop-entry-page.mjs?v=reference-navigation"></script>
   </head>
   <body>
     <main class="experiment-layout">
       <aside class="experiment-sidebar">
         <nav aria-label="舞蹈参考动作">
-          <p><a href="../">学习平台</a></p>
+          <p><a href="../workshop.html" data-workshop-resource>返回舞蹈 Workshop</a></p>
           <ul>
           <li><a href="#alternating-arms">交替摆臂</a></li>
           <li><a href="#weight-shift">左右换重心</a></li>
@@ -28,8 +29,12 @@
       </aside>
       <div class="experiment-content">
         <header>
-          <h1>OriginMan 舞蹈参考</h1>
-          <p>用同一个动作的仿真回放对照你的训练。每项参考从站立姿态开始，在页面所列节奏和幅度下独立验收，仅用于仿真。</p>
+          <h1>OriginMan 教学动作回放</h1>
+          <p>用这些单动作教学回放对照你的训练。每段从站立姿态开始，按标注的节奏和幅度独立验收，仅用于仿真。</p>
+          <nav aria-label="选择参考轨迹训练方式">
+            <a href="../originman-reference.html?mode=preset" data-workshop-resource>选预置舞蹈训练</a> ·
+            <a href="../originman-reference.html?mode=blocks" data-workshop-resource>从训练动作库自由编排</a>
+          </nav>
         </header>
         <section id="alternating-arms" aria-labelledby="alternating-arms-title">
           <div class="section-heading">
