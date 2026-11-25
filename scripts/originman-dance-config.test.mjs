@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { canonicalDanceConfig } from '../plugins/rdk-robot-learning-platform/scripts/dance-training.mjs';
 import assert from 'node:assert/strict';
 import {
   resolveOriginmanDanceConfig,
@@ -19,6 +20,13 @@ const base = {
   bpm: 100,
   sections: [{ type: 'weight-shift', beats: 8, intensity: 0.5 }],
 };
+
+test('dance retries preserve the selected composition mode', () => {
+  for (const compositionMode of ['preset', 'custom']) {
+    const draft = canonicalDanceConfig({ ...base, compositionMode });
+    assert.equal(resolveOriginmanDanceConfig(draft).compositionMode, compositionMode);
+  }
+});
 
 test('dance config omits rewardTuning when the learner provides none', () => {
   const resolved = resolveOriginmanDanceConfig({ ...base });
@@ -146,4 +154,85 @@ test('the read-only dance preview fills an omitted schema version on its first M
   assert.throws(() => originmanDanceDraft({ ...input, schemaVersion: null }), /schemaVersion/);
   assert.throws(() => originmanDanceDraft([input]), /expected an object/);
   assert.throws(() => resolveOriginmanDanceConfig(input), /schemaVersion/);
+});
+
+test('MCP lists and previews motion without writing, then submits the pinned recipe once', async () => {
+  const digest = 'b'.repeat(64);
+  const recipe = { presetId: 'source-exact' };
+  let stanceProfile = 'source-neutral-v1';
+  const calls = [];
+  const dispatch = experienceProxy(
+    {
+      request() {
+        assert.fail('Unexpected legacy MCP call');
+      },
+      async listOriginmanMotion() {
+        calls.push('list');
+        return { ok: true, motions: [] };
+      },
+      async previewOriginmanMotion(args) {
+        assert.deepEqual(args, recipe);
+        calls.push('preview');
+        return { ok: true, preview: { trajectorySha256: digest, stanceProfile } };
+      },
+      async submitOriginmanMotion(args) {
+        calls.push('submit');
+        assert.deepEqual(args, {
+          composition: recipe,
+          computeResourceId: 'worker-1',
+          contextId: 'motion-1',
+          expectedTrajectorySha256: digest,
+          expectedStanceProfile: stanceProfile,
+          numEnvs: 1,
+          trainingSteps: 8192,
+        });
+        return {
+          ok: true,
+          taskId: 'originman-reference-track',
+          run: {
+            id: 'reference-run-1',
+            status: 'queued',
+            taskId: 'originman-reference-track',
+          },
+        };
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' } },
+  );
+  const call = (name, args) => dispatch('tools/call', { name, arguments: args });
+  assert.notEqual((await call('rdk_originman_motion_library', {})).isError, true);
+  assert.notEqual((await call('rdk_originman_motion_preview', recipe)).isError, true);
+  assert.deepEqual(calls, ['list', 'preview']);
+  const input = {
+    dance: recipe,
+    computeResourceId: 'worker-1',
+    contextId: 'motion-1',
+    referenceTrainingSteps: 8192,
+    numEnvs: 1,
+  };
+  const stale = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: 'a'.repeat(64),
+  });
+  assert.equal(stale.isError, true);
+  stanceProfile = undefined;
+  const changedStance = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: digest,
+    expectedStanceProfile: 'source-neutral-v1',
+  });
+  assert.equal(changedStance.isError, true);
+  stanceProfile = 'source-neutral-v1';
+  const result = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: digest,
+  });
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  assert.deepEqual(calls, ['list', 'preview', 'preview', 'preview', 'preview', 'submit']);
+  assert.equal(result.structuredContent.run.id, 'reference-run-1');
+  assert.equal(result.structuredContent.nextTool, 'rdk_training_wait');
+  assert.match(
+    result.structuredContent.studioNavigation.arguments.url,
+    /originman-reference-run\.html/,
+  );
 });

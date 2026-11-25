@@ -1,9 +1,4 @@
 /** One learner entry; workbench buttons own execution, MCP retains full expert tools. */
-import fs from 'node:fs';
-import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
-import { prepareTraining } from './workflow-inspection.mjs';
-import { requireConnected } from './short-training.mjs';
-
 export const STUDIO_WORKSHOP_NAVIGATION =
   '在 RDK Studio 开始、继续或查看 Workshop 结果时，先调用 studio_open_url，使用 studioNavigation.arguments.url 打开右侧工作台。不再询问是否打开。用户只要链接或明确指定其他打开方式时，按用户要求执行。工具缺失或调用失败时直接给可点击链接。';
 
@@ -14,15 +9,20 @@ export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整页面。“继续”和“看看效果”使用当前账号原实验并返回已核对的效果结论。学员在页面选择算力和预算。本工具不提交训练。' +
+      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；打开舞蹈准备页。回执提供当前平台完整页面。“继续”和“看看效果”已知原 Run 时传 runId，已知受扰恢复实验时传 contextId。学员在页面选择算力和预算。本工具不提交训练。' +
       STUDIO_WORKSHOP_NAVIGATION +
       ' Qoder 按回执操作。',
     inputSchema: {
       type: 'object',
       properties: {
         intent: { type: 'string', enum: ['start', 'new', 'continue', 'results'], default: 'start' },
-        course: { type: 'string', enum: ['dance', 'recovery'] },
+        course: {
+          type: 'string',
+          enum: ['dance'],
+          description: '新实验使用舞蹈课程。历史实验使用原 Run ID 或 contextId。',
+        },
         computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
+        runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' },
         contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' },
       },
       additionalProperties: false,
@@ -51,7 +51,7 @@ export function workshopPageNavigation(url) {
     delivery: WORKSHOP_PAGE_DELIVERY,
   };
 }
-export function workshopPreview(base, course = 'dance', stage = 'preview', resource) {
+export function workshopPreview(base, stage = 'preview', resource) {
   const url = new URL(base.replace(/\/+$/, '') + '/workshop.html');
   if (
     !['http:', 'https:'].includes(url.protocol) ||
@@ -60,19 +60,17 @@ export function workshopPreview(base, course = 'dance', stage = 'preview', resou
     !url.pathname.endsWith('/workshop.html')
   )
     throw Error('当前平台地址无效，无法生成 Workshop 入口。');
-  url.searchParams.set('course', course);
+  url.searchParams.set('course', 'dance');
   url.searchParams.set('start', '1');
   if (resource) url.searchParams.set('computeResourceId', resource.id);
   const href = url.href;
   const firstStep =
-    course === 'recovery'
-      ? '先点「播放讲师参考」，看看机器人被推后怎样站稳。'
-      : '第一次来，先点「播放动作示意」。准备练习时，选 8,192 步快检。';
-  const label = course === 'recovery' ? 'OriginMan 受扰恢复 Workshop' : 'OriginMan 舞蹈 Workshop';
+    '可以先播放「交替摆臂」仿真回放，再选一支预置参考舞蹈或用动作组自由编排。进入跟跳页面后，第一次练习可选 8,192 步快检。';
+  const label = 'OriginMan 舞蹈 Workshop';
   return {
     contextId: null,
     stage,
-    course,
+    course: 'dance',
     entryUrl: href,
     links: { workshop: href },
     submission: noSubmission(),
@@ -86,16 +84,7 @@ export function workshopPreview(base, course = 'dance', stage = 'preview', resou
 export async function workshopEntry(
   args = {},
   call,
-  {
-    remote,
-    readResult,
-    readModels,
-    courseReadiness,
-    toolNames = [],
-    defaultResourceId,
-    authentication,
-    signal,
-  } = {},
+  { remote, readResult, defaultResourceId, authentication, signal } = {},
 ) {
   if (
     !args ||
@@ -122,11 +111,10 @@ export async function workshopEntry(
   }
   const intent = args.intent ?? 'start';
   const startsNew = ['start', 'new'].includes(intent) && !args.contextId;
-  const course = args.course ?? (startsNew ? 'dance' : 'recovery');
+  const course = startsNew ? 'dance' : (args.course ?? 'recovery');
   if (course === 'dance' && !startsNew)
     throw Error('舞蹈训练和结果请使用原 Run 的进度或结果入口。');
-  if (course === 'recovery' && !remote && (!startsNew || args.computeResourceId))
-    throw Error('当前连接尚不支持实验接续，请更新完整插件。');
+  if (course === 'recovery' && !remote) throw Error('当前连接尚不支持实验接续，请更新完整插件。');
   // A fresh preview reads no account data and allocates no experiment. Account and
   // resource checks happen when the learner explicitly starts practice.
   if (
@@ -135,7 +123,7 @@ export async function workshopEntry(
     !args.computeResourceId &&
     authentication?.audience
   )
-    return workshopPreview(authentication.audience, course);
+    return workshopPreview(authentication.audience);
   // An explicit login may already be pending. Merely opening Workshop never starts one.
   const identity = await authentication?.status();
   if (identity && identity.authenticated !== true) {
@@ -144,7 +132,7 @@ export async function workshopEntry(
     const login = identity.verificationUrl;
     const preview = (args.intent ?? 'start') === 'start' && !args.contextId;
     if (preview && !login && !identity.accountSelectionRequired && authentication.audience)
-      return workshopPreview(authentication.audience, course);
+      return workshopPreview(authentication.audience);
     return {
       contextId: null,
       stage: preview && !login ? 'preview' : 'authorize',
@@ -155,7 +143,7 @@ export async function workshopEntry(
         : login
           ? `[确认学习平台授权](${login})。确认后回来继续 Workshop。`
           : preview
-            ? 'OriginMan Workshop 会用仿真训练一个受扰恢复策略，再比较恢复次数并看回放。现在可以先问课程或预算。准备实操时，说“连接学习平台”。'
+            ? 'OriginMan Workshop 可以先看仿真回放，再选预置舞蹈或自由编排。准备实操时，说“连接学习平台”。'
             : '这一步需要学习平台账号。准备好后说“连接学习平台”。',
       delivery: '只展示 studentReply。等待用户明确要求连接或完成已有授权，不自动发起登录。',
     };
@@ -179,7 +167,7 @@ export async function workshopEntry(
     throw Error('平台地址无效。');
   const accountId = status.session.accountId;
   if (startsNew && !args.computeResourceId)
-    return workshopPreview(base.toString(), course, 'choose-compute');
+    return workshopPreview(base.toString(), 'choose-compute');
   if (course === 'dance') {
     const value = await call('rdk_compute_resources_list', {});
     const resource = value.computeResources?.find((item) => item.id === args.computeResourceId);
@@ -193,56 +181,12 @@ export async function workshopEntry(
       current.session.accountId !== accountId
     )
       throw Error('账号或平台已变化，请重新选择算力机。');
-    return workshopPreview(base.toString(), course, 'choose-compute', resource);
+    return workshopPreview(base.toString(), 'choose-compute', resource);
   }
   const list = await remote('list', {}, accountId);
-  let selectedComputeName;
-  let session = list.current;
-  if (args.contextId)
-    session = (await remote('select', { contextId: args.contextId }, accountId)).session;
-  else if (args.computeResourceId) {
-    const manifest = JSON.parse(
-      fs.readFileSync(new URL('../references/originman-manifest.json', import.meta.url), 'utf8'),
-    );
-    const valid = await call('rdk_model_validate', { manifest });
-    if (valid.valid !== true) throw Error('课程模型契约不匹配，请先更新课程材料。');
-    const selected = await selectCourseAssets(
-      {
-        manifest,
-        readModels,
-        modelId: session?.modelId,
-        computeResourceId: args.computeResourceId,
-      },
-      call,
-    );
-    const prepared = await prepareTraining(
-      {
-        productId: 'originman',
-        taskId: 'originman-recovery',
-        computeResourceId: selected.resource.id,
-      },
-      call,
-      toolNames,
-      { courseReadiness },
-    );
-    requireConnected(prepared);
-    const model = selected.model ?? (await registerCourseModel(manifest, call));
-    const end = await call('rdk_platform_status', {});
-    if (
-      end.baseUrl !== status.baseUrl ||
-      end.session?.accountId !== status.session.accountId ||
-      end.session?.authenticated !== true
-    )
-      throw Error('账号或平台已变化，停止创建实验。');
-    session = (
-      await remote(
-        'create',
-        { modelId: model.id, computeResourceId: selected.resource.id },
-        accountId,
-      )
-    ).session;
-    if (args.computeResourceId) selectedComputeName = selected.resource.name;
-  }
+  const session = args.contextId
+    ? (await remote('select', { contextId: args.contextId }, accountId)).session
+    : list.current;
   const stage = session?.stage ?? 'choose';
   const result = stage === 'results' ? await readResult?.(session.contextId) : undefined;
   signal?.throwIfAborted();
@@ -253,43 +197,20 @@ export async function workshopEntry(
     finalIdentity.session.accountId !== status.session.accountId
   )
     throw Error('账号或平台已变化，请在当前账号重新接续。');
-  const root = base.toString().replace(/\/+$/, '');
-  const url =
-    root +
-    '/workshop.html?course=recovery' +
-    (session ? '&context=' + encodeURIComponent(session.contextId) : '');
-  const [message, linkLabel] = {
-    choose: ['选择要继续的实验。', '打开实验列表'],
-    ready:
-      session?.reference === 'observed' || session?.reference === 'skipped'
-        ? ['下一步选训练预算。第一次可以选快速体验。', '选择训练预算']
-        : ['可以看一段参考，也可以直接选训练预算。', '打开 Workshop'],
-    training: ['这轮训练已提交，可以看实时曲线。', '查看训练进度'],
-    'ready-evaluate': session?.autoContinue
-      ? ['训练已完成，下一步用同一策略评测。', '查看评测进度']
-      : ['训练已完成。打开实验查看如何继续评测。', '打开当前实验'],
-    evaluating: ['正在评测这轮训练出的策略。', '查看评测进度'],
-    results: ['评测已完成。可看结果、对比历史轮次，或改一项参数再试。', '查看结果与回放'],
-    blocked: ['这轮实验已停止，打开页面查看原因。', '查看实验状态'],
-    unknown: ['这轮提交状态待核对，打开页面接续原请求。', '恢复当前实验'],
-  }[stage] ?? ['查看当前实验的进度与下一步。', '打开当前实验'];
+  const url = session
+    ? new URL('./experiment.html', base.toString().replace(/\/?$/, '/'))
+    : new URL('./?robot=originman#records', base.toString().replace(/\/?$/, '/'));
+  if (session) url.searchParams.set('context', session.contextId);
+  const linkLabel = session ? '查看历史实验' : '打开运行记录';
   return {
     ...result,
     contextId: session?.contextId ?? null,
     stage,
     course,
     session,
-    links: { ...result?.links, workshop: url },
+    links: { ...result?.links, workshop: url.href },
     submission: noSubmission(),
-    studentReply:
-      result?.studentReply ??
-      (selectedComputeName ? '本轮算力机：' + selectedComputeName + '。' : '') +
-        message +
-        '\n[' +
-        linkLabel +
-        '](' +
-        url +
-        ')',
-    ...workshopPageNavigation(result?.links?.experiment ?? url),
+    studentReply: result?.studentReply ?? `[${linkLabel}](${url.href})。`,
+    ...workshopPageNavigation(result?.links?.experiment ?? url.href),
   };
 }

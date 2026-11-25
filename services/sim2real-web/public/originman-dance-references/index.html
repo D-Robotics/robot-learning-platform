@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OriginMan 教学动作回放 · RDK Robot Learning</title>
+    <link rel="stylesheet" href="../tokens.css" />
+    <link rel="stylesheet" href="../experiment.css" />
+    <script type="module" src="../workshop-entry-page.mjs?v=reference-navigation"></script>
+  </head>
+  <body>
+    <main class="experiment-layout">
+      <aside class="experiment-sidebar">
+        <nav aria-label="舞蹈参考动作">
+          <p><a href="../workshop.html" data-workshop-resource>返回舞蹈 Workshop</a></p>
+          <ul>
+          <li><a href="#alternating-arms">交替摆臂</a></li>
+          <li><a href="#weight-shift">左右换重心</a></li>
+          <li><a href="#squat-rise">下蹲起身</a></li>
+          <li><a href="#open-pose">展开定格</a></li>
+          <li><a href="#single-arm-wave">单臂挥手</a></li>
+          <li><a href="#arms-overhead">双臂上举</a></li>
+          <li><a href="#cross-and-open">胸前交叉展开</a></li>
+          <li><a href="#side-lean">左右侧身</a></li>
+          <li><a href="#alternating-knee-lift">交替抬膝</a></li>
+          <li><a href="#side-tap">侧点步收回</a></li>
+          </ul>
+        </nav>
+      </aside>
+      <div class="experiment-content">
+        <header>
+          <h1>OriginMan 教学动作回放</h1>
+          <p>用这些单动作教学回放对照你的训练。每段从站立姿态开始，按标注的节奏和幅度独立验收，仅用于仿真。</p>
+          <nav aria-label="选择参考轨迹训练方式">
+            <a href="../originman-reference.html?mode=preset" data-workshop-resource>选预置舞蹈训练</a> ·
+            <a href="../originman-reference.html?mode=blocks" data-workshop-resource>从训练动作库自由编排</a>
+          </nav>
+        </header>
+        <section id="alternating-arms" aria-labelledby="alternating-arms-title">
+          <div class="section-heading">
+            <h2 id="alternating-arms-title">交替摆臂</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="alternating-arms/replay.mp4" aria-labelledby="alternating-arms-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="alternating-arms/policy.onnx" download>下载 ONNX 策略</a> · <a href="alternating-arms/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="weight-shift" aria-labelledby="weight-shift-title">
+          <div class="section-heading">
+            <h2 id="weight-shift-title">左右换重心</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="weight-shift/replay.mp4" aria-labelledby="weight-shift-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="weight-shift/policy.onnx" download>下载 ONNX 策略</a> · <a href="weight-shift/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="squat-rise" aria-labelledby="squat-rise-title">
+          <div class="section-heading">
+            <h2 id="squat-rise-title">下蹲起身</h2>
+            <span>95 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="squat-rise/replay.mp4" aria-labelledby="squat-rise-title"></video>
+          <p>90.25 / 95 / 99.75 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="squat-rise/policy.onnx" download>下载 ONNX 策略</a> · <a href="squat-rise/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="open-pose" aria-labelledby="open-pose-title">
+          <div class="section-heading">
+            <h2 id="open-pose-title">展开定格</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="open-pose/replay.mp4" aria-labelledby="open-pose-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="open-pose/policy.onnx" download>下载 ONNX 策略</a> · <a href="open-pose/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="single-arm-wave" aria-labelledby="single-arm-wave-title">
+          <div class="section-heading">
+            <h2 id="single-arm-wave-title">单臂挥手</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="single-arm-wave/replay.mp4" aria-labelledby="single-arm-wave-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="single-arm-wave/policy.onnx" download>下载 ONNX 策略</a> · <a href="single-arm-wave/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="arms-overhead" aria-labelledby="arms-overhead-title">
+          <div class="section-heading">
+            <h2 id="arms-overhead-title">双臂上举</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="arms-overhead/replay.mp4" aria-labelledby="arms-overhead-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="arms-overhead/policy.onnx" download>下载 ONNX 策略</a> · <a href="arms-overhead/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="cross-and-open" aria-labelledby="cross-and-open-title">
+          <div class="section-heading">
+            <h2 id="cross-and-open-title">胸前交叉展开</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="cross-and-open/replay.mp4" aria-labelledby="cross-and-open-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="cross-and-open/policy.onnx" download>下载 ONNX 策略</a> · <a href="cross-and-open/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="side-lean" aria-labelledby="side-lean-title">
+          <div class="section-heading">
+            <h2 id="side-lean-title">左右侧身</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.60</span>
+          </div>
+          <video controls playsinline preload="none" src="side-lean/replay.mp4" aria-labelledby="side-lean-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="side-lean/policy.onnx" download>下载 ONNX 策略</a> · <a href="side-lean/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="alternating-knee-lift" aria-labelledby="alternating-knee-lift-title">
+          <div class="section-heading">
+            <h2 id="alternating-knee-lift-title">交替抬膝</h2>
+            <span>105 BPM · 4 拍 · 幅度 0.25</span>
+          </div>
+          <video controls playsinline preload="none" src="alternating-knee-lift/replay.mp4" aria-labelledby="alternating-knee-lift-title"></video>
+          <p>99.75 / 105 / 110.25 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="alternating-knee-lift/policy.onnx" download>下载 ONNX 策略</a> · <a href="alternating-knee-lift/verification.json">查看仿真验收</a></p>
+        </section>
+        <section id="side-tap" aria-labelledby="side-tap-title">
+          <div class="section-heading">
+            <h2 id="side-tap-title">侧点步收回</h2>
+            <span>100 BPM · 4 拍 · 幅度 0.25</span>
+          </div>
+          <video controls playsinline preload="none" src="side-tap/replay.mp4" aria-labelledby="side-tap-title"></video>
+          <p>95 / 100 / 105 BPM 均完整完成、无摔倒并通过动作风格门。</p>
+          <p><a href="side-tap/policy.onnx" download>下载 ONNX 策略</a> · <a href="side-tap/verification.json">查看仿真验收</a></p>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>

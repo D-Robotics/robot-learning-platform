@@ -124,8 +124,8 @@ test('explicit experiment displays real curve, comparison and media under the sa
   assert.match(f.$('recovery-summary').textContent, /恢复 1 \/ 3 次.*比调参反馈少恢复 1 次/);
   assert.equal(f.$('comparison-table').hidden, false);
   const returnLink = new URL(f.$('return-workshop').href);
-  assert.equal(returnLink.searchParams.get('course'), 'recovery');
-  assert.equal(returnLink.searchParams.get('context'), 'lesson');
+  assert.equal(returnLink.searchParams.get('course'), 'dance');
+  assert.equal(returnLink.searchParams.get('context'), null);
   assert.equal(f.$('download-video').download, 'OriginMan-lesson-evaluation.webm');
   assert.match(f.$('comparison-body').textContent, /2 \/ 3.*2 \/ 3.*1 \/ 3/);
   assert.equal(f.$('quality-status').textContent, '本轮未达到改善标准');
@@ -305,7 +305,7 @@ test('an unavailable experiment offers course history without switching Runs', a
   ]) {
     const f = await fixture(t, { initialHttpStatus: status });
     assert.equal(f.$('connection-status').textContent, title);
-    assert.match(f.$('next-action').textContent, /实验历史/);
+    assert.match(f.$('next-action').textContent, /运行记录/);
     assert.equal(f.$('login-platform').hidden, true);
     assert.equal(f.$('export-experiment').disabled, true);
     assert.deepEqual(

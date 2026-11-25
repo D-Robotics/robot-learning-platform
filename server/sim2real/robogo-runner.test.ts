@@ -387,6 +387,43 @@ describe('RoboGo Sim2Real runner adapter', () => {
     expect(result.taskEvaluation).not.toHaveProperty('injected');
   });
 
+  it('retains validated recovery evidence through the worker status boundary', async () => {
+    const receipt = {
+      schemaVersion: 1,
+      phase: 'train',
+      requestedTimesteps: 8192,
+      actualTimesteps: 8192,
+      seed: 7,
+      pushMaxForce: 8.1,
+      policySha256: 'a'.repeat(64),
+      hardwareEligible: false,
+    };
+    const read = async (engine: string, policySha256: string) =>
+      (
+        await requestRobogoTrainingStatus({
+          accountId: 'alice',
+          externalRunId: 'job',
+          runnerUrl: 'https://runner.example.test/train',
+          fetchImpl: async () =>
+            Response.json({
+              status: 'completed',
+              runId: 'job',
+              mock: false,
+              metrics: {
+                contractValid: true,
+                observationSize: 14,
+                actionSize: 2,
+                engine,
+                originmanWorkshop: { ...receipt, policySha256, workerPath: '/private/path' },
+              },
+            }),
+        })
+      ).metrics?.originmanWorkshop;
+    expect(await read('originman-recovery', receipt.policySha256)).toEqual(receipt);
+    expect(await read('originman-recovery', 'broken')).toBeUndefined();
+    expect(await read('other', receipt.policySha256)).toBeUndefined();
+  });
+
   it('merges the worker-level cuda flag into metrics without trusting non-boolean values', async () => {
     const poll = (payload: Record<string, unknown>) =>
       requestRobogoTrainingStatus({

@@ -257,6 +257,31 @@ paths:
       responses:
         "200": { description: Available manifests for recovery and dance }
         "401": { description: Sign in required }
+  /api/v1/duck/originman-motion/catalog:
+    get:
+      tags: [workspace]
+      operationId: listOriginManMotion
+      summary: Read the configured OriginMan preset and motion IDs without submitting a run
+      responses:
+        "200": { description: Presets, selectable motions, optional unavailableMotions with joint-limit or stability reasons, source, and composition limits }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "503": { description: The configured catalog is unavailable }
+  /api/v1/duck/originman-motion/preview:
+    post:
+      tags: [workspace]
+      operationId: previewOriginManMotion
+      summary: Validate a preset or ordered motion sequence and return bounded preview samples
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OriginmanMotionComposition" }
+      responses:
+        "200": { description: Frame count, duration, original-reference mode when available, extended transitions, curve samples, and trajectory SHA-256 }
+        "400": { description: Invalid or unknown composition }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "422": { description: The selected trajectory exceeded range or motion limits }
+        "503": { description: The configured catalog is unavailable }
   /api/v1/duck/originman-reference:
     get:
       tags: [workspace]
@@ -283,6 +308,36 @@ paths:
         "200": { description: Valid frame count, duration in seconds, and frame rate }
         "400": { description: Unsupported frequency, joint order, motion limits, or invalid trajectory data }
         "401": { $ref: "#/components/responses/AuthRequired" }
+  /api/v1/duck/originman-reference/screen:
+    post:
+      tags: [workspace]
+      operationId: screenOriginManReferenceTrajectory
+      summary: Run a zero-residual physics screen on the selected account Worker without starting training
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [computeResourceId]
+              oneOf:
+                - required: [trajectory]
+                  not: { required: [composition] }
+                - required: [composition, expectedTrajectorySha256]
+                  not: { required: [trajectory] }
+              properties:
+                trajectory: { $ref: "#/components/schemas/OriginmanReferenceTrajectory" }
+                composition: { $ref: "#/components/schemas/OriginmanMotionComposition" }
+                expectedTrajectorySha256: { type: string, pattern: "^[a-f0-9]{64}$" }
+                expectedStanceProfile: { type: string, enum: [source-neutral-v1] }
+                computeResourceId: { type: string }
+      responses:
+        "200": { description: Screen result with optional physical failure reasons or actuator limit violation bound to the checked trajectory }
+        "400": { description: Invalid trajectory }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Compatible Worker is unavailable or busy, or preview has changed }
+        "422": { description: Trajectory exceeds the calibrated scene's actuator limits }
+        "503": { description: No verifiable screen result }
   /api/v1/duck/originman-reference/model:
     post:
       tags: [workspace]
@@ -576,6 +631,7 @@ paths:
       tags: [runs]
       summary: Start or register a browser, local, RoboGo or contract run
       operationId: createRun
+      description: New OriginMan choreography runs require a successful physical screen on the selected Worker. Idempotent replay returns the existing Run before screening again.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -592,7 +648,9 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Screening did not pass, the Worker is busy or incompatible, or the idempotency key conflicts. }
         "429": { description: Per-account active-run quota reached. }
+        "503": { description: The Worker did not return a verifiable screening result, or the service is unavailable. }
   /api/v1/duck/runs/{runId}/dance-evaluation:
     parameters:
       - $ref: "#/components/parameters/RunId"
@@ -649,7 +707,7 @@ paths:
     get:
       tags: [runs]
       summary: Download the digest-verified ONNX policy for a completed local Run
-      description: Prefers the verified copy held by the platform for the current account, with a worker fallback.
+      description: Prefers the verified copy held by the platform, including uploaded relay artifacts. Non-relay runs can fall back to the original worker.
       operationId: getRunArtifact
       responses:
         "200":
@@ -785,9 +843,8 @@ paths:
         Serves the digest-verified ONNX artifact of a completed, real (non-mock)
         local run so the browser trial runs the exact bytes that would be
         staged to a board. The browser trial is an operator aid and never
-        release evidence. The response carries the worker-recomputed
-        X-Artifact-Sha256 header and is rejected when it diverges from the
-        ledger's recorded digest.
+        release evidence. The response carries X-Artifact-Sha256, verified
+        against the run ledger for either retained or worker-served bytes.
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -2316,19 +2373,19 @@ paths:
       operationId: postBoardStationDriveStop
       description: >-
         Zero-speed emergency stop. Always forwarded to the board agent
-        regardless of both drive switches, so the stop path has no failure
-        mode from gating. The board writes a zero command frame and the
-        chassis watchdog enforces rest.
+        regardless of the drive switches. The acknowledgment covers the
+        zero command or publisher shutdown. Check motion feedback for rest.
       parameters:
         - in: query
           name: deviceId
           schema: { type: string }
       responses:
         "200":
-          description: Stop delivered; zero-speed frame published.
+          description: Zero command accepted or publisher stopped.
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
-        "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+        "502": { description: Delivery to the board agent could not be confirmed. }
+        "503": { description: The board agent could not confirm zero output. }
   /api/v1/duck/board-station/policy-infer:
     post:
       tags: [board-station]
@@ -2750,6 +2807,37 @@ paths:
       responses:
         "200": { description: Compute resource removed. }
         "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/training/preflight:
+    post:
+      summary: Check the requested task and device using the selected Worker
+      operationId: inspectTrainingEnvironment
+      requestBody:
+        content:
+          application/json: { schema: { type: object } }
+      responses:
+        "200": { description: Validated environment checks. }
+        "429": { description: Worker is busy. }
+        "503": { description: Worker could not verify its environment. }
+  /api/v1/duck/compute-resources/{id}/preflight:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Verify the task environment on one registered resource
+      operationId: inspectComputeResourceEnvironment
+      responses:
+        "200": { description: Environment report bound to the requested resource. }
+        "404": { $ref: "#/components/responses/NotFound" }
+  /api/v1/duck/runs/{runId}/cancel:
+    parameters:
+      - { name: runId, in: path, required: true, schema: { type: string } }
+    post:
+      summary: Request cancellation on the original Worker
+      operationId: cancelTrainingRun
+      responses:
+        "200": { description: Run is terminal. }
+        "202": { description: Worker accepted the request and is confirming process exit. }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: Cancellation has not been confirmed. }
   /api/v1/duck/compute-resources/{id}/test:
     parameters:
       - name: id
@@ -3333,7 +3421,7 @@ paths:
       operationId: listWorkshopSetupResources
       responses:
         "200":
-          description: Current account and a list of resource IDs, names and last-known status.
+          description: Current account and selectable resources with IDs, names, last-known status, and aggregate job counts when reported by the worker.
         "401": { $ref: "#/components/responses/AuthRequired" }
     post:
       tags: [workspace]
@@ -3717,6 +3805,30 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    OriginmanMotionComposition:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [presetId]
+          properties:
+            presetId: { type: string }
+        - type: object
+          additionalProperties: false
+          required: [blocks]
+          properties:
+            blocks:
+              type: array
+              minItems: 1
+              maxItems: 128
+              items:
+                type: object
+                additionalProperties: false
+                required: [id]
+                properties:
+                  id: { type: string }
+                  repeats: { type: integer, minimum: 1, maximum: 8 }
+            bpm: { type: number, minimum: 80, maximum: 140 }
+            transitionSeconds: { type: number, minimum: 0, maximum: 2, description: Minimum duration of each blend. The compiler may extend a blend to respect the joint speed limit. }
     OriginmanReferenceTrajectory:
       type: object
       required: [schemaVersion, fps, joint_names, joint_pos, joint_vel]
@@ -3778,7 +3890,7 @@ components:
         maxConcurrentJobs: { type: integer, minimum: 1, maximum: 32, default: 1 }
     ComputeResource:
       type: object
-      description: Account-owned worker metadata. Runner tokens are deliberately never returned.
+      description: Account-owned or classroom-managed worker metadata. Runner tokens are deliberately never returned.
       required: [id, name, kind, runnerUrl, tokenConfigured, status, createdAt, updatedAt]
       properties:
         id: { type: string }
@@ -3792,6 +3904,8 @@ components:
         cuda: { type: boolean }
         vramMb: { type: integer, minimum: 0 }
         maxConcurrentJobs: { type: integer, minimum: 1 }
+        activeJobs: { type: integer, minimum: 0, maximum: 32, readOnly: true, description: Running jobs counted by the most recent worker health probe. }
+        queuedJobs: { type: integer, minimum: 0, maximum: 1000, readOnly: true, description: Pending jobs counted by the most recent worker health probe. }
         engines:
           type: array
           items: { type: string }
@@ -5038,6 +5152,10 @@ components:
         run: { $ref: "#/components/schemas/Run" }
         idempotentReplay: { type: boolean }
         reconciled: { type: boolean }
+        workshopEvidenceIssue:
+          type: string
+          description: Why a completed workshop run still lacks independently matched worker evidence. Run status is preserved.
+          enum: [binding-missing, worker-unavailable, job-missing, receipt-missing, receipt-mismatch]
         artifactRetention:
           type: object
           required: [state]

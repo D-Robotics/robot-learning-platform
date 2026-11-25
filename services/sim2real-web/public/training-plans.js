@@ -9,14 +9,38 @@ window.TrainingPlans = (() => {
     ppo: { learningRate: 'training-ppo-learning-rate', entropyCoefficient: 'training-ppo-entropy', clipParameter: 'training-ppo-clip' },
     taskTuning: { trackLinearVelocityWeight: 'training-reward-linear', trackAngularVelocityWeight: 'training-reward-angular', headPoseTrackingWeight: 'training-reward-head' },
   };
-  const names = { 'alternating-arms': '左右交替摆臂', 'weight-shift': '左右换重心', 'squat-rise': '下蹲起身', 'open-pose': '展开定格' };
+  const names = {
+    'alternating-arms': '左右交替摆臂',
+    'weight-shift': '左右换重心',
+    'squat-rise': '下蹲起身',
+    'open-pose': '展开定格',
+    'single-arm-wave': '单臂挥手',
+    'arms-overhead': '双臂上举',
+    'cross-and-open': '胸前交叉展开',
+    'side-lean': '左右侧身',
+    'alternating-knee-lift': '交替抬膝',
+    'side-tap': '侧点步收回',
+  };
   const byId = (id) => document.getElementById(id);
   const field = (id) => byId(id)?.value.trim() || '';
   const idValid = (id) => /^[a-f0-9-]{36}$/.test(id);
 
+  const presets = [
+    { id: 'alternating-arms', title: '左右交替摆臂', bpm: 100, sections: [
+      { type: 'alternating-arms', beats: 8, intensity: 0.25 },
+    ] },
+    { id: 'rhythm-and-pose', title: '节奏变换与定格', bpm: 110, sections: [
+      { type: 'alternating-arms', beats: 8, intensity: 0.7 },
+      { type: 'weight-shift', beats: 8, intensity: 0.5 },
+      { type: 'squat-rise', beats: 8, intensity: 0.6 },
+      { type: 'open-pose', beats: 8, intensity: 0.5 },
+    ] },
+  ];
+
   function mountDanceEditor(onChange) {
     const root = byId('originman-goal-editor');
     const goal = byId('originman-training-goal');
+    const presetPicker = byId('originman-dance-preset');
     const fields = byId('originman-dance-fields');
     const sections = byId('originman-dance-sections');
     const add = byId('originman-dance-add');
@@ -26,62 +50,98 @@ window.TrainingPlans = (() => {
     const steps = byId('originman-dance-steps');
     const seed = byId('originman-dance-seed');
     const numEnvs = byId('originman-dance-num-envs');
-    const defaultSection = { type: 'alternating-arms', beats: 8, intensity: 0.25 };
     const configPanel = byId('train-module-config');
-    let rewardTuning;
+    const preset = () => presets.find(({ id }) => id === presetPicker.value) ?? presets[0];
     const number = (input) => input.value !== '' && input.validity.valid ? Number(input.value) : NaN;
-    const enabled = () => !root.hidden && goal.value === 'originman-dance';
+    const enabled = () => !root.hidden;
+    let mode = 'preset';
+    const draft = {
+      preset: { title: presets[0].title, bpm: presets[0].bpm },
+      custom: { title: '', bpm: 100 },
+    };
+    presets.forEach(({ id, title: name }) => presetPicker.add(new Option(name, id)));
+    title.value = draft.preset.title;
+
+    function selectedSections() {
+      return mode === 'preset' ? preset().sections : Array.from(sections.children, (row) => ({
+        type: row.querySelector('[data-dance-type]').value,
+        beats: Number(row.querySelector('[data-dance-beats]').value),
+        intensity: number(row.querySelector('[data-dance-intensity]')),
+      }));
+    }
 
     function read() {
       if (!enabled()) return null;
       const recipe = {
-        schemaVersion: 1, title: title.value.trim(), bpm: number(bpm),
+        schemaVersion: 1, compositionMode: mode, title: title.value.trim(), bpm: number(bpm),
         trainingSteps: number(steps),
         ...(seed.value !== '' ? { seed: number(seed) } : {}),
-        ...(rewardTuning ? { rewardTuning } : {}),
-        sections: Array.from(sections.children, (row) => ({
-          type: row.querySelector('[data-dance-type]').value,
-          beats: Number(row.querySelector('[data-dance-beats]').value),
-          intensity: number(row.querySelector('[data-dance-intensity]')),
-        })),
+        ...(draft[mode].rewardTuning ? { rewardTuning: draft[mode].rewardTuning } : {}),
+        sections: selectedSections(),
       };
       if (!recipe.title || !Number.isFinite(recipe.bpm) || !Number.isFinite(recipe.trainingSteps) || !Number.isFinite(number(numEnvs)) ||
-          ('seed' in recipe && !Number.isFinite(recipe.seed)) ||
-          recipe.sections.some((section) => !Number.isFinite(section.intensity))) return null;
+          ('seed' in recipe && !Number.isFinite(recipe.seed)) || !recipe.sections.length ||
+          recipe.sections.some((section) => !Object.hasOwn(names, section.type) || !Number.isFinite(section.intensity))) return null;
       return recipe;
     }
 
     function refresh() {
       fields.hidden = !enabled();
       configPanel.classList.toggle('is-dance-goal', enabled());
+      byId('originman-dance-presets').hidden = mode !== 'preset';
+      byId('originman-dance-custom').hidden = mode !== 'custom';
+      byId('originman-dance-preview').textContent = preset().sections.map(({ type, beats }) => names[type] + ' ' + beats + ' 拍').join(' → ');
+      byId('originman-dance-empty').hidden = sections.childElementCount !== 0;
       add.disabled = sections.childElementCount >= 8;
       Array.from(sections.children).forEach((row, index) => {
         row.querySelector('legend').textContent = '第 ' + (index + 1) + ' 段';
-        row.querySelector('button').disabled = sections.childElementCount === 1;
+        row.querySelector('[data-dance-up]').disabled = index === 0;
+        row.querySelector('[data-dance-down]').disabled = index === sections.childElementCount - 1;
       });
       error.textContent = enabled() && !read()
-        ? '请填写舞段名称，并检查节奏、步数、并行环境、种子和动作强度的范围。' : '';
+        ? mode === 'custom' && !sections.childElementCount
+          ? ''
+          : '请填写作品名称，选择每段动作并检查节奏、步数、并行环境、种子和强度。'
+        : '';
     }
 
-    function append(section) {
+    function append(section = { type: '', beats: 8, intensity: 0.25 }) {
       const row = document.createElement('fieldset');
       row.className = 'dance-goal-section';
       row.innerHTML = '<legend></legend><div class="dance-goal-fields">' +
-        '<label>动作 <select data-dance-type></select></label>' +
+        '<label>动作组 <select data-dance-type><option value="">请选择动作</option></select></label>' +
         '<label>拍数 <select data-dance-beats></select></label>' +
         '<label>强度（0.25–1） <input data-dance-intensity type="number" min="0.25" max="1" step="any"></label>' +
-        '<button type="button" class="button button-ghost button-small">移除这段</button></div>';
+        '</div><div class="training-plans-actions">' +
+        '<button type="button" class="button button-ghost button-small" data-dance-up>上移</button>' +
+        '<button type="button" class="button button-ghost button-small" data-dance-down>下移</button>' +
+        '<button type="button" class="button button-ghost button-small" data-dance-remove>移除这段</button></div>';
       const type = row.querySelector('[data-dance-type]');
       const beats = row.querySelector('[data-dance-beats]');
+      const up = row.querySelector('[data-dance-up]');
+      const down = row.querySelector('[data-dance-down]');
       for (const [value, name] of Object.entries(names)) type.add(new Option(name, value));
       for (const count of [4, 8, 16]) beats.add(new Option(String(count), String(count)));
       type.value = section.type;
       beats.value = section.beats;
       row.querySelector('[data-dance-intensity]').value = section.intensity;
-      row.querySelector('button').addEventListener('click', () => {
+      up.addEventListener('click', () => {
+        if (!row.previousElementSibling) return;
+        row.previousElementSibling.before(row);
+        changed();
+        (up.disabled ? down : up).focus();
+      });
+      down.addEventListener('click', () => {
+        if (!row.nextElementSibling) return;
+        row.nextElementSibling.after(row);
+        changed();
+        (down.disabled ? up : down).focus();
+      });
+      row.querySelector('[data-dance-remove]').addEventListener('click', () => {
+        const next = row.nextElementSibling || row.previousElementSibling;
         row.remove();
         changed();
-        add.focus();
+        (next?.querySelector('[data-dance-type]') || add).focus();
       });
       sections.append(row);
       return type;
@@ -92,14 +152,31 @@ window.TrainingPlans = (() => {
       onChange();
     }
 
-    root.addEventListener('input', changed);
+    function showDraft() {
+      goal.value = mode === 'preset' ? 'originman-dance' : 'originman-dance-custom';
+      title.value = draft[mode].title;
+      bpm.value = draft[mode].bpm;
+    }
+
+    root.addEventListener('input', (event) => {
+      // The resource selector updates workbench state on change. Rendering here would reset it first.
+      if (event.target === byId('compute-resource-select')) return;
+      if (event.target === goal) {
+        Object.assign(draft[mode], { title: title.value, bpm: bpm.value });
+        mode = goal.value === 'originman-dance' ? 'preset' : 'custom';
+        showDraft();
+      } else if (event.target === presetPicker) {
+        draft.preset = { title: preset().title, bpm: preset().bpm };
+        showDraft();
+      }
+      changed();
+    });
     add.addEventListener('click', () => {
       if (sections.childElementCount >= 8) return;
-      const type = append(defaultSection);
+      const type = append();
       changed();
       type.focus();
     });
-    append(defaultSection);
     return {
       enabled,
       read,
@@ -109,16 +186,23 @@ window.TrainingPlans = (() => {
         refresh();
       },
       load(recipe, count) {
-        goal.value = recipe ? 'originman-dance' : '';
-        rewardTuning = recipe?.rewardTuning;
         if (recipe) {
-          title.value = recipe.title;
-          bpm.value = recipe.bpm;
+          const matched = recipe.compositionMode === 'preset' && presets.find(({ sections }) =>
+            sections.length === recipe.sections.length && sections.every((section, index) => {
+              const saved = recipe.sections[index];
+              return section.type === saved.type && section.beats === saved.beats && section.intensity === saved.intensity;
+            }));
+          mode = matched ? 'preset' : 'custom';
+          if (matched) presetPicker.value = matched.id;
+          else {
+            sections.replaceChildren();
+            recipe.sections.forEach(append);
+          }
+          draft[mode] = { title: recipe.title, bpm: recipe.bpm, rewardTuning: recipe.rewardTuning };
+          showDraft();
           steps.value = recipe.trainingSteps ?? 500000;
           seed.value = recipe.seed ?? '';
           numEnvs.value = count ?? 64;
-          sections.replaceChildren();
-          recipe.sections.forEach(append);
         }
         refresh();
       },

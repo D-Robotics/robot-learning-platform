@@ -177,6 +177,49 @@
     "annotations": { "readOnlyHint": true, "destructiveHint": false }
   },
   {
+    "name": "rdk_compute_resource_update",
+    "description": "更新当前账号已登记的训练资源地址或凭据。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "computeResourceId": { "type": "string" },
+        "name": { "type": "string" },
+        "runnerUrl": { "type": "string" },
+        "runnerToken": { "type": "string" }
+      },
+      "required": ["computeResourceId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_training_preflight",
+    "description": "检查指定资源的训练环境。只读操作。",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "computeResourceId": { "type": "string" },
+        "engine": { "type": "string" },
+        "taskId": { "type": "string" },
+        "device": { "type": "string" }
+      },
+      "required": ["computeResourceId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": true, "destructiveHint": false }
+  },
+  {
+    "name": "rdk_training_cancel",
+    "description": "取消当前账号的排队或运行中训练。需要平台安全门控。",
+    "inputSchema": {
+      "type": "object",
+      "properties": { "runId": { "type": "string" } },
+      "required": ["runId"],
+      "additionalProperties": true
+    },
+    "annotations": { "readOnlyHint": false, "destructiveHint": true }
+  },
+  {
     "name": "rdk_compute_resource_test",
     "description": "测试指定训练资源的健康状态。只读操作。",
     "inputSchema": {
@@ -267,6 +310,8 @@
         "engine": { "type": "string" },
         "demonstrationRunId": { "type": "string" },
         "syntheticSmoke": { "type": "boolean" },
+        "originmanWorkshop": { "type": "object" },
+        "idempotencyKey": { "type": "string" },
         "originmanDance": { "type": "object" },
         "algorithm": { "type": "string" },
         "numEnvs": { "type": "number" },

@@ -69,7 +69,8 @@ class WorkerProgress(BaseCallback):
         iteration = min(self.total_iterations, max(1, math.ceil(self.model.num_timesteps / self.rollout_size)))
         print(
             f"[{self.engine}] iter {iteration}/{self.total_iterations} meanReward={mean_reward:.5f} "
-            f"recentSuccess={recent_success:.4f} elapsed={time.monotonic() - self.started:.1f}s",
+            f"recentSuccess={recent_success:.4f} elapsed={time.monotonic() - self.started:.1f}s "
+            f"episodeSamples={min(len(self.episode_successes), 50)}",
             flush=True,
         )
 

@@ -1,5 +1,6 @@
 /** Bounded course orchestration over the same authenticated platform tools. No runtime or policy bypass. */
 import fs from 'node:fs';
+import { workshopEvidenceMessage } from './plugin-errors.mjs';
 import { prepareTraining } from './workflow-inspection.mjs';
 import { experimentContext } from './experiment-context.mjs';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
@@ -141,6 +142,7 @@ export async function shortTraining(
     directory,
     toolNames = [],
     readModels,
+    readTrainingRun,
     defaultResourceId,
     courseReadiness,
     submitSchema,
@@ -190,7 +192,9 @@ export async function shortTraining(
       remember: (runId) => remember(saved.training.runId, runId),
     });
     if (recovered) return { stage: 'evaluation', ...recovered };
-    const run = fullRun(await call('rdk_lineage_get', { runId: saved.training.runId }));
+    const run = readTrainingRun
+      ? await readTrainingRun(saved.training.runId)
+      : fullRun(await call('rdk_lineage_get', { runId: saved.training.runId }));
     if (
       !run ||
       run.id !== saved.training.runId ||
@@ -200,14 +204,22 @@ export async function shortTraining(
       run.training?.originmanWorkshop?.phase !== 'train' ||
       (!formal &&
         (run.training?.originmanWorkshop?.groupId ?? 'group-01') !==
-          (supportsGroup ? contextId : 'group-01')) ||
-      !/^([a-f0-9]{64})$/.test(sha(run) ?? '') ||
-      run.artifact?.sha256 !== sha(run)
+          (supportsGroup ? contextId : 'group-01'))
     )
       throw Error('本实验训练未完成、非真实执行或策略来源未核对，不提交评测。');
+    if (!/^[a-f0-9]{64}$/.test(sha(run) ?? '') || run.artifact?.sha256 !== sha(run)) {
+      const reason =
+        workshopEvidenceMessage(run.workshopEvidenceIssue) ??
+        '这条已完成的训练缺少与策略文件匹配的评测回执。请核对原 Run 和 Worker 后再试。';
+      throw Object.assign(Error(reason), {
+        platformCode: 'WORKSHOP_EVIDENCE_UNAVAILABLE',
+        stopWorkflow: false,
+        details: { runId: run.id, issue: run.workshopEvidenceIssue },
+      });
+    }
     const t = run.training;
     if (
-      t.engine !== 'originman-recovery-reflect' ||
+      !['originman-recovery', 'originman-recovery-reflect'].includes(t.engine) ||
       t.algorithm !== 'sac' ||
       t.numEnvs !== 4 ||
       (!formal && t.originmanWorkshop.timesteps !== 8192) ||
@@ -343,7 +355,11 @@ export async function shortTraining(
         backend: 'local',
         taskId: 'originman-recovery',
         profile: 'standard',
-        engine: 'originman-recovery-reflect',
+        engine:
+          prepared.resource?.engines?.includes('originman-recovery') &&
+          !prepared.resource.engines.includes('originman-recovery-reflect')
+            ? 'originman-recovery'
+            : 'originman-recovery-reflect',
         algorithm: 'sac',
         numEnvs: 4,
         maxIterations: Math.ceil(budget / 256),

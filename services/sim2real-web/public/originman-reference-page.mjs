@@ -1,51 +1,155 @@
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=8';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
+import {
+  composeOriginmanReference, MAX_REFERENCE_CLIPS,
+} from './originman-reference-compose.mjs?v=2';
 
 const byId = (id) => document.getElementById(id);
 const worker = byId('reference-worker');
 const envs = byId('reference-envs');
 const status = byId('reference-status');
 const error = byId('reference-error');
+const trainingError = byId('reference-training-error');
 const submit = byId('reference-submit');
 const file = byId('reference-file');
+const appendFile = byId('reference-append');
+const speedSelect = byId('reference-speed');
+const exportButton = byId('reference-export');
+const checkWorker = byId('reference-worker-check');
+const workerHint = byId('reference-worker-hint');
+const screenCurrent = byId('reference-screen-current');
+const screenFiles = byId('reference-screen-files');
+const screenCancel = byId('reference-screen-cancel');
+const screenStatus = byId('reference-screen-status');
+const screenResults = byId('reference-screen-results');
 const exampleButton = byId('reference-example');
 const exampleDownload = byId('reference-example-download');
 let example;
+let calibration;
+let clips = [];
+let speed = 1;
 let trajectory;
+let trajectoryDigest;
+const screenings = new Map();
+let displayedScreenKey;
 let attempt;
-let requestSequence = 0;
+let preparing = false;
+let checking = false;
 let submitting = false;
+let screening;
+let resources = [];
 
-async function api(path, body, idempotencyKey) {
+async function api(path, body, idempotencyKey, signal) {
   const response = await fetch(new URL('./api/v1/duck/' + path, location.href), {
-    credentials: 'same-origin', cache: 'no-store',
+    credentials: 'same-origin', cache: 'no-store', signal,
     ...(body && { method: 'POST', body: JSON.stringify(body) }),
     headers: {
       accept: 'application/json',
       ...(body && { 'content-type': 'application/json' }),
       ...(idempotencyKey && { 'Idempotency-Key': idempotencyKey }),
+      ...(path === 'runs' && { 'X-RDK-Reference-Trajectory': '1' }),
     },
   });
   const value = await response.json().catch(() => null);
   if (!response.ok || !value?.ok) {
     if (response.status === 401) throw Error('请先登录机器人学习平台，再刷新此页。');
-    if (response.status === 413) throw Error('轨迹超过当前请求的 2 MB 上限，请拆成更短的片段。');
+    if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
     throw Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。');
   }
   return value;
 }
 
-function setError(message = '') {
-  error.textContent = message;
-  error.hidden = !message;
+function showError(target, message = '') {
+  target.textContent = message;
+  target.hidden = !message;
+}
+
+const query = new URLSearchParams(location.search);
+const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
+if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
+
+function currentReference() {
+  return motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
+}
+
+function screeningKey(computeResourceId, digest, stanceProfile) {
+  return computeResourceId && digest ? [computeResourceId, digest, stanceProfile ?? 'default'].join('/') : '';
+}
+
+function currentScreenKey() {
+  if (motion.isUpload()) return screeningKey(worker.value, trajectoryDigest);
+  const selected = motion.submission();
+  return screeningKey(worker.value, selected?.expectedTrajectorySha256, selected?.expectedStanceProfile);
 }
 
 function refresh() {
-  submit.disabled = submitting || !trajectory || !worker.value;
-  file.disabled = submitting;
-  exampleButton.disabled = submitting || !example;
-  worker.disabled = submitting;
+  const editing = submitting || preparing || Boolean(screening);
+  const uploaded = motion.isUpload();
+  const ready = Boolean(currentReference());
+  const key = currentScreenKey();
+  const passed = screenings.get(key);
+  const failed = passed === false;
+  const needsScreen = !uploaded && ready && passed !== true;
+  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed || needsScreen;
+  submit.textContent = submitting ? '正在提交…' : '开始仿真训练';
+  if (!screening && displayedScreenKey !== key) {
+    screenResults.replaceChildren();
+    screenStatus.textContent = passed === true ? '当前轨迹已在所选 Worker 通过筛查。'
+      : failed ? '当前轨迹曾未通过筛查，请调整后复查。' : '';
+    displayedScreenKey = key;
+  }
+  const blocker = byId('reference-screen-blocker');
+  blocker.hidden = !failed && !(needsScreen && selectedWorkerReady());
+  blocker.textContent = failed
+    ? '当前轨迹未通过所选 Worker 的筛查。请调整轨迹或重新筛查后再提交。'
+    : '预置和自由编排需在所选 Worker 通过筛查后才能提交。';
+  motion.setLocked(editing || checking);
+  file.disabled = editing || !calibration;
+  appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
+  speedSelect.disabled = editing || !clips.length;
+  exportButton.disabled = editing || !trajectory;
+  exampleButton.disabled = editing || !example;
+  exampleDownload.disabled = !example;
+  worker.disabled = submitting || checking || Boolean(screening);
+  checkWorker.disabled = worker.disabled || !worker.value;
+  screenCurrent.disabled = editing || checking || !ready || !selectedWorkerReady();
+  screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
+  screenCancel.hidden = !screening;
   envs.disabled = submitting;
   byId('reference-steps').disabled = submitting;
+}
+
+function selectedWorkerReady() {
+  return resources.some(({ id, ready }) => id === worker.value && ready);
+}
+
+function showWorkerHint() {
+  workerHint.textContent = !resources.length
+    ? '当前账号未登记支持跟跳的 Worker。可先导入轨迹，在工作台的「执行资源」中配置算力。'
+    : selectedWorkerReady()
+      ? 'Worker 已连接，可以筛查当前轨迹。'
+      : '选择 Worker 后检查连接，确认支持参考轨迹跟跳。';
+}
+
+async function loadWorkers(selection) {
+  const { computeResources } = await api('compute-resources');
+  resources = computeResources
+    .filter(({ source, mock, engines }) => source !== 'local-agent' && mock !== true &&
+      (!engines?.length || engines.includes('originman-reference-ppo')))
+    .map(({ id, name, status, mock, cuda, engines }) => ({
+      id, name, cuda,
+      ready: status === 'online' && mock === false && engines?.includes('originman-reference-ppo'),
+    }));
+  worker.replaceChildren(new Option('请选择', ''));
+  for (const value of resources) {
+    const option = new Option(value.name + (value.ready ? ' · 可用' : ' · 待检查'), value.id);
+    option.dataset.cuda = String(value.cuda === true);
+    worker.append(option);
+  }
+  if (resources.some(({ id }) => id === selection)) worker.value = selection;
+  else if (resources.length === 1) worker.value = resources[0].id;
+  if (worker.value !== selection) worker.dispatchEvent(new Event('change'));
+  else showWorkerHint();
 }
 
 function showCalibration(calibration) {
@@ -66,66 +170,201 @@ function showCalibration(calibration) {
   byId('reference-joints').replaceChildren(...rows);
 }
 
-async function selectTrajectory(load, label) {
-  const sequence = ++requestSequence;
-  trajectory = undefined;
-  attempt = undefined;
-  setError();
+async function selectTrajectory(load, nextSpeed) {
+  if (preparing || submitting) return;
+  preparing = true;
+  showError(error);
   status.textContent = '正在校验关节顺序、频率和角度范围。';
   refresh();
   try {
-    const value = await load();
-    if (sequence !== requestSequence) return;
+    const nextClips = await load();
+    const value = composeOriginmanReference(nextClips, nextSpeed, calibration.robot.jointOrder, calibration.trajectory);
     const receipt = await api('originman-reference/validate', { trajectory: value });
-    if (sequence !== requestSequence) return;
+    clips = nextClips;
+    speed = nextSpeed;
     trajectory = value;
-    status.textContent = `${label}已通过格式校验，${receipt.frames} 帧，${receipt.durationSeconds} 秒，${receipt.fps} Hz。任务启动后会先做物理仿真筛查。`;
+    trajectoryDigest = receipt.trajectorySha256 ?? receipt.referenceSha256;
+    attempt = undefined;
+    const list = byId('reference-clips');
+    list.replaceChildren(...clips.map(({ label }) => {
+      const item = document.createElement('li');
+      item.textContent = label;
+      return item;
+    }));
+    const label = clips.length === 1 ? clips[0].label : `${clips.length} 个拼接片段`;
+    status.textContent = `${label} · ${speed} 倍速，通过格式校验，${receipt.frames} 帧，${receipt.durationSeconds} 秒，${receipt.fps} Hz。提交后先做物理仿真筛查。`;
   } catch (cause) {
-    if (sequence !== requestSequence) return;
-    status.textContent = '请重新导入参考轨迹。';
-    setError(cause.message);
+    status.textContent = trajectory ? '已保留上次通过校验的轨迹。' : '请重新导入参考轨迹。';
+    showError(error, cause.message);
   } finally {
+    preparing = false;
+    speedSelect.value = String(speed);
     refresh();
   }
 }
 
 worker.addEventListener('change', () => {
   envs.value = worker.selectedOptions[0]?.dataset.cuda === 'true' ? '64' : '1';
+  showWorkerHint();
   refresh();
 });
-file.addEventListener('change', () => {
-  const incoming = file.files[0];
+checkWorker.addEventListener('click', async () => {
+  if (!worker.value || checking || submitting) return;
+  const selection = worker.value;
+  checking = true;
+  workerHint.textContent = '正在检查所选 Worker。';
+  refresh();
+  try {
+    const result = await api('compute-resources/' + encodeURIComponent(selection) + '/test', {});
+    await loadWorkers(selection);
+    if (!selectedWorkerReady()) {
+      workerHint.textContent = result.connected
+        ? 'Worker 已连接，跟跳引擎还不可用。请在执行资源中核对引擎配置。'
+        : result.diagnostic?.message || 'Worker 连接失败，请检查执行资源配置。';
+    }
+  } catch (cause) {
+    resources = resources.map((resource) => resource.id === selection ? { ...resource, ready: false } : resource);
+    workerHint.textContent = cause.message;
+  } finally {
+    checking = false;
+    refresh();
+  }
+});
+
+async function readClip(incoming) {
+  if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');
+  const isNpz = /\.npz$/i.test(incoming.name);
+  const value = isNpz
+    ? await readOriginmanNpz(await incoming.arrayBuffer())
+    : JSON.parse(await incoming.text());
+  return { value, label: incoming.name, float32: isNpz };
+}
+
+function readSelection(input, append) {
+  const incoming = input.files[0];
   if (!incoming) return;
-  void selectTrajectory(async () => {
-    if (incoming.size > 8 * 1024 * 1024) throw Error('参考文件大小不能超过 8 MiB。');
-    return /\.npz$/i.test(incoming.name)
-      ? readOriginmanNpz(await incoming.arrayBuffer())
-      : JSON.parse(await incoming.text());
-  }, incoming.name);
-});
+  input.value = '';
+  void selectTrajectory(async () => [...(append ? clips : []), await readClip(incoming)], append ? speed : 1);
+}
+
+file.addEventListener('change', () => readSelection(file, false));
+appendFile.addEventListener('change', () => readSelection(appendFile, true));
+speedSelect.addEventListener('change', () => void selectTrajectory(() => clips, Number(speedSelect.value)));
 exampleButton.addEventListener('click', () => {
-  file.value = '';
-  void selectTrajectory(() => example, '示例摆臂');
+  void selectTrajectory(() => [{ value: example, label: '示例摆臂' }], 1);
 });
-exampleDownload.addEventListener('click', () => {
-  const url = URL.createObjectURL(new Blob([JSON.stringify(example)], { type: 'application/json' }));
+function downloadReference(value, name) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(value)], { type: 'application/json' }));
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'originman-reference-example.json';
+  link.download = name;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+exampleDownload.addEventListener('click', () => downloadReference(example, 'originman-reference-example.json'));
+exportButton.addEventListener('click', () => downloadReference(trajectory, 'originman-reference-prepared.json'));
+
+async function screenBatch(entries) {
+  if (screening || preparing || submitting || checking || !selectedWorkerReady()) return;
+  if (entries.length > MAX_REFERENCE_CLIPS) {
+    screenStatus.textContent = '每次最多筛查 8 个文件。';
+    return;
+  }
+  if (!entries.length) return;
+  const controller = new AbortController();
+  screening = controller;
+  const computeResourceId = worker.value;
+  let passed = 0;
+  let tested = 0;
+  screenResults.replaceChildren();
+  refresh();
+  try {
+    for (const { label, load } of entries) {
+      if (controller.signal.aborted) break;
+      screenStatus.textContent = `正在筛查第 ${tested + 1} / ${entries.length} 项。`;
+      const row = document.createElement('li');
+      try {
+        const reference = await load();
+        const { result } = await api('originman-reference/screen', {
+          computeResourceId, ...reference,
+        }, undefined, controller.signal);
+        const digest = result.trajectorySha256 ?? result.referenceSha256;
+        if (reference.expectedTrajectorySha256 && digest !== reference.expectedTrajectorySha256)
+          throw Error('筛查轨迹与当前预览不一致，请重新预览。');
+        if (reference.expectedStanceProfile && result.stanceProfile !== reference.expectedStanceProfile)
+          throw Error('筛查站姿与当前预览不一致，请重新预览。');
+        screenings.set(screeningKey(computeResourceId, digest, result.stanceProfile), result.passed);
+        if (result.passed) passed++;
+        const location = result.failureLocation;
+        const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
+          : location?.fromBlockNumber
+            ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
+            : location?.betweenBlocks ? '，发生在两段过渡处' : '';
+        const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
+        const violation = result.limitViolation;
+        if (violation) {
+          row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
+        } else {
+          row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
+          const reasons = result.failure;
+          if (reasons?.nonFootContacts?.length) {
+            row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
+          }
+          if (reasons?.tilt) {
+            row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
+          }
+          if (reasons?.height) {
+            row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
+          }
+        }
+        const detail = document.createElement('small');
+        detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
+        row.append(detail);
+      } catch (cause) {
+        if (controller.signal.aborted) break;
+        row.textContent = `${label} · ${cause.message}`;
+      }
+      tested++;
+      screenResults.append(row);
+    }
+    screenStatus.textContent = `${controller.signal.aborted ? '筛查已取消，' : ''}已返回 ${tested}/${entries.length} 项，通过 ${passed} 项。`;
+  } finally {
+    screening = undefined;
+    refresh();
+  }
+}
+
+screenCurrent.addEventListener('click', () => void screenBatch([
+  { label: '当前轨迹', load: currentReference },
+]));
+screenFiles.addEventListener('change', () => {
+  const files = Array.from(screenFiles.files);
+  screenFiles.value = '';
+  void screenBatch(files.map((incoming) => ({
+    label: incoming.name,
+    load: async () => ({
+      trajectory: composeOriginmanReference(
+        [await readClip(incoming)], 1, calibration.robot.jointOrder, calibration.trajectory,
+      ),
+    }),
+  })));
 });
+screenCancel.addEventListener('click', () => screening?.abort());
 
 byId('reference-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (submitting || !worker.value || !trajectory) return;
+  const reference = currentReference();
+  const passed = screenings.get(currentScreenKey());
+  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !reference ||
+      passed === false || (!motion.isUpload() && passed !== true)) return;
   submitting = true;
   refresh();
-  setError();
+  showError(trainingError);
   const computeResourceId = worker.value;
   const trainingSteps = Number(byId('reference-steps').value);
   const numEnvs = Number(envs.value);
-  const key = [computeResourceId, trainingSteps, numEnvs].join('/');
+  const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
+    reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest, reference.expectedStanceProfile]);
   if (!attempt || attempt.key !== key) attempt = { key, id: crypto.randomUUID() };
   try {
     const { modelId } = await api('originman-reference/model', { computeResourceId });
@@ -135,7 +374,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
       training: {
         profile: trainingSteps === 8192 ? 'smoke' : 'standard', algorithm: 'ppo',
         engine: 'originman-reference-ppo', video: true, maxIterations: trainingSteps / 4096, numEnvs,
-        originmanReference: { trajectory, trainingSteps, seed: 7 },
+        originmanReference: { ...reference, trainingSteps, seed: 7 },
       },
     }, attempt.id);
     const runId = result.run?.id;
@@ -144,7 +383,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
     url.searchParams.set('runId', runId);
     location.assign(url.href);
   } catch (cause) {
-    setError(cause.message);
+    showError(trainingError, cause.message);
   } finally {
     submitting = false;
     refresh();
@@ -154,23 +393,18 @@ byId('reference-form').addEventListener('submit', async (event) => {
 try {
   const setup = await api('originman-reference');
   example = setup.example;
-  showCalibration(setup.calibration);
-  for (const value of setup.resources) {
-    const option = document.createElement('option');
-    option.value = value.id;
-    option.textContent = value.name;
-    option.dataset.cuda = value.cuda === true;
-    worker.append(option);
-  }
-  if (setup.resources.length === 1) {
-    worker.value = setup.resources[0].id;
-    worker.dispatchEvent(new Event('change'));
-  }
+  calibration = setup.calibration;
+  showCalibration(calibration);
   status.textContent = '请选择文件或加载示例。';
-  if (!setup.resources.length)
-    byId('reference-worker-hint').textContent = '当前账号暂无支持参考轨迹跟跳的在线 Worker。可以先导入并校验轨迹。';
+  try {
+    await loadWorkers(query.get('computeResourceId'));
+  } catch (cause) {
+    workerHint.textContent = cause.message;
+  }
 } catch (cause) {
   status.textContent = '任务配置读取失败。';
-  setError(cause.message);
+  showError(trainingError, cause.message);
 }
 refresh();
+
+void motion.start();

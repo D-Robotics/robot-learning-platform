@@ -447,7 +447,7 @@ def ros_topics_cached():
 _drive_state = {
     "linear": 0.0,
     "angular": 0.0,
-    "until": 0.0,     # absolute deadline (time.time()); 0 = idle
+    "until": 0.0,     # absolute monotonic deadline; 0 = idle
     "lastCmdAt": 0.0,
     "active": False,
     "lastStopReason": "idle",
@@ -525,7 +525,7 @@ def drive_status():
             "active": _drive_state["active"],
             "linear": _drive_state["linear"],
             "angular": _drive_state["angular"],
-            "remainingMs": max(0, int((_drive_state["until"] - time.time()) * 1000))
+            "remainingMs": max(0, int((_drive_state["until"] - time.monotonic()) * 1000))
             if _drive_state["active"] else 0,
             "lastStopReason": _drive_state["lastStopReason"],
             "published": _drive_state["published"],
@@ -535,7 +535,7 @@ def drive_status():
         }
 
 
-def _write_drive_yaml(linear, angular):
+def _write_drive_yaml(linear, angular, expires_monotonic=0.0):
     content = (
         "linear:\n"
         f"  x: {linear}\n"
@@ -545,6 +545,7 @@ def _write_drive_yaml(linear, angular):
         "  x: 0.0\n"
         "  y: 0.0\n"
         f"  z: {angular}\n"
+        f"expires_monotonic: {expires_monotonic}\n"
     )
     # board_ipc uses a random O_EXCL temp inode, validates the private parent
     # and target, fsyncs both file and directory, and rejects symlinks.
@@ -596,17 +597,12 @@ def _start_drive_publisher():
         pass
     if not os.path.exists(DRIVE_PUBLISHER_SCRIPT):
         return False
-    # The command file must exist BEFORE the publisher starts, otherwise its
-    # first cycles publish nothing and motion starts late.
+    # A publisher must start with a fresh zero command, including after a
+    # crash or a failed write during emergency stop.
     try:
-        command_exists = secure_exists(DRIVE_COMMAND_FILE)
+        _write_drive_yaml(0.0, 0.0)
     except OSError:
-        command_exists = False
-    if not command_exists:
-        try:
-            _write_drive_yaml(0.0, 0.0)
-        except OSError:
-            return False
+        return False
     try:
         _drive_proc = subprocess.Popen(
             [
@@ -664,14 +660,17 @@ def _stop_drive_publisher():
         except (OSError, subprocess.TimeoutExpired):
             try:
                 _drive_proc.kill()
-            except OSError:
-                pass
+                _drive_proc.wait(timeout=1)
+            except (OSError, subprocess.TimeoutExpired):
+                if _drive_proc.poll() is None:
+                    return False
         _drive_proc = None
     for path in (DRIVE_COMMAND_FILE, DRIVE_PUBLISHER_READY):
         try:
             secure_unlink(path)
         except OSError:
             pass
+    return True
 
 
 def _finite_number(value):
@@ -903,15 +902,15 @@ def drive_command(linear, angular, duration_sec):
         # Re-capture now AFTER the (possibly multi-second) readiness
         # handshake: the motion window must start when the wheels can
         # actually receive it, not when the API call arrived.
-        now = time.time()
+        now = time.monotonic()
         if now - _drive_state["lastCmdAt"] < DRIVE_MIN_INTERVAL_MS / 1000.0:
             return False, "rate-limited"
-        _write_drive_yaml(round(linear, 3), round(angular, 3))
-        _drive_log(f"yaml written, window until {now + duration_sec:.3f}")
+        deadline = now + duration_sec
+        _write_drive_yaml(round(linear, 3), round(angular, 3), deadline)
         _drive_state.update({
             "linear": linear,
             "angular": angular,
-            "until": now + duration_sec,
+            "until": deadline,
             "lastCmdAt": now,
             "active": True,
             "lastStopReason": "driving",
@@ -921,22 +920,27 @@ def drive_command(linear, angular, duration_sec):
 
 
 def drive_stop(reason="operator-stop"):
-    """Immediately zero the command file and mark idle. The publisher keeps
-    re-publishing zero speed (harmless) until the watchdog sweeper kills it."""
-    _drive_log(f"STOP reason={reason} active={_drive_state.get('active')}")
+    """Request zero output even when drive is disabled."""
     with _drive_lock:
-        try:
-            _write_drive_yaml(0.0, 0.0)
-        except OSError:
-            pass
-        _drive_state.update({
-            "linear": 0.0,
-            "angular": 0.0,
-            "active": False,
-            "until": 0.0,
-            "lastStopReason": reason,
-        })
-        return True
+        return _drive_stop_locked(reason)
+
+
+def _drive_stop_locked(reason):
+    _drive_log(f"STOP reason={reason} active={_drive_state['active']}")
+    try:
+        _write_drive_yaml(0.0, 0.0)
+    except OSError:
+        if not _stop_drive_publisher():
+            _drive_state["lastStopReason"] = "stop-unconfirmed"
+            return False
+    _drive_state.update({
+        "linear": 0.0,
+        "angular": 0.0,
+        "active": False,
+        "until": 0.0,
+        "lastStopReason": reason,
+    })
+    return True
 
 
 def _drive_watchdog_loop():
@@ -948,12 +952,8 @@ def _drive_watchdog_loop():
     while True:
         time.sleep(0.2)
         with _drive_lock:
-            active = _drive_state["active"]
-            deadline = _drive_state["until"]
-            expired = active and time.time() > deadline
-        if expired:
-            _drive_log(f"watchdog expired at {time.time():.3f} deadline {deadline:.3f}")
-            drive_stop("window-expired")
+            if _drive_state["active"] and time.monotonic() >= _drive_state["until"]:
+                _drive_stop_locked("window-expired")
 
 
 def _start_drive_watchdog():
@@ -2354,12 +2354,17 @@ class Handler(BaseHTTPRequestHandler):
             if not self._require_empty_body():
                 self._json(400, {"ok": False, "error": "BOARD_AGENT_BODY_NOT_ALLOWED"})
                 return
-            # Emergency stop is always accepted — even when drive is disabled
-            # — so the UI stop button never has a failure mode.
-            drive_stop("operator-emergency-stop")
+            drive_stopped = drive_stop("operator-emergency-stop")
             policy_stop("operator-emergency-stop")
-            self._json(200, {"ok": True, "drive": drive_status(),
-                             "note": "zero-speed frame published; chassis watchdog enforces rest"})
+            self._json(200 if drive_stopped else 503, {
+                "ok": drive_stopped,
+                "drive": drive_status(),
+                **({"note": "zero output requested; check motion feedback for physical rest"}
+                   if drive_stopped else {
+                       "error": "BOARD_AGENT_DRIVE_STOP_UNCONFIRMED",
+                       "message": "Could not confirm zero command or publisher shutdown.",
+                   }),
+            })
             return
         if path == "/v1/station/policy/stop":
             if not self._require_empty_body():
@@ -2367,9 +2372,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # Same always-on stance as drive/stop: stopping is never refused.
             res = policy_stop("operator-stop")
-            drive_stop("operator-stop")  # belt-and-braces zero the canary too
-            self._json(200, {"ok": True, "stop": res, "policy": policy_status(),
-                             "note": "policy output zeroed; chassis watchdog enforces rest"})
+            drive_stopped = drive_stop("operator-stop")
+            self._json(200 if drive_stopped else 503, {
+                "ok": drive_stopped, "stop": res, "policy": policy_status(),
+                **({} if drive_stopped else {"error": "BOARD_AGENT_DRIVE_STOP_UNCONFIRMED"}),
+            })
             return
         if path == "/v1/station/policy/load":
             payload = self._read_json()

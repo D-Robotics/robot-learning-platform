@@ -162,6 +162,34 @@ test('evaluation freezes source, seed, group and resource; second request is rea
   await shortTraining('rdk_originman_short_evaluate', { contextId: 'om-test' }, f.call, f.options);
   assert.equal(f.writes.length, 2);
 });
+test('evaluation recovers the original receipt by status and can resume after a worker outage', async (t) => {
+  const f = fixture(t);
+  await shortTraining('rdk_originman_short_train', selectedWorker, f.call, f.options);
+  const options = {
+    ...f.options,
+    readTrainingRun: async (runId) => {
+      assert.equal(runId, 'train');
+      const run = (await f.call('rdk_lineage_get', { runId })).lineage.run;
+      return unavailable
+        ? { ...run, metrics: {}, workshopEvidenceIssue: 'worker-unavailable' }
+        : run;
+    },
+  };
+  let unavailable = true;
+  const call = (name, args) => {
+    assert.notEqual(name, 'rdk_lineage_get');
+    return f.call(name, args);
+  };
+  await assert.rejects(
+    shortTraining('rdk_originman_short_evaluate', { contextId: 'om-test' }, call, options),
+    { platformCode: 'WORKSHOP_EVIDENCE_UNAVAILABLE', stopWorkflow: false },
+  );
+  assert.equal(f.writes.length, 1);
+  unavailable = false;
+  await shortTraining('rdk_originman_short_evaluate', { contextId: 'om-test' }, call, options);
+  assert.equal(f.writes.length, 2);
+  assert.equal(f.writes[1].originmanWorkshop.sourceRunId, 'train');
+});
 test('failed training remains original failed run and cannot evaluate or resubmit', async (t) => {
   const f = fixture(t);
   f.setTerminal('failed');

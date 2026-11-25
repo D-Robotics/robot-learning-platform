@@ -5,7 +5,9 @@ import json
 import math
 import multiprocessing
 import os
+import re
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -33,10 +35,34 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+REFERENCE_DIGEST_VERSION = "originman-reference-f64be-v1"
+SOURCE_STANCE = "source-neutral-v1"
+ROLLOUT_STEPS = 4096
+CHECKPOINT_STEPS = 32768
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def trajectory_digest(value):
+    result = hashlib.sha256(REFERENCE_DIGEST_VERSION.encode() + b"\0")
+    result.update(struct.pack(">II", value["fps"], len(value["joint_pos"])))
+    for name in value["joint_names"]:
+        result.update(name.encode("utf-8") + b"\0")
+    for key in ("joint_pos", "joint_vel"):
+        values = np.asarray(value[key], dtype=np.float64)
+        canonical = np.where(values == 0, 0.0, values).astype(">f8")
+        result.update(canonical.tobytes(order="C"))
+    return result.hexdigest()
+
+
+class ReferenceLimitError(ValueError):
+    def __init__(self, violation):
+        self.violation = violation
+        super().__init__(
+            f"joint target outside scene limits: {violation['joint']}, frame {violation['frame']}"
+        )
 
 
 def validate_trajectory(value):
@@ -57,9 +83,17 @@ def validate_trajectory(value):
 
 
 class ReferenceTracking(gym.Env):
-    def __init__(self, bundle, trajectory, calibrated=True):
+    def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None):
+        config = Config(stride=0, lift=0, sway=0)
+        if stance_profile == SOURCE_STANCE:
+            # The delivered position samples are relative to an uncrouched
+            # reference pose. Keep the existing stance for other recipes.
+            config.crouch = 0.0
+        elif stance_profile is not None:
+            raise ValueError("unsupported reference stance profile")
+        self.stance_profile = stance_profile
         self.robot = OriginManEnv(
-            bundle / "model/scene.xml", Config(stride=0, lift=0, sway=0),
+            bundle / "model/scene.xml", config,
             reference=np.load(bundle / "reference.npy", allow_pickle=False),
         )
         self.model, self.data = self.robot.model, self.robot.data
@@ -77,8 +111,15 @@ class ReferenceTracking(gym.Env):
         self.neutral = self.stance[self.qpos]
         self.limits = self.model.actuator_ctrlrange[self.actuators]
         absolute = self.neutral + self.target
-        if np.any(absolute < self.limits[:, 0] - 1e-6) or np.any(absolute > self.limits[:, 1] + 1e-6):
-            raise ValueError("reference positions plus the stance exceed scene actuator limits")
+        violating = (absolute < self.limits[:, 0] - 1e-6) | (absolute > self.limits[:, 1] + 1e-6)
+        if violating.any():
+            frame, joint = np.argwhere(violating)[0]
+            raise ReferenceLimitError({
+                "joint": TRACKED[joint], "frame": int(frame) + 1,
+                "targetRad": float(absolute[frame, joint]),
+                "minRad": float(self.limits[joint, 0]), "maxRad": float(self.limits[joint, 1]),
+                "framesOutside": int(np.any(violating, axis=1).sum()),
+            })
         self.substeps = round(DT / self.model.opt.timestep)
         if not math.isclose(self.substeps * self.model.opt.timestep, DT):
             raise ValueError("scene physics step does not divide the 50 Hz control interval")
@@ -136,8 +177,19 @@ class ReferenceTracking(gym.Env):
         tilt = math.degrees(math.acos(np.clip(rotation[2, 2], -1, 1)))
         contacts = {c.geom2 if c.geom1 == self.floor else c.geom1 for c in self.data.contact
                     if self.floor in (c.geom1, c.geom2)}
-        failed = bool(contacts - self.feet or tilt >= PROFILE["evaluation"]["maxTiltDeg"] or
-                      self.data.qpos[2] < self.stance[2] * .66)
+        other_contacts = contacts - self.feet
+        tilt_limit = PROFILE["evaluation"]["maxTiltDeg"]
+        height = float(self.data.qpos[2])
+        height_limit = float(self.stance[2] * .66)
+        failure = {}
+        if other_contacts:
+            failure["nonFootContacts"] = sorted(self.model.geom(geom).name or f"geom_{geom}"
+                                                for geom in other_contacts)
+        if tilt >= tilt_limit:
+            failure["tilt"] = {"actualDeg": tilt, "limitDeg": tilt_limit}
+        if height < height_limit:
+            failure["height"] = {"actualM": height, "limitM": height_limit}
+        failed = bool(failure)
         error = self.data.qpos[self.qpos] - desired
         velocity_error = self.data.qvel[self.qvel] - self.target_vel[self.tick]
         reward = (2 * math.exp(-12 * np.mean(error ** 2)) +
@@ -149,49 +201,173 @@ class ReferenceTracking(gym.Env):
         return self.observe(), reward, failed, complete and not failed, {
             "episodeDone": complete or failed,
             "taskSuccess": complete and not failed,
+            "failure": failure,
             "tilt": tilt,
             "yaw": math.degrees(yaw),
             "jointAbsError": float(np.mean(np.abs(error))),
+            "jointSquaredError": float(np.mean(error ** 2)),
         }
 
 
-def evaluate(env, policy):
+def evaluate(env, policy, ranges=()):
     observations, _ = env.reset()
     frames = [env.data.qpos.copy()]
-    errors, peak = [], 0
+    errors, squared, tilts, peak = [], [], [], 0
     for _ in env.target:
         observations, _, failed, complete, data = env.step(policy(observations))
         frames.append(env.data.qpos.copy())
         errors.append(data["jointAbsError"])
+        squared.append(data["jointSquaredError"])
+        tilts.append(data["tilt"])
         peak = max(peak, data["tilt"])
         if failed or complete:
             break
     passed = (not failed and complete and peak < PROFILE["evaluation"]["maxTiltDeg"]
               and abs(data["yaw"]) < PROFILE["evaluation"]["maxAbsFinalYawDeg"])
+    sections = []
+    for item in ranges:
+        start, end = item["from"], item["to"]
+        observed = squared[start:end]
+        heights = [frame[2] for frame in frames[start:start + len(observed) + 1]]
+        sections.append({
+            "id": item["id"], "framesExpected": end - start, "framesEvaluated": len(observed),
+            "completed": len(observed) == end - start and not (failed and end == len(squared)),
+            **({"trackingRmseRad": float(np.sqrt(np.mean(observed))),
+                "maxTiltDeg": max(tilts[start:end]),
+                "squatDescentM": max(0.0, float(heights[0] - min(heights)))} if observed else {}),
+        })
     return {
         "framesExpected": len(env.target),
         "framesEvaluated": len(errors),
+        "completed": bool(complete and not failed),
+        "firstFailedFrame": len(errors) if failed else None,
+        **({"failure": data["failure"]} if failed else {}),
         "trackingMaeRad": float(np.mean(errors)),
+        "trackingRmseRad": float(np.sqrt(np.mean(squared))),
+        **({"sections": sections} if sections else {}),
         "maxTiltDeg": peak,
         "finalYawDeg": data["yaw"],
         "qualityGatePassed": passed,
     }, frames
 
 
-def train_and_export(bundle, output, trajectory, budget, num_envs, seed):
+def reference_gate(bundle, trajectory, stance_profile=None):
+    env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
+    zero = lambda _obs: np.zeros(18)
+    calibrated, _ = evaluate(env, zero)
+    try:
+        original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
+        original_evidence = {"existingSceneGate": original}
+    except ReferenceLimitError as error:
+        original_evidence = {"existingSceneLimitViolation": error.violation}
+    return env, {
+        "gate": calibrated,
+        **original_evidence,
+        "calibrationSha256": (
+            hashlib.sha256(PROFILE_PATH.read_bytes() + b"\0" + stance_profile.encode()).hexdigest()
+            if stance_profile else digest(PROFILE_PATH)
+        ),
+        **({"stanceProfile": stance_profile} if stance_profile else {}),
+        "actionJoints": TRACKED,
+        "controlHz": HZ,
+    }
+
+
+def screen_reference():
+    raw = json.load(sys.stdin)
+    bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
+    scene_hash = validate_bundle(bundle)["sceneSha256"]
+    stance_profile = raw.get("stanceProfile")
+    identity = {"stanceProfile": stance_profile} if stance_profile == SOURCE_STANCE else {}
+    try:
+        _, report = reference_gate(bundle, validate_trajectory(raw), stance_profile)
+    except ReferenceLimitError as error:
+        print(json.dumps({**identity, "invalid": str(error), "violation": error.violation}, allow_nan=False))
+        return
+    except ValueError as error:
+        print(json.dumps({**identity, "invalid": str(error)}, allow_nan=False))
+        return
+    print(json.dumps({**report, "sceneSha256": scene_hash,
+                      "trajectorySha256": trajectory_digest(raw)}, allow_nan=False))
+
+
+def gate_allows_training(evidence):
+    return (evidence["completed"] and evidence["framesEvaluated"] == evidence["framesExpected"]
+            and evidence["maxTiltDeg"] < PROFILE["evaluation"]["maxTiltDeg"])
+
+
+def composition_ranges(training, frames):
+    source = training.get("originmanReferenceComposition")
+    if source is None:
+        return []
+    ranges = source.get("ranges")
+    asset_hash = source.get("referenceAssetSha256")
+    if asset_hash is not None:
+        if (not isinstance(asset_hash, str) or not re.fullmatch(r"[a-f0-9]{64}", asset_hash)
+                or ranges != [] or "transitionSeconds" in source
+                or source.get("referenceMode") not in ("source-exact", "timing-preserved")):
+            raise ValueError("invalid source-exact choreography provenance")
+        return []
+    if not isinstance(ranges, list) or not 1 <= len(ranges) <= 90:
+        raise ValueError("invalid reference choreography segments")
+    previous = 0
+    for item in ranges:
+        if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or
+                type(item.get("from")) is not int or type(item.get("to")) is not int or
+                not previous <= item["from"] < item["to"] <= frames):
+            raise ValueError("invalid reference choreography frame boundaries")
+        previous = item["to"]
+    if ranges[0]["from"] != 0 or previous != frames:
+        raise ValueError("reference choreography does not cover the intended trajectory")
+    return ranges
+
+
+def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges):
     torch.set_num_threads(1)
-    rollout = 4096
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
-    factory = lambda: ReferenceTracking(bundle, trajectory)
+    stance_profile = evaluation_env.stance_profile
+    factory = lambda: ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
-        learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=rollout // num_envs,
+        learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=ROLLOUT_STEPS // num_envs,
                       batch_size=128, n_epochs=4, learning_rate=3e-4,
                       policy_kwargs={"net_arch": [128, 128], "log_std_init": -2.8})
-        learner.learn(total_timesteps=budget, callback=WorkerProgress(budget, rollout, engine=ENGINE))
-        learner.save(output / "final")
-        return str(learner.device), (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
-                                     else learner.device.type)
+        checkpoints = []
+        progress = WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE)
+        while learner.num_timesteps < budget:
+            learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
+                          reset_num_timesteps=False,
+                          callback=progress)
+            learner.save(output / "final")
+            policy_path = output / "policy.onnx"
+            policy_sha = write_onnx(output / "final.zip", policy_path, 96)
+            session = ReferenceEvaluator(onnx.load(policy_path))
+            parity_error = 0.0
+
+            def predict(observation):
+                nonlocal parity_error
+                values = session.run(None, {"observation": observation[None]})[0][0]
+                if ranges:
+                    with torch.no_grad():
+                        tensor = torch.from_numpy(observation[None]).to(learner.device)
+                        torch_values = learner.policy._predict(tensor, deterministic=True).cpu().numpy()[0]
+                    parity_error = max(parity_error, float(np.max(np.abs(values - torch_values))))
+                return values
+
+            result, frames = evaluate(evaluation_env, predict, ranges)
+            if ranges:
+                result["onnxMaxAbsError"] = parity_error
+                if parity_error >= 1e-6:
+                    raise ValueError("exported ONNX failed the reference policy parity check")
+            checkpoints.append({"steps": learner.num_timesteps, "policySha256": policy_sha,
+                                **result})
+            print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
+                             allow_nan=False), flush=True)
+            if result["qualityGatePassed"] and not ranges:
+                break
+        device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
+                       else learner.device.type)
+        return str(learner.device), device_name, learner.num_timesteps, policy_sha, result, frames, checkpoints
     finally:
         sim.close()
 
@@ -213,38 +389,50 @@ def main():
         raise ValueError("invalid budget, seed or parallel environment count")
 
     trajectory = validate_trajectory(tracks["trajectory"])
+    ranges = composition_ranges(training, len(trajectory[0]))
+    reference_digest = trajectory_digest(tracks["trajectory"])
+    provenance = training.get("originmanReferenceComposition") or {}
+    if "trajectoryDigestVersion" in provenance and (
+        provenance["trajectoryDigestVersion"] != REFERENCE_DIGEST_VERSION
+        or provenance.get("trajectorySha256") != reference_digest
+    ):
+        raise ValueError("compiled choreography digest does not match the training trajectory")
     output = Path(os.environ["RDK_SIM2REAL_JOB_DIR"])
     result_path = Path(os.environ["RDK_SIM2REAL_RESULT_FILE"])
     bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
     scene_hash = validate_bundle(bundle)["sceneSha256"]
     reference_path = output / "reference.json"
     reference_path.write_text(json.dumps(tracks["trajectory"], separators=(",", ":"), allow_nan=False))
-    env = ReferenceTracking(bundle, trajectory)
-    zero = lambda _obs: np.zeros(18)
-    calibrated, _ = evaluate(env, zero)
-    original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
-    report = {"gate": calibrated, "existingSceneGate": original, "calibrationSha256": digest(PROFILE_PATH),
-              "actionJoints": TRACKED, "controlHz": HZ}
+    stance_profile = provenance.get("stanceProfile")
+    if stance_profile is not None and not provenance.get("referenceAssetSha256"):
+        raise ValueError("a source stance requires a verified preset asset")
+    env, report = reference_gate(bundle, trajectory, stance_profile)
     (output / "reference-gate.json").write_text(json.dumps(report, allow_nan=False))
     print(json.dumps({"event": "reference-gate", **report}), flush=True)
-    if calibrated["framesEvaluated"] != calibrated["framesExpected"] or calibrated["maxTiltDeg"] >= PROFILE["evaluation"]["maxTiltDeg"]:
+    if not gate_allows_training(report["gate"]):
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
-    device, device_name = train_and_export(bundle, output, trajectory, budget, num_envs, seed)
-    policy_path = output / "policy.onnx"
-    policy_sha = write_onnx(output / "final.zip", policy_path, 96)
-    session = ReferenceEvaluator(onnx.load(policy_path))
-    results, frames = evaluate(env, lambda obs: session.run(None, {"observation": obs[None]})[0][0])
+    device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
+        bundle, output, trajectory, budget, num_envs, seed, env, ranges
+    )
+    results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
-    np.savez_compressed(replay_path, qpos=np.asarray(frames))
+    # Each delivered sample maps to one video frame. The reset state precedes
+    # the first control tick and would add an extra 1/50 s to the original.
+    replay_frames = frames[1:] if provenance.get("referenceAssetSha256") else frames
+    np.savez_compressed(replay_path, qpos=np.asarray(replay_frames))
     replay_sha = digest(replay_path)
-    results.update(referenceSha256=digest(reference_path), sceneSha256=scene_hash,
-                   replay={"sha256": replay_sha})
+    results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
+                   sceneSha256=scene_hash, replay={"sha256": replay_sha},
+                   zeroResidualRmseRad=report["gate"]["trackingRmseRad"],
+                   zeroResidualFramesEvaluated=report["gate"]["framesEvaluated"])
+    if stance_profile:
+        results.update(stanceProfile=stance_profile, calibrationSha256=report["calibrationSha256"])
     video_path = output / "dance-replay.mp4"
     try:
         subprocess.run([sys.executable, str(ROOT / "engines/originman-dance-ppo/render_replay.py"),
                         "--scene", str(bundle / "model/scene.xml"), "--replay", str(replay_path),
-                        "--output", str(video_path)], check=True, timeout=300)
+                        "--output", str(video_path)], check=True, timeout=max(300, len(frames) // 10))
     except (OSError, subprocess.SubprocessError) as error:
         print(f"Reference replay rendering failed: {error}", file=sys.stderr, flush=True)
     else:
@@ -264,14 +452,18 @@ def main():
                      "runtime": "onnxruntime-cpu", "workload": "humanoid-dance",
                      "sha256": policy_sha, "deployable": False},
         "metrics": {"engine": ENGINE, "contractValid": True, "observationSize": 96, "actionSize": 18,
-                    "trainingSteps": budget, "trainingDevice": device, "trainingDeviceName": device_name,
+                    "trainingSteps": actual_steps, "trainingDevice": device, "trainingDeviceName": device_name,
                     "physicsBackend": "cpu-mujoco", "originmanReference": results},
     }
-    (output / "evaluation.json").write_text(json.dumps({**report, "evaluation": results}, allow_nan=False))
+    (output / "evaluation.json").write_text(json.dumps(
+        {**report, "checkpoints": checkpoints, "evaluation": results}, allow_nan=False))
     write_manifest(output)
     result_path.write_text(json.dumps(result, allow_nan=False))
 
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
-    main()
+    if sys.argv[1:] == ["--screen-reference"]:
+        screen_reference()
+    else:
+        main()

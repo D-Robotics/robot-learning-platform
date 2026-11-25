@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
-import { showWorkshopEntry } from './public/workshop-entry-page.mjs';
-const html = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
+import { showWorkshopEntry, workshopRedirect } from './public/workshop-entry-page.mjs';
+const html = await fs.readFile(new URL('./fixtures/workshop-legacy.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
 function fixture({
   lost = false,
@@ -17,7 +17,7 @@ function fixture({
   const dom = new JSDOM(html, {
     url: 'https://platform.test/course/workshop.html?context=ws-test',
   });
-  showWorkshopEntry(dom.window.document, dom.window.location.href);
+  dom.window.document.getElementById('workshop-main').hidden = false;
   const state = {
     contextId: 'ws-test',
     modelId: 'm',
@@ -800,12 +800,29 @@ for (const outcome of [
           return ok({
             accountId: 'learner',
             resources: [
+              ...(outcome === 'ready'
+                ? [
+                    {
+                      id: 'busy-worker',
+                      name: 'Busy GPU',
+                      status: 'online',
+                      mock: false,
+                      engines: ['originman-recovery'],
+                      activeJobs: 2,
+                      queuedJobs: 0,
+                      maxConcurrentJobs: 2,
+                    },
+                  ]
+                : []),
               {
                 id: 'worker',
                 name: 'Course GPU',
                 status: 'online',
                 ...(outcome === 'ready' && {
                   cuda: true,
+                  activeJobs: 1,
+                  maxConcurrentJobs: 2,
+                  queuedJobs: 1,
                   mock: false,
                   engines: ['originman-recovery-reflect'],
                 }),
@@ -828,16 +845,15 @@ for (const outcome of [
             }),
             computeResource: {
               status: outcome === 'offline' ? 'offline' : 'online',
-              engines: [
-                outcome === 'wrong-engine' ? 'originman-recovery' : 'originman-recovery-reflect',
-              ],
+              engines: [outcome === 'wrong-engine' ? 'microduck-rl' : 'originman-recovery-reflect'],
             },
           });
         if (route === 'training/preflight') {
           assert.deepEqual(body, {
             computeResourceId: 'worker',
             taskId: 'originman-recovery',
-            engine: 'originman-recovery',
+            engine: 'originman-recovery-reflect',
+            device: 'cuda',
           });
           if (outcome === 'preflight-unavailable')
             return {
@@ -858,7 +874,7 @@ for (const outcome of [
             report: {
               schemaVersion: 1,
               taskId: 'originman-recovery',
-              engine: 'originman-recovery',
+              engine: 'originman-recovery-reflect',
               trainingPerformed: false,
               readyForSmokeTraining: outcome === 'ready',
               checks: [
@@ -891,8 +907,10 @@ for (const outcome of [
     assert.equal($('workshop-setup').hidden, false);
     assert.deepEqual(
       [...$('workshop-compute').options].map((option) => option.value),
-      ['', 'worker'],
+      outcome === 'ready' ? ['', 'busy-worker', 'worker'] : ['', 'worker'],
     );
+    if (outcome === 'ready')
+      assert.match($('workshop-compute').selectedOptions[0].textContent, /推荐.*运行 1\/2.*排队 1/);
     assert.equal($('workshop-compute').value, outcome === 'ready' ? 'worker' : '');
     assert.equal($('workshop-setup-confirm').disabled, outcome !== 'ready');
     assert.deepEqual(
@@ -951,22 +969,88 @@ for (const outcome of [
   });
 }
 
-test('public Workshop routes default to dance and preserve an explicitly selected Worker', async (t) => {
+test('public Workshop is dance-only with safe routing for retired links', async (t) => {
   const base = 'https://platform.test/learning/workshop.html';
-  const dance = new JSDOM(html, { url: base });
-  const recovery = new JSDOM(html, { url: base });
-  t.after(() => {
-    dance.window.close();
-    recovery.window.close();
-  });
+  const live = await fs.readFile(new URL('./public/workshop.html', import.meta.url), 'utf8');
+  const dance = new JSDOM(live, { url: base });
+  t.after(() => dance.window.close());
   const d = dance.window.document;
-  assert.equal(showWorkshopEntry(d, base + '?computeResourceId=worker-1'), false);
+  const workerLinks = [...d.querySelectorAll('a[data-workshop-resource]')];
+  showWorkshopEntry(d, base + '?computeResourceId=wrong%2Fid');
+  assert.equal(workerLinks.length, 6);
+  assert.ok(workerLinks.every((link) => !new URL(link.href).searchParams.has('computeResourceId')));
+  showWorkshopEntry(d, base + '?computeResourceId=worker-1');
+  assert.ok(
+    workerLinks.every(
+      (link) => new URL(link.href).searchParams.get('computeResourceId') === 'worker-1',
+    ),
+  );
+  const referenceLinks = workerLinks
+    .map((link) => new URL(link.href))
+    .filter((link) => link.pathname.endsWith('/originman-reference.html'));
+  assert.deepEqual(
+    referenceLinks.map((link) => link.searchParams.get('mode')),
+    ['preset', 'blocks', null],
+  );
   assert.equal(d.getElementById('dance-workshop-main').hidden, false);
-  assert.equal(d.getElementById('workshop-main').hidden, true);
+  assert.equal(d.getElementById('workshop-main'), null);
   const quick = new URL(d.getElementById('dance-budget-quick').href);
   assert.equal(quick.searchParams.get('computeResourceId'), 'worker-1');
   assert.equal(quick.hash, '#train/configure');
-  assert.equal(showWorkshopEntry(recovery.window.document, base + '?context=lesson-1'), true);
-  assert.equal(recovery.window.document.getElementById('workshop-main').hidden, false);
-  assert.equal(recovery.window.document.getElementById('dance-workshop-main').hidden, true);
+  assert.equal(
+    workshopRedirect(base + '?context=lesson-1'),
+    'https://platform.test/learning/experiment.html?context=lesson-1',
+  );
+  assert.equal(workshopRedirect(base + '?course=recovery&start=1'), base + '?course=dance&start=1');
+  assert.equal(workshopRedirect(base + '?course=dance&start=1'), null);
+});
+
+test('public Workshop plays the catalog replay and keeps training available if playback fails', async (t) => {
+  const page = new URL('./public/workshop.html', import.meta.url);
+  const dom = new JSDOM(await fs.readFile(page, 'utf8'), {
+    url: 'https://platform.test/learning/workshop.html',
+  });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+  showWorkshopEntry(document, location.href);
+  const video = document.querySelector('#dance-reference-video');
+  const status = document.querySelector('#dance-reference-error');
+  assert.equal(video.controls, true);
+  assert.equal(video.hasAttribute('autoplay'), false);
+  assert.equal(
+    video.getAttribute('src'),
+    './originman-dance-references/alternating-arms/replay.mp4',
+  );
+  await fs.access(new URL(video.getAttribute('src'), page));
+  await fs.access(new URL(video.getAttribute('poster'), page));
+  assert.equal(status.hidden, true);
+
+  Object.defineProperty(video, 'error', { configurable: true, value: { code: 2 } });
+  video.dispatchEvent(new dom.window.Event('error'));
+  assert.equal(status.hidden, false);
+  assert.equal(document.querySelector('#dance-budget-quick').hash, '#train/configure');
+  const source = document.getElementById('dance-source-title').parentElement;
+  const budget = document.getElementById('dance-budget-title').parentElement;
+  assert.equal(source.nextElementSibling, budget);
+  assert.equal(source.querySelectorAll('a[href*="originman-reference.html"]').length, 3);
+
+  delete video.error;
+  video.dispatchEvent(new dom.window.Event('loadedmetadata'));
+  assert.equal(status.hidden, true);
+});
+
+test('reference choreography submit errors stay visible when trajectory import is hidden', async (t) => {
+  const page = new URL('./public/originman-reference.html', import.meta.url);
+  const dom = new JSDOM(await fs.readFile(page, 'utf8'));
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const importer = document.getElementById('reference-import-section');
+  importer.hidden = true;
+  const fileError = document.getElementById('reference-error');
+  const trainingError = document.getElementById('reference-training-error');
+  assert.ok(importer.contains(fileError));
+  assert.equal(trainingError.getAttribute('role'), 'alert');
+  assert.equal(trainingError.closest('form').id, 'reference-form');
+  trainingError.hidden = false;
+  assert.equal(trainingError.closest('[hidden]'), null);
 });

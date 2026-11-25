@@ -1531,7 +1531,6 @@ const VIEW_ANNOUNCEMENTS = {
   deploy: '部署与反馈',
   records: '证据与记录',
   station: '设备控制台',
-  classroom: 'OriginMan 受扰恢复课堂',
 };
 
 // One polite live region for view-switch announcements: nav buttons keep
@@ -2168,7 +2167,6 @@ const VIEW_STAGE_LABELS = {
   deploy: '设备与发布',
   records: '证据与记录',
   station: '设备与发布',
-  classroom: '课堂实验',
 };
 
 // Sidebar child entries are real workflow nodes. A node may share a top-level
@@ -2191,11 +2189,6 @@ const FLOW_CHILD_CONTEXTS = {
 // 无侧栏子项的落地位置（从进度条、对象链或深链直接进入视图）复用的横幅文案。
 // 名称与侧边栏入口保持一致，避免同一视图出现多套叫法。
 const VIEW_BANNERS = {
-  classroom: {
-    kicker: '课程 · OriginMan',
-    title: '课堂实验',
-    description: '在同一课堂查看受扰恢复仿真、训练记录、评测与回放。',
-  },
   simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '先把动作任务跑通并录下可复用轨迹，训练、评测和部署都从这份证据继续。' },
   records: { kicker: '证据中心', title: '证据与记录', description: '轨迹、训练 Run、评测证据、模型制品和部署记录统一管理；点击一条记录可继续回放或查看详情。' },
   resources: { kicker: '证据中心', title: '执行资源', description: '管理本机 Agent、远程 GPU 和云端算力；训练页只选资源，不混入训练配置。' },
@@ -2215,7 +2208,7 @@ function parseHashLocation() {
   const raw = decodeURIComponent(window.location.hash.slice(1));
   const [view, child] = raw.split('/');
   return {
-    view: view === 'classroom' || WORKFLOW_VIEWS.includes(view) ? view : 'overview',
+    view: (view === 'classroom' || WORKFLOW_VIEWS.includes(view)) ? view : 'overview',
     child: child && FLOW_CHILD_CONTEXTS[child] ? child : '',
   };
 }
@@ -2278,14 +2271,14 @@ function renderFlowBanner() {
     : ctx.description);
 }
 
-let originmanClassroom;
-
 function setView(view, { updateHash = true, scroll = true, focus = true } = {}) {
-  // OriginMan's existing scene lives in the classroom section. Every shared
-  // simulation entry (sidebar, bookmark and shortcut) must resolve to it.
-  const originmanSimulation = view === 'simulate' && state.productId === 'originman';
-  const enteringClassroom = (view === 'classroom' || originmanSimulation) && state.productId === 'originman';
-  const wanted = enteringClassroom ? 'classroom' : WORKFLOW_VIEWS.includes(view) ? view : 'overview';
+  if (view === 'classroom' || (view === 'simulate' && state.productId === 'originman')) {
+    const dance = new URL('./workshop.html?course=dance&start=1', window.location.href);
+    if (view === 'classroom') window.location.replace(dance);
+    else window.location.assign(dance);
+    return;
+  }
+  const wanted = WORKFLOW_VIEWS.includes(view) ? view : 'overview';
   clearFlowChild();
   const changed = document.body.dataset.activeView !== wanted;
   document.body.dataset.activeView = wanted;
@@ -2295,22 +2288,6 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   document.querySelectorAll('[data-view-section]').forEach((section) => {
     section.hidden = section.dataset.viewSection !== wanted;
   });
-  const classroomPanel = $('originman-workshop');
-  if (classroomPanel) {
-    classroomPanel.dataset.originmanView = wanted;
-    classroomPanel.hidden = !enteringClassroom;
-    if (enteringClassroom) {
-      originmanClassroom ??= window.OriginmanWorkshop?.mount({
-        request,
-        apiPath,
-        onConfigure: () => showTrainStep('configure'),
-        onPreview: (runId) => void originmanClassroom?.preview(runId),
-        onSubmitted: () => void loadOverview({ quiet: true }),
-      });
-      classroomPanel.open = true;
-      if (!changed) void originmanClassroom?.refresh();
-    }
-  }
   // 子界面分割默认值：进入多模块视图而未指定子项时落到第一个模块，
   // 保证「一次只看到一个子项的内容」（D-002）。
   applySubinterfacePartition(wanted, document.body.dataset.flowChild || '');
@@ -2381,13 +2358,11 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // while focus already lives in the main content (e.g. deep link boot).
   if (changed && focus) {
     const main = $('main-content');
-    if (enteringClassroom) $('originman-classroom-title')?.focus({ preventScroll: true });
-    else if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
+    if (main && !main.contains(document.activeElement)) main.focus({ preventScroll: true });
     announce(`已切换到：${VIEW_ANNOUNCEMENTS[wanted] || wanted}`);
   }
   // 视图内轮询统一由注册表收发：进入视图启动（评估页立即刷一帧），离开即停，
   // 避免后台空转。
-  if (originmanSimulation) setFlowChild('simulate', { updateHash, focus: false });
   syncScopedPolls();
   // 窄屏下从抽屉里点了一个目的地就收起抽屉，否则正文仍被盖住。
   closeSidebarDrawer({ restoreFocus: false });
@@ -2889,6 +2864,24 @@ function statusLabel(status) {
   return SimTelemetryCore.statusLabel(status);
 }
 
+function computeResourceLoad(resource) {
+  if (resource.status === 'offline') return '离线';
+  if (resource.status !== 'online') return '未测试';
+  if (!Number.isInteger(resource.activeJobs) || !Number.isInteger(resource.maxConcurrentJobs)) return '在线';
+  const queue = Number.isInteger(resource.queuedJobs) ? ` · 排队 ${resource.queuedJobs}` : '';
+  return `运行 ${resource.activeJobs}/${resource.maxConcurrentJobs}${queue}`;
+}
+
+function pickLeastBusyResource(resources) {
+  return resources
+    .filter((resource) => resource.status === 'online' && Number.isInteger(resource.activeJobs) &&
+      Number.isInteger(resource.maxConcurrentJobs))
+    .sort((left, right) =>
+      (right.maxConcurrentJobs - right.activeJobs) - (left.maxConcurrentJobs - left.activeJobs) ||
+      (left.queuedJobs ?? Infinity) - (right.queuedJobs ?? Infinity) ||
+      left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))[0];
+}
+
 function renderSelects() {
   const allModels = state.overview?.models || [];
   const linkedModelIds = projectModelIds();
@@ -2980,14 +2973,16 @@ function renderSelects() {
     const resources = state.overview?.computeResources || [];
     if (!resources.some((resource) => resource.id === state.selectedComputeResourceId)) state.selectedComputeResourceId = '';
     const danceGoal = state.productId === 'originman' && trainingPlans?.hasDance();
-    const visibleResources = danceGoal ? resources.filter(supportsOriginmanDance) : resources;
+    const visibleResources = danceGoal ? resources.filter(canCheckOriginmanDance) : resources;
+    const recommended = danceGoal && pickLeastBusyResource(visibleResources.filter(supportsOriginmanDance));
+    if (recommended && !state.selectedComputeResourceId) state.selectedComputeResourceId = recommended.id;
     syncSelect(
       computeSelect,
       [
-        { value: '', textContent: danceGoal ? (visibleResources.length ? '请选择舞蹈训练资源' : '暂无支持舞蹈的资源') : 'AI 自动选择（推荐）', ai: !danceGoal },
+        { value: '', textContent: danceGoal ? (visibleResources.length ? '请选择舞蹈训练资源' : '暂无支持舞蹈的资源') : '使用已配置的本地 Worker' },
         ...visibleResources.map((resource) => ({
           value: resource.id,
-          textContent: `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`,
+          textContent: `${resource.name}${resource === recommended ? '（推荐）' : ''} · ${computeResourceLoad(resource)}`,
         })),
       ],
       visibleResources.some((resource) => resource.id === state.selectedComputeResourceId) ? state.selectedComputeResourceId : '',
@@ -3014,7 +3009,9 @@ function renderComputeResources() {
     card.querySelector('strong').textContent = resource.name;
     card.querySelector('small').textContent = resource.tokenConfigured ? '已配置访问令牌' : '未配置访问令牌';
     const sourceLabel = resource.source === 'local-agent' ? '用户本地 Agent' : resource.source === 'robogo' ? 'RoboGo 云端' : '服务器 Runner';
-    card.querySelector('.compute-resource-card-meta').textContent = [sourceLabel, resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl, resource.message].filter(Boolean).join(' · ');
+    card.querySelector('.compute-resource-card-meta').textContent = [sourceLabel, resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl,
+      Number.isInteger(resource.activeJobs) ? computeResourceLoad(resource) : '',
+      ['online', 'offline'].includes(resource.status) && resource.message].filter(Boolean).join(' · ');
     card.querySelectorAll('[data-resource-action]').forEach((button) => button.addEventListener('click', () => handleComputeResourceAction(button.dataset.resourceAction, resource)));
     list.append(card);
   }
@@ -3242,7 +3239,9 @@ function renderIntegrations() {
   const localAuthReady = local.available === true || selectedResourceReady;
   const localReachable = local.reachable === true;
   const localHealthy = local.healthy === true;
-  const localReady = selectedResourceReady || (localAuthReady && localReachable && localHealthy);
+  const localReady = selectedComputeResource
+    ? selectedResourceReady
+    : localAuthReady && localReachable && localHealthy;
   const overviewReady = Boolean(state.overview);
   // Logged-in users learn the simulator surface from the account-scoped
   // overview. A guest (401 on overview) instead reads the public healthz
@@ -3486,7 +3485,11 @@ function renderIntegrations() {
         ? ['blocked', '台账不可写；训练和登记操作已阻断，请先配置共享存储。']
         : !hasRunnablePath
           ? ['blocked', '没有可用的训练后端；先接入本地 Worker、GPU 资源或 RoboGo。']
-          : ['ready', '模型已就绪：可选择浏览器回放，或提交本地 / RoboGo 强化学习训练。'];
+          : ['ready', [
+            browserRunnable ? '浏览器回放' : '',
+            localReady ? '本地 Worker 训练' : '',
+            robogoReady ? 'RoboGo 训练' : '',
+          ].filter(Boolean).join('、') + '可用。'];
   setActionHint('run-action-hint', actionHint[0], actionHint[1]);
   const deployHint = !overviewReady
     ? '正在读取设备和 BoardAgent 状态…'
@@ -3506,7 +3509,7 @@ function renderIntegrations() {
     !overviewReady ? 'waiting' : targetReady ? 'ready' : !model || !device ? 'blocked' : 'waiting',
     deployHint,
   );
-  $('browser-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !browserAvailable);
+  $('browser-run-button')?.toggleAttribute('disabled', state.runSubmitting || !browserRunnable);
   $('browser-run-button')?.setAttribute(
     'title',
     !browserAvailable
@@ -3532,9 +3535,9 @@ function renderIntegrations() {
     preflightButton.title =
       boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
   }
-  for (const id of ['contract-run-button', 'local-run-button', 'robogo-run-button']) {
-    $(id)?.toggleAttribute('disabled', state.runSubmitting || !model);
-  }
+  $('contract-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model);
+  $('local-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !storageReady || (!localConfigured && !selectedComputeResource));
+  $('robogo-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !storageReady || !robogoRunnerAvailable);
   const simulatorFrame = $('simulator-frame');
   const simulatorTitle = $('simulator-title');
   const simulatorLiveLabel = $('simulator-live-label');
@@ -4024,7 +4027,8 @@ function renderActionLibrary() {
 
 function artifactPresentation(artifact) {
   const ref = String(artifact?.ref || '').trim();
-  if (ref === 'artifact://originman-dance/contract-placeholder' || ref === 'artifact://originman-recovery/contract')
+  if (['artifact://originman-dance/contract-placeholder', 'artifact://originman-reference/contract-placeholder',
+    'artifact://originman-recovery/contract'].includes(ref))
     return { key: 'partial', label: '契约占位', detail: '策略权重由实际训练生成，按 Run 查看', placeholder: true };
   if (!ref) return { key: 'blocked', label: '缺少引用', detail: '需要受管 artifact:// 引用' };
   if (!/^artifact:\/\/[^\s]+$/i.test(ref)) {
@@ -4146,11 +4150,21 @@ const RECORD_MODE_LABELS = Object.freeze({
   'demo fixture': '演示样例',
 });
 
-// `record.kind` is a stable internal discriminator (for example
-// `deploy · preflight`), not suitable as the primary label for a Chinese
-// operator. Keep the discriminator searchable and in detail views, but use a
-// short translated label in the history list.
+function runTaskLabel(run) {
+  return run.training?.originmanDance?.title || (run.taskId === 'originman-reference-track' ? '参考轨迹跟跳' : '') ||
+    run.label || ACTION_TASKS[run.taskId]?.label || run.taskId || '';
+}
+
+function recordedRunLink(run) {
+  const page = run.taskId === 'originman-reference-track' ? 'originman-reference-run.html' : 'run-detail.html';
+  const url = new URL('./' + page, location.href);
+  url.searchParams.set('runId', run.id);
+  return url.href;
+}
+
 function recordKindLabel(record) {
+  if (record?.placeholder) return '模型契约 · 占位';
+  if (record?.recordType === 'artifact' && record.runId) return '训练产物 · ONNX';
   const type = RECORD_TYPE_LABELS[record?.recordType] || '记录';
   const rawKind = String(record?.kind || '').trim();
   const rawMode = rawKind.includes(' · ') ? rawKind.split(' · ').slice(1).join(' · ') : '';
@@ -4169,6 +4183,7 @@ function renderHistory() {
       return [
         record.kind,
         recordKindLabel(record),
+        record.recordType === 'run' && runTaskLabel(record),
         record.status,
         record.summary,
         record.modelId,
@@ -4242,7 +4257,7 @@ function renderHistory() {
         recordKindLabel(record),
       ) +
       '</span><span class="history-summary">' +
-      escapeHtml(record.summary || record.modelId || '') +
+      escapeHtml((record.recordType === 'run' && runTaskLabel(record)) || record.summary || record.modelId || '') +
       (physicsChip
         ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
         : '') +
@@ -4253,7 +4268,8 @@ function renderHistory() {
       escapeHtml(status) +
       '">' +
       escapeHtml(
-        mockRun ? '协议演示' : syntheticRun || demoTelemetry ? '演示样例' : statusLabel(status),
+        mockRun ? '协议演示' : syntheticRun || demoTelemetry ? '演示样例'
+          : record.recordType === 'artifact' && record.label ? record.label : statusLabel(status),
       ) +
       '</span>';
     row.querySelector('.history-status')?.classList.toggle(
@@ -4423,7 +4439,7 @@ function openRecordDetails(record) {
       isRun
         ? '训练 / 仿真 Run'
         : isArtifact
-          ? '模型制品'
+          ? (record.placeholder ? '模型契约占位' : '模型制品')
           : isTelemetry
             ? '遥测证据'
             : isEvaluation
@@ -4432,7 +4448,7 @@ function openRecordDetails(record) {
     ],
     [
       '状态',
-      mockRun
+      isArtifact && record.label ? record.label : mockRun
         ? '协议演示（非真实 RL）'
         : syntheticRun || demoTelemetry
           ? '演示样例（非真实遥测）'
@@ -4451,7 +4467,7 @@ function openRecordDetails(record) {
               : record.mode || '—',
     ],
     ...(isRun && record.taskId
-      ? [['动作任务', ACTION_TASKS[record.taskId]?.label || record.taskId]]
+      ? [['动作任务', runTaskLabel(record)]]
       : []),
     ...(record.projectId ? [['项目', projectLabelById(record.projectId)]] : []),
     ['模型', record.modelId || '—'],
@@ -4471,7 +4487,7 @@ function openRecordDetails(record) {
     ...(isRun && record.training?.maxIterations
       ? [['最大迭代', record.training.maxIterations]]
       : []),
-    ...(isArtifact && record.role ? [['制品角色', record.role]] : []),
+    ...(isArtifact && record.role && !record.placeholder ? [['制品角色', record.role]] : []),
     ...(isArtifact ? [['制品状态', record.label || artifactPresentation(record).label]] : []),
     ...(isArtifact && record.format ? [['格式', record.format]] : []),
     ...(isTelemetry && record.telemetrySummary?.sampleCount != null
@@ -4480,7 +4496,7 @@ function openRecordDetails(record) {
     ...(isTelemetry && record.telemetrySummary?.durationSeconds != null
       ? [['时长', formatTelemetrySeconds(record.telemetrySummary.durationSeconds)]]
       : []),
-    ...(isEvaluation && record.runId ? [['训练 Run', record.runId]] : []),
+    ...((isEvaluation || isArtifact) && record.runId ? [['训练 Run', record.runId]] : []),
     ...(isEvaluation && record.attested === true ? [['服务器签证', 'attested']] : []),
     ...(isEvaluation && record.stale ? [['证据时效', '已被更新遥测取代']] : []),
     ...(!isRun && !isArtifact && record.deviceId ? [['目标设备', record.deviceId]] : []),
@@ -4525,7 +4541,7 @@ function openRecordDetails(record) {
       )
       .join('') +
     '</div><div class="run-detail-summary">' +
-    escapeHtml(record.summary || '没有附加说明。') +
+    escapeHtml(record.placeholder ? record.detail : record.summary || '没有附加说明。') +
     '</div>' +
     (isRun && record.metrics && !syntheticRun
       ? renderRunMetricCards(record) + renderRunMetricsRaw(record)
@@ -4629,10 +4645,19 @@ function openRecordDetails(record) {
         '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
         '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
-  const replayId = isRun ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
+  const replayId = isRun && (hasPersistedEvaluation(record) || currentTelemetry()?.publishedRunId === record.id)
+    ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
+  if ((isRun && ['originman-reference-track', 'originman-dance', 'originman-recovery'].includes(record.taskId)) ||
+      (isArtifact && record.runId)) {
+    const result = document.createElement('a');
+    result.className = 'button button-primary button-small';
+    result.textContent = isArtifact ? '打开产出该策略的 Run →' : '查看本轮结果 →';
+    result.href = recordedRunLink({ id: isArtifact ? record.runId : record.id, taskId: record.taskId });
+    body.prepend(result);
+  }
   if (replayId) {
     const inspect = document.createElement('button');
-    inspect.type = 'button'; inspect.className = 'button button-primary button-small'; inspect.textContent = '可视化回放 →';
+    inspect.type = 'button'; inspect.className = 'button button-ghost button-small'; inspect.textContent = '查看遥测回放 →';
     inspect.addEventListener('click', () => { dialog.close(); setView('evaluate'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS['evaluation-run']); setFlowChild('evaluation-run'); void fetchAndMountReplay(replayId, { interactive: true }); });
     body.prepend(inspect);
   }
@@ -7567,7 +7592,15 @@ function renderNextAction() {
   // 但不能越过上手清单的当前步：清单还没走到 deploy 时，卡片区不能同时
   // 出现「先做仿真」和「部署到 RDK」两套矛盾指引。
   const goldenNext = state.goldenPath?.nextAction;
-  if (goldenNext) {
+  if (state.productId === 'originman') {
+    const guest = state.authRequired === true;
+    view = guest ? 'simulate' : 'train';
+    title = guest ? '先体验 OriginMan 仿真' : '选择 OriginMan 的训练任务';
+    copy = guest
+      ? '先看 OriginMan 舞蹈动作示意。登录后可以发起训练并查看记录。'
+      : '选择预置舞蹈、从空作品编排动作组，或导入参考轨迹跟跳。';
+    label = guest ? '打开舞蹈 Workshop →' : '选择 OriginMan 任务 →';
+  } else if (goldenNext) {
     const stageOrder = { simulate: 0, train: 1, evaluate: 2, deploy: 3 };
     const currentKey = onboardingProgress().currentKey;
     const goldenStage = stageOrder[goldenNext.stage] === undefined ? 'deploy' : goldenNext.stage;
@@ -7594,6 +7627,8 @@ function renderNextAction() {
   const button = $('next-action-button');
   if (button) {
     button.dataset.viewTarget = view;
+    if (state.productId === 'originman' && view === 'train') button.dataset.originmanConfigure = '';
+    else delete button.dataset.originmanConfigure;
     button.textContent = label;
   }
 }
@@ -7924,15 +7959,18 @@ function renderOnboardChecklist() {
   const currentKey = progress.currentKey;
   const doneCount = progress.doneCount;
   const stepMeta = {
-    simulate: { view: 'simulate', cta: '打开仿真 →' },
-    train: { view: 'train', cta: '去发起训练 →' },
-    evaluate: { view: 'evaluate', cta: '查看评测 →' },
-    deploy: { view: 'deploy', cta: '生成预检 →' },
+    simulate: { view: 'simulate', cta: '打开仿真 →', copy: '运行仿真，录制一段可回放轨迹', originman: '在舞蹈 Workshop 查看动作示意' },
+    train: { view: 'train', cta: '去发起训练 →', copy: '用 starter 模板提交 PPO 任务，跟踪奖励曲线', originman: '选择预置舞蹈、自由编排或参考轨迹跟跳' },
+    evaluate: { view: 'evaluate', cta: '查看评测 →', copy: '检查成功率、跌倒率与控制延迟', originman: '按 Run 查看训练评测、策略与仿真回放' },
+    deploy: { view: 'deploy', cta: '生成预检 →', copy: '只读预检通过后，把策略推进 RDK 板卡', originman: '选择设备并检查该任务的发布条件' },
   };
   let foundCurrent = false;
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = progress.steps.find((entry) => entry.key === item.dataset.onboardStep);
     if (!step) return;
+    const originman = state.productId === 'originman';
+    const description = item.querySelector('.onboard-item-body span');
+    if (description) description.textContent = originman ? stepMeta[step.key].originman : stepMeta[step.key].copy;
     const isCurrent = step.key === currentKey && !foundCurrent;
     if (isCurrent) foundCurrent = true;
     item.classList.toggle('is-complete', step.done);
@@ -7957,6 +7995,7 @@ function renderOnboardChecklist() {
         button.className = 'onboard-cta';
         button.textContent = stepMeta[step.key].cta;
         button.dataset.viewTarget = stepMeta[step.key].view;
+        if (originman && step.key === 'train') button.dataset.originmanConfigure = '';
         meta.append(button);
       }
     }
@@ -7967,7 +8006,10 @@ function renderOnboardChecklist() {
 }
 
 let trainingPlans = null;
-const originmanRunState = { id: new URL(location.href).searchParams.get('trainingRun') || '', attempt: null, choosingContract: false, templates: null };
+const originmanRunState = {
+  id: new URL(location.href).searchParams.get('trainingRun') || '', attempt: null,
+  choosingContract: false, checkingResource: false, templates: null,
+};
 const originmanEngine = 'originman-dance-ppo';
 
 function originmanContractType(model = selectedModel()) {
@@ -7975,6 +8017,26 @@ function originmanContractType(model = selectedModel()) {
   if (/^custom-policy-originman-dance-v[12]$/.test(id)) return 'dance';
   if (id === 'custom-policy-originman-recovery-v1') return 'recovery';
   return '';
+}
+
+function selectRegisteredDanceModel() {
+  if (originmanContractType() === 'dance') return true;
+  const linked = projectModelIds();
+  const matches = (state.overview?.models || []).filter((model) =>
+    model.manifest?.robot?.id === 'originman' && originmanContractType(model) === 'dance' &&
+    (!linked || linked.has(String(model.id))));
+  const model = matches.find((item) => item.manifest.contract.id.endsWith('-v2')) || matches[0];
+  if (!model) return false;
+  state.selectedModelId = model.id;
+  state.model = null;
+  state.compatibility = [];
+  state.activeDeployment = null;
+  state.telemetry = null;
+  stopReplay();
+  saveWorkspaceContext();
+  renderAll();
+  void loadModelDetails(model.id);
+  return true;
 }
 
 function originmanTrainingRuns() {
@@ -8014,6 +8076,11 @@ function renderOriginmanTrainingWorkbench() {
   if (generic) generic.hidden = active && (danceGoal || !selectedModel() || Boolean(contractType));
   const genericHint = $('run-action-hint');
   if (genericHint) genericHint.hidden = Boolean(generic?.hidden);
+  $('training-basic-settings').hidden = Boolean(active && danceGoal);
+  const resourceField = $('training-resource-field');
+  const resourceSlot = $(active && danceGoal ? 'originman-dance-resource' : 'training-resource-slot');
+  if (resourceField.parentElement !== resourceSlot) resourceSlot.append(resourceField);
+  $('originman-check-compute').hidden = true;
   if (!active) return;
   const dance = typeof trainingPlans !== 'undefined' && trainingPlans?.dance?.();
   const run = originmanTrainingRuns().find((item) => item.id === originmanRunState.id);
@@ -8029,9 +8096,7 @@ function renderOriginmanTrainingWorkbench() {
   const open = $('originman-run-open');
   open.hidden = !run;
   if (run) {
-    const href = new URL('./run-detail.html', location.href);
-    href.searchParams.set('runId', run.id);
-    open.href = href.href;
+    open.href = recordedRunLink(run);
   } else open.removeAttribute('href');
   setText('originman-run-selection-hint', run
     ? '进度、权重、评测和回放均按该 Run 查询。'
@@ -8041,20 +8106,33 @@ function renderOriginmanTrainingWorkbench() {
   const showDance = danceGoal || contractType === 'dance';
   const resource = (state.overview?.computeResources || []).find((item) => item.id === state.selectedComputeResourceId);
   const needsContract = showDance && contractType !== 'dance';
-  const ready = dance && !needsContract && supportsOriginmanDance(resource);
-  submit.hidden = !showDance;
-  submit.disabled = state.runSubmitting || !ready;
-  $('originman-configure-training').textContent = needsContract && dance ? '选择舞蹈契约' : '打开训练配置';
-  let hint = '在训练配置中选择目标。已运行的策略与回放通过下面的 Run 查看。';
-  if (showDance) {
-    if (!dance) hint = danceGoal ? '请返回「训练配置」检查舞蹈参数。' : '在「训练配置 → 训练目标」选择舞蹈编排，填写节奏、动作和训练步数。';
-    else if (needsContract) hint = '请先选择 OriginMan 的舞蹈契约。';
-    else if (!supportsOriginmanDance(resource)) hint = '请在「训练配置」中选择支持舞蹈的训练资源。';
-    else hint = '确认本轮舞段和算力后提交。每次提交会生成独立 Run。';
-  } else if (contractType === 'recovery') {
-    hint = '受扰恢复课堂入口在「模型与契约 → 受扰恢复 · SAC」。';
+  const blockers = [];
+  if (showDance && !dance) blockers.push('完善作品和训练参数');
+  if (needsContract) blockers.push('准备舞蹈模型');
+  if (showDance && !supportsOriginmanDance(resource)) {
+    const compatible = (state.overview?.computeResources || []).filter(canCheckOriginmanDance);
+    if (!state.overview) blockers.push('等待读取算力状态');
+    else if (resource?.status === 'offline' || (compatible.length && compatible.every((item) => item.status === 'offline')))
+      blockers.push('恢复舞蹈 Worker 的连接，或在执行资源中接入一台可用机器');
+    else if (canCheckOriginmanDance(resource)) blockers.push('检查所选 Worker');
+    else if (compatible.length) blockers.push('选择一台舞蹈训练资源');
+    else blockers.push('在执行资源中接入支持舞蹈训练的 Worker');
   }
-  setText('originman-run-action-hint', hint);
+  const busy = state.runSubmitting || originmanRunState.checkingResource || originmanRunState.choosingContract;
+  submit.hidden = !showDance;
+  submit.disabled = busy || !showDance || blockers.length > 0;
+  const chooseContract = $('originman-configure-contract');
+  chooseContract.hidden = !needsContract;
+  chooseContract.disabled = busy || !state.overview;
+  chooseContract.textContent = '准备默认舞蹈模型';
+  $('originman-configure-run').disabled = submit.disabled;
+  const check = $('originman-check-compute');
+  check.hidden = !canCheckOriginmanDance(resource);
+  check.disabled = busy;
+  const hint = !showDance ? '' : blockers.length ? '提交前请' + blockers.join('、') + '。'
+    : `可提交。舞蹈模型 ${selectedModel()?.manifest?.version || '已选'} · ${resource.name}。`;
+  setText('originman-dance-readiness', hint);
+  setText('originman-run-action-hint', showDance ? hint : '打开训练配置选择 OriginMan 任务。');
 }
 
 async function originmanTemplates() {
@@ -8069,7 +8147,6 @@ async function refreshOriginmanContract() {
   if (state.productId !== 'originman' || !$('originman-contract-template')) return;
   const select = $('originman-contract-template');
   const selected = select.value;
-  $('originman-recovery-class').hidden = selected !== 'recovery';
   $('originman-use-contract').disabled = !selected || originmanRunState.choosingContract;
   setText('originman-contract-status', selected ? '正在读取任务契约…' : '尚未选择训练任务。');
   try {
@@ -8110,9 +8187,7 @@ async function useOriginmanContract() {
       await loadOverview({ quiet: true });
       setText('originman-contract-status', '已选择当前账号中登记的默认契约。可以继续配置训练。');
     } else {
-      await registerEditor();
-      const registered = (state.overview?.models || []).find((item) => item.manifest?.modelId === manifest.modelId &&
-        item.manifest?.version === manifest.version && item.manifest?.contract?.id === manifest.contract.id);
+      const registered = await registerEditor();
       if (!registered) {
         setText('originman-contract-status', '未能登记默认契约，请查看下方登记状态。');
         return;
@@ -8122,6 +8197,7 @@ async function useOriginmanContract() {
       renderAll();
       setText('originman-contract-status', '默认契约已登记并选中。可以继续配置训练。');
     }
+    if (template.id === 'dance' && document.body.dataset.flowChild === 'prepare') showTrainStep('configure');
   } catch (error) {
     setText('originman-contract-status', friendlyError(error, '无法选择默认契约'));
   } finally {
@@ -8145,8 +8221,32 @@ async function validateSelectedTrainingContract() {
   }
 }
 
+function canCheckOriginmanDance(resource) {
+  return Boolean(resource && resource.mock !== true && resource.source !== 'local-agent' &&
+    (!resource.engines?.length || resource.engines.includes(originmanEngine)));
+}
+
 function supportsOriginmanDance(resource) {
-  return Boolean(resource && resource.status !== 'offline' && resource.mock !== true && resource.source !== 'local-agent' && resource.engines?.includes(originmanEngine));
+  return canCheckOriginmanDance(resource) && resource.status === 'online' &&
+    resource.mock === false && resource.engines?.includes(originmanEngine);
+}
+
+async function checkSelectedOriginmanResource() {
+  const resource = (state.overview?.computeResources || []).find((item) => item.id === state.selectedComputeResourceId);
+  if (!canCheckOriginmanDance(resource) || originmanRunState.checkingResource) return;
+  originmanRunState.checkingResource = true;
+  renderOriginmanTrainingWorkbench();
+  try {
+    const result = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST', body: '{}' });
+    await loadOverview({ quiet: true });
+    const usable = result.connected && supportsOriginmanDance(result.computeResource);
+    showToast(usable ? '已确认所选 Worker 支持舞蹈训练。' : '本次检查未确认舞蹈训练可用，请在执行资源中检查连接和引擎。', usable ? 'success' : 'error');
+  } catch (error) {
+    showToast(friendlyError(error, 'Worker 检查失败'), 'error');
+  } finally {
+    originmanRunState.checkingResource = false;
+    renderOriginmanTrainingWorkbench();
+  }
 }
 
 async function submitOriginmanDance() {
@@ -8179,9 +8279,10 @@ async function submitOriginmanDance() {
     })) return;
     const tested = await request('/sim2real/compute-resources/' + encodeURIComponent(resource.id) + '/test', { method: 'POST', body: '{}' });
     const verified = tested.computeResource;
-    if (!tested.connected || (tested.mock ?? verified?.mock) !== false ||
-        verified?.id !== resource.id || !verified.engines?.includes(originmanEngine))
+    if (!tested.connected || verified?.id !== resource.id || !supportsOriginmanDance(verified)) {
+      await loadOverview({ quiet: true });
       throw Error('所选 Worker 未通过舞蹈引擎连接检查，未提交训练。');
+    }
     const signature = JSON.stringify(body);
     if (originmanRunState.attempt?.signature !== signature)
       originmanRunState.attempt = { signature, key: 'dance-' + crypto.randomUUID() };
@@ -8192,6 +8293,7 @@ async function submitOriginmanDance() {
     originmanRunState.attempt = null;
     selectOriginmanRun(payload.run.id);
     await loadOverview({ quiet: true });
+    showTrainStep('submit');
     showToast(payload.run.status === 'blocked' ? '本轮已阻断，请查看该 Run 的原因。' : '本轮 Run 已创建。', payload.run.status === 'blocked' ? 'error' : 'success');
   } catch (error) {
     showToast(friendlyError(error, '舞蹈训练提交失败'), 'error');
@@ -8203,15 +8305,31 @@ async function submitOriginmanDance() {
 
 function bindOriginmanTrainingWorkbench() {
   $('originman-run-select')?.addEventListener('change', (event) => selectOriginmanRun(event.target.value));
-  $('originman-configure-training')?.addEventListener('click', () => {
-    const dance = trainingPlans?.dance?.();
-    if (dance && originmanContractType() !== 'dance') {
-      showTrainStep('prepare');
-      $('originman-contract-template').value = 'dance';
-      void refreshOriginmanContract();
-    } else showTrainStep('configure');
+  $('originman-configure-training')?.addEventListener('click', () => showTrainStep('configure'));
+  $('originman-configure-contract')?.addEventListener('click', async () => {
+    if (selectRegisteredDanceModel()) return;
+    if (!await confirmAction({
+      title: '准备默认舞蹈模型', approveLabel: '继续',
+      note: '将选择已登记的默认模型，或为当前工作区登记默认舞蹈模型。',
+    })) return;
+    $('originman-contract-template').value = 'dance';
+    try {
+      await useOriginmanContract();
+    } finally {
+      renderOriginmanTrainingWorkbench();
+    }
+    if (originmanContractType() !== 'dance')
+      showToast($('originman-contract-status').textContent, 'error');
   });
-  $('originman-recovery-class')?.addEventListener('click', () => setView('classroom'));
+  $('originman-configure-run')?.addEventListener('click', () => void submitOriginmanDance());
+  $('originman-check-compute')?.addEventListener('click', () => void checkSelectedOriginmanResource());
+  $('originman-manage-compute')?.addEventListener('click', () => {
+    setView('resources');
+    $('compute-resources-panel').focus();
+  });
+  document.addEventListener('click', (event) => {
+    if (event.target instanceof Element && event.target.closest('[data-originman-configure]')) showTrainStep('configure');
+  });
   $('originman-contract-template')?.addEventListener('change', () => {
     const editor = $('manifest-editor');
     if (originmanRunState.templateText === editor?.value) editor.value = '';
@@ -8584,6 +8702,18 @@ function recordCollection() {
         })()),
       ),
     );
+  if (state.productId === 'originman') {
+    for (const run of runs) {
+      const artifact = run.artifact;
+      if (run.status !== 'completed' || run.mock !== false || artifact?.format?.toLowerCase() !== 'onnx' ||
+          !/^[a-f0-9]{64}$/.test(artifact.sha256 || '')) continue;
+      artifacts.push({
+        ...artifact, ref: artifact.artifactRef, id: 'run-artifact:' + run.id, runId: run.id, taskId: run.taskId,
+        kind: 'artifact · policy', recordType: 'artifact', role: 'policy', status: 'registered',
+        label: '已生成', summary: runTaskLabel(run), modelId: run.modelId, createdAt: run.updatedAt || run.createdAt,
+      });
+    }
+  }
   const evidence = currentTelemetry();
   const latest = latestRun();
   const persistedReplay = !evidence && hasPersistedEvaluation(latest)
@@ -8598,6 +8728,7 @@ function recordCollection() {
           status: evidence.source === 'demo-fixture' ? 'demo' : 'registered',
           summary: evidence.fileName || '本地遥测证据',
           source: evidence.source,
+          runId: evidence.publishedRunId,
           modelId: evidence.modelId,
           projectId: evidence.projectId,
           createdAt: new Date().toISOString(),
@@ -8619,6 +8750,7 @@ function recordCollection() {
               ' 帧 · ' +
               formatTelemetrySeconds(persistedReplay.durationSeconds),
             source: persistedReplay.source || 'import',
+            runId: latest.id,
             modelId: latest.modelId,
             projectId: latest.projectId,
             createdAt: latest.createdAt,
@@ -8959,10 +9091,18 @@ function renderAll() {
   if (activeView === 'deploy') applySubinterfacePartition('deploy', state.deployModule || 'preflight');
 }
 
+let modelDetailsGeneration = 0;
 async function loadModelDetails(modelId = state.selectedModelId) {
+  const generation = ++modelDetailsGeneration;
   if (!modelId) return;
+  const productId = state.productId;
+  const current = () =>
+    generation === modelDetailsGeneration &&
+    modelId === state.selectedModelId &&
+    productId === state.productId;
   try {
     const payload = await request('/sim2real/models/' + encodeURIComponent(modelId));
+    if (!current()) return;
     state.model = payload.model || null;
     state.compatibility = payload.compatibility || [];
     if (state.model) {
@@ -8973,7 +9113,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
       renderReleaseGate();
     }
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401)) {
+    if (current() && !(error instanceof ApiError && error.status === 401)) {
       showToast(error instanceof Error ? error.message : '模型详情加载失败', 'error');
     }
   }
@@ -8981,6 +9121,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 
 async function refreshActiveRuns() {
   const overview = state.overview;
+  const productId = state.productId;
   if (!overview?.runs?.length) return;
   const now = Date.now();
   for (const [deadRunId, deadUntil] of runStatusDeadUntil) {
@@ -9029,7 +9170,7 @@ async function refreshActiveRuns() {
     }),
   );
   const byId = new Map(updates.filter(Boolean).map((run) => [run.id, run]));
-  if (!byId.size || !state.overview) return;
+  if (!byId.size || overview !== state.overview || productId !== state.productId) return;
   const previousRuns = state.overview.runs;
   state.overview = {
     ...state.overview,
@@ -9160,18 +9301,39 @@ function renderResearchLoop() {
   );
 }
 
-async function loadOverview({ quiet = false, silent = false } = {}) {
-  // A foreground load and a background poll must never overlap; whichever
-  // got there first wins (this also keeps the poll's own chain serialized).
-  if (state.loading) return;
-  setLoading(!silent);
+let overviewRequest = null;
+let queuedOverviewRefresh = null;
+
+function loadOverview(options = {}) {
+  if (overviewRequest) {
+    if (options.silent) return overviewRequest;
+    // A deliberate refresh may follow a write or product switch. Run one
+    // fresh pass after the in-flight request and share it with other callers.
+    queuedOverviewRefresh ??= overviewRequest
+      .catch(() => undefined)
+      .then(() => {
+        queuedOverviewRefresh = null;
+        return loadOverview(options);
+      });
+    return queuedOverviewRefresh;
+  }
+  overviewRequest = fetchOverview(options).finally(() => {
+    overviewRequest = null;
+  });
+  return overviewRequest;
+}
+
+async function fetchOverview({ silent = false } = {}) {
+  const productId = state.productId;
+  if (!silent) setLoading(true);
   if (!state.overview) {
     setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
   }
   try {
     const payload = await request(
-      '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
+      '/sim2real/overview?productId=' + encodeURIComponent(productId),
     );
+    if (productId !== state.productId) return;
     state.overview = payload;
     state.selectedComputeResourceId = state.selectedComputeResourceId || '';
     // The summary is intentionally lightweight and remains useful to future
@@ -9195,6 +9357,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
         ]);
     // Skipped auxiliary reads have no new success/failure evidence. Preserve
     // their last data and status until a foreground refresh checks them again.
+    if (productId !== state.productId) return;
     if (!silent) {
       state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
       if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
@@ -9225,10 +9388,12 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     void loadWorkspaceNotices();
     clearAuthGate();
     await refreshActiveRuns();
+    if (productId !== state.productId) return;
     renderAll();
     // Model details rarely change while a run is in flight; re-fetching them
     // every silent poll doubles request volume for zero operator value.
     if (!silent) await loadModelDetails();
+    if (productId !== state.productId) return;
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
@@ -9237,6 +9402,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       clearWorkspaceStatus();
     }
   } catch (error) {
+    if (productId !== state.productId) return;
     state.serviceError = !(error instanceof ApiError && error.status === 401);
     setText(
       'service-status',
@@ -9360,6 +9526,7 @@ async function registerEditor() {
     const result = $('validation-result');
     if (result) { result.className = 'validation-result is-ok'; result.textContent = '模型版本已登记，可以直接配置并提交强化学习训练；回放为可选。'; }
     await loadOverview({ quiet: true });
+    return payload.model;
   } catch (error) {
     const message = friendlyError(error, '模型登记失败');
     const result = $('validation-result');
@@ -9523,19 +9690,20 @@ async function runModel(backend) {
       idempotencyKey: requestKey,
       ...(state.projectId ? { projectId: state.projectId } : {}),
     };
+    const engine = $('training-engine')?.value;
     if (backend === 'local') {
-      // AI 模式会优先使用已测试在线且并发有余量的 GPU；没有可用资源时回退到服务端默认 Worker。
       if (state.selectedComputeResourceId) {
         body.computeResourceId = state.selectedComputeResourceId;
       } else {
-        const resources = state.overview?.computeResources || [];
-        const online = resources.find((resource) => resource.status === 'online' && (resource.activeJobs == null || resource.activeJobs < (resource.maxConcurrentJobs || 1)));
+        const resources = (state.overview?.computeResources || []).filter((resource) =>
+          engine ? (!resource.engines?.length || resource.engines.includes(engine))
+            : !resource.id.startsWith('c1a55-'));
+        const online = pickLeastBusyResource(resources) ?? resources.find((resource) => resource.status === 'online');
         if (online) body.computeResourceId = online.id;
       }
     }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
-    const engine = $('training-engine')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) {
       body.training = { profile, ...(algorithm ? { algorithm } : {}), ...(engine ? { engine } : {}) };
       if (engine === 'act' || engine === 'diffusion-policy') {
@@ -12045,12 +12213,11 @@ function wireEvents() {
     }
     state.productId = next;
     const activeView = document.body.dataset.activeView;
-    const sharedSimulation = activeView === 'simulate' ||
-      (activeView === 'classroom' && document.body.dataset.flowChild === 'simulate');
+    const sharedSimulation = activeView === 'simulate';
     if (sharedSimulation) {
       setView('simulate');
       setFlowChild('simulate', { focus: false });
-    } else if (next !== 'originman' && activeView === 'classroom') setView('overview');
+    }
     state.selectedModelId = '';
     // A project can span several robot profiles. Keep it only when it links a
     // model for the newly selected product; otherwise return to the account
@@ -12091,6 +12258,8 @@ function wireEvents() {
   });
   $('model-select')?.addEventListener('change', async (event) => {
     state.selectedModelId = event.target.value;
+    state.model = null;
+    state.compatibility = [];
     state.activeDeployment = null;
     state.telemetry = state.telemetry?.modelId === state.selectedModelId ? state.telemetry : null;
     saveWorkspaceContext();
@@ -12487,15 +12656,16 @@ trainingPlans = window.TrainingPlans?.mount({
   request,
   ready: workspaceReady,
   selectWorkshopResource(requestedId) {
+    selectRegisteredDanceModel();
     const resources = state.overview?.computeResources || [];
     const eligible = resources.filter(supportsOriginmanDance);
     if (requestedId) {
-      const chosen = eligible.find((resource) => resource.id === requestedId);
+      const chosen = resources.find((resource) =>
+        resource.id === requestedId && canCheckOriginmanDance(resource));
       state.selectedComputeResourceId = chosen?.id || '';
-      if (!chosen && state.overview) showToast('课程链接中指定的训练电脑当前不可用，请在配置页重新选择。', 'error');
+      if (!chosen && state.overview) showToast('课程指定的算力不在此课的可选范围，请检查执行资源。', 'error');
     } else if (!eligible.some((resource) => resource.id === state.selectedComputeResourceId)) {
-      const onlineGpu = eligible.filter((resource) => resource.status === 'online' && resource.cuda === true && resource.mock === false);
-      state.selectedComputeResourceId = onlineGpu.length === 1 ? onlineGpu[0].id : '';
+      state.selectedComputeResourceId = eligible.length === 1 ? eligible[0].id : '';
     }
     renderSelects();
     renderOriginmanTrainingWorkbench();

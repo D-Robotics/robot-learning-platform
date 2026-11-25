@@ -1,7 +1,14 @@
+import { originmanReferenceDigest } from './originman-reference-digest.js';
+import {
+  isOriginmanWorkshopEngine,
+  normalizeOriginmanWorkshopResult,
+} from '../../shared/originman-workshop.js';
 import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
   ORIGINMAN_REFERENCE_TASK,
+  ORIGINMAN_SOURCE_STANCE,
+  type OriginmanReferenceTrajectory,
 } from '../../shared/originman-reference-training.js';
 import type {
   Sim2RealCheckpointRef,
@@ -13,6 +20,7 @@ import type {
   Sim2RealTrainingSpec,
 } from '../../shared/sim2real.js';
 import { ORIGINMAN_DANCE_SECTION_TYPES } from '../../shared/originman-dance-training.js';
+import { createHash } from 'node:crypto';
 import { isIP } from 'node:net';
 import { normalizeLatencyMeasurementStage } from '../../shared/board-rehearsal.js';
 import { SAFE_ARTIFACT_REF } from '../../shared/sim2real.js';
@@ -45,7 +53,7 @@ export function resolvedTaskPack(taskId?: string): Record<string, unknown> | nul
   }
 }
 export interface Sim2RealRobogoRunResult {
-  status: 'queued' | 'running' | 'completed' | 'failed';
+  status: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed';
   externalRunId?: string;
   /** Propagated by the server-side mock worker; never implies a deployable model. */
   mock?: boolean;
@@ -558,6 +566,44 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   };
 }
 
+function safeReferenceSections(value: unknown) {
+  if (!Array.isArray(value) || !value.length || value.length > 90) return undefined;
+  const rows: NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['sections']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return undefined;
+    const { id, framesExpected, framesEvaluated, completed } = item;
+    if (
+      typeof id !== 'string' ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) ||
+      !Number.isSafeInteger(framesExpected) ||
+      framesExpected < 50 ||
+      framesExpected > 4500 ||
+      !Number.isSafeInteger(framesEvaluated) ||
+      framesEvaluated < 0 ||
+      framesEvaluated > framesExpected ||
+      typeof completed !== 'boolean'
+    )
+      return undefined;
+    const row: (typeof rows)[number] = {
+      id,
+      framesExpected,
+      framesEvaluated,
+      completed: completed && framesEvaluated === framesExpected,
+    };
+    for (const [key, maximum] of [
+      ['trackingRmseRad', 20],
+      ['maxTiltDeg', 180],
+      ['squatDescentM', 10],
+    ] as const) {
+      const metric = item[key];
+      if (typeof metric === 'number' && Number.isFinite(metric) && metric >= 0 && metric <= maximum)
+        row[key] = metric;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanReference'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const { replay, video: safeVideo } = safeDanceMetrics(value) ?? {};
@@ -576,11 +622,20 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     framesExpected,
     framesEvaluated,
     trackingMaeRad,
+    trackingRmseRad,
+    zeroResidualRmseRad,
+    zeroResidualFramesEvaluated,
+    trajectorySha256,
+    onnxMaxAbsError,
+    sections: rawSections,
     maxTiltDeg,
     finalYawDeg,
     qualityGatePassed,
     referenceSha256,
     sceneSha256,
+    stanceProfile,
+    calibrationSha256,
+    checkpointEvaluations,
   } = value as Record<string, unknown>;
   if (
     typeof framesExpected !== 'number' ||
@@ -607,10 +662,33 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     ![referenceSha256, sceneSha256].every((digest) => /^[a-f0-9]{64}$/.test(digest))
   )
     return undefined;
+  const sections = safeReferenceSections(rawSections);
   return {
     framesExpected,
     framesEvaluated,
     trackingMaeRad,
+    ...(typeof trackingRmseRad === 'number' &&
+      Number.isFinite(trackingRmseRad) &&
+      trackingRmseRad >= 0 &&
+      trackingRmseRad <= 20 && { trackingRmseRad }),
+    ...(typeof onnxMaxAbsError === 'number' &&
+      Number.isFinite(onnxMaxAbsError) &&
+      onnxMaxAbsError >= 0 &&
+      onnxMaxAbsError < 1e-6 && { onnxMaxAbsError }),
+    ...(typeof trajectorySha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(trajectorySha256) && { trajectorySha256 }),
+    ...(typeof zeroResidualRmseRad === 'number' &&
+      Number.isFinite(zeroResidualRmseRad) &&
+      zeroResidualRmseRad >= 0 &&
+      zeroResidualRmseRad <= 20 &&
+      typeof zeroResidualFramesEvaluated === 'number' &&
+      Number.isSafeInteger(zeroResidualFramesEvaluated) &&
+      zeroResidualFramesEvaluated > 0 &&
+      zeroResidualFramesEvaluated <= framesExpected && {
+        zeroResidualRmseRad,
+        zeroResidualFramesEvaluated,
+      }),
+    ...(sections && { sections }),
     maxTiltDeg,
     finalYawDeg,
     qualityGatePassed:
@@ -620,6 +698,15 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
       Math.abs(finalYawDeg) < limits.maxAbsFinalYawDeg,
     referenceSha256,
     sceneSha256,
+    ...(stanceProfile === ORIGINMAN_SOURCE_STANCE &&
+      typeof calibrationSha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(calibrationSha256) && { stanceProfile, calibrationSha256 }),
+    ...(typeof checkpointEvaluations === 'number' &&
+    Number.isSafeInteger(checkpointEvaluations) &&
+    checkpointEvaluations >= 1 &&
+    checkpointEvaluations <= 64
+      ? { checkpointEvaluations }
+      : {}),
     ...(replay && { replay }),
     ...(video && { video }),
   };
@@ -672,6 +759,9 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
     trainingDevice && /^[a-zA-Z0-9][a-zA-Z0-9 ._()+-]{0,95}$/.test(deviceName)
       ? deviceName
       : undefined;
+  const workshop = isOriginmanWorkshopEngine(engine)
+    ? normalizeOriginmanWorkshopResult(source.originmanWorkshop)
+    : undefined;
   const originmanDance =
     engine === 'originman-dance-ppo' ? safeDanceMetrics(source.originmanDance) : undefined;
   return {
@@ -713,6 +803,7 @@ function safeMetrics(value: unknown): Sim2RealRunMetrics | undefined {
       : { iterations: bounded('iterations', 0, 2_000_000) }),
     ...(physicsBackend == null ? {} : { physicsBackend }),
     ...(engine == null ? {} : { engine }),
+    ...(workshop ? { originmanWorkshop: workshop } : {}),
     ...(originmanDance ? { originmanDance } : {}),
     ...(engine === ORIGINMAN_REFERENCE_ENGINE
       ? { originmanReference: safeReferenceMetrics(source.originmanReference) }
@@ -765,12 +856,16 @@ function safeProgressPoints(value: unknown): Sim2RealRunProgressPoint[] | undefi
     }
     lastIteration = iteration;
     const elapsedSeconds = Number(point.elapsedSeconds);
+    const samples = Number(point.episodeSamples);
     const at = safeText(point.at, 40);
     points.push({
       iteration,
       totalIterations,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) &&
+        samples >= 0 &&
+        samples <= 50 && { episodeSamples: samples }),
       ...(Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0 ? { elapsedSeconds } : {}),
       ...(at ? { at } : {}),
     });
@@ -795,12 +890,13 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
             requestedStatus === 'succeeded' ||
             requestedStatus === 'done'
           ? 'completed'
-          : requestedStatus === 'failed' ||
-              requestedStatus === 'error' ||
-              requestedStatus === 'cancelled' ||
-              requestedStatus === 'canceled'
-            ? 'failed'
-            : null;
+          : requestedStatus === 'cancelled' || requestedStatus === 'canceled'
+            ? 'cancelled'
+            : requestedStatus === 'cancelling' || requestedStatus === 'canceling'
+              ? 'cancelling'
+              : requestedStatus === 'failed' || requestedStatus === 'error'
+                ? 'failed'
+                : null;
   if (!status) throw new Sim2RealError('sim2real_robogo_runner_status_invalid');
   const launchUrlValue = safeText(source.launchUrl ?? source.url, 500);
   const launchUrl =
@@ -808,7 +904,10 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   const externalRunId = safeText(source.externalRunId ?? source.runId ?? source.id, 120);
   const validExternalRunId =
     !externalRunId || /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId) ? externalRunId : '';
-  if ((status === 'queued' || status === 'running') && !validExternalRunId) {
+  if (
+    (status === 'queued' || status === 'running' || status === 'cancelling') &&
+    !validExternalRunId
+  ) {
     throw new Sim2RealError('sim2real_robogo_runner_run_id_missing');
   }
   const message =
@@ -882,9 +981,15 @@ function runnerPayload(
   idempotencyKey?: string,
   demonstrations?: import('../../shared/sim2real.js').Sim2RealDemonstrations,
 ): Record<string, unknown> {
+  let workerTraining = training;
+  if (training?.originmanDance?.compositionMode) {
+    // The composition mode is for the workbench and ledger. Existing workers consume the original recipe schema.
+    const { compositionMode, ...originmanDance } = training.originmanDance;
+    workerTraining = { ...training, originmanDance };
+  }
   const task =
-    taskId === 'originman-dance' && training?.originmanDance
-      ? { id: taskId, originmanDance: training.originmanDance }
+    taskId === 'originman-dance' && workerTraining?.originmanDance
+      ? { id: taskId, originmanDance: workerTraining.originmanDance }
       : taskId === ORIGINMAN_REFERENCE_TASK
         ? { id: taskId }
         : resolvedTaskPack(taskId);
@@ -903,7 +1008,7 @@ function runnerPayload(
     artifacts: manifest.artifacts,
     ...(taskId ? { taskId } : {}),
     ...(task ? { task } : {}),
-    ...(training ? { training } : {}),
+    ...(workerTraining ? { training: workerTraining } : {}),
     ...(demonstrations ? { demonstrations } : {}),
     ...(resumeFrom ? { resumeFrom } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -960,6 +1065,11 @@ export async function requestRobogoTraining(input: {
           ...(token ? { Authorization: 'Bearer ' + token } : {}),
           ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
           'X-Sim2Real-Account': accountId,
+          ...(input.allowPrivateHttp === true &&
+          input.taskId === ORIGINMAN_REFERENCE_TASK &&
+          input.training?.engine === ORIGINMAN_REFERENCE_ENGINE
+            ? { 'X-RDK-Reference-Trajectory': '1' }
+            : {}),
           'User-Agent': 'RDKStudio/1.0 (+sim2real-runner)',
         },
         body: JSON.stringify(
@@ -1022,6 +1132,140 @@ export async function requestRobogoTraining(input: {
   }
 }
 
+function referenceFailure(value: unknown) {
+  const entry = value as Partial<{
+    nonFootContacts: unknown;
+    tilt: { actualDeg: number; limitDeg: number };
+    height: { actualM: number; limitM: number };
+  }> | null;
+  if (!entry || typeof entry !== 'object') return undefined;
+  const names = entry.nonFootContacts;
+  const nonFootContacts =
+    Array.isArray(names) &&
+    names.length > 0 &&
+    names.length <= 64 &&
+    names.every((name) => typeof name === 'string' && /^[\w.-]{1,80}$/.test(name))
+      ? (names as string[])
+      : undefined;
+  const { tilt, height } = entry;
+  return {
+    ...(nonFootContacts && { nonFootContacts }),
+    ...(tilt &&
+      [tilt.actualDeg, tilt.limitDeg].every((n) => Number.isFinite(n) && n >= 0 && n <= 180) &&
+      tilt.actualDeg >= tilt.limitDeg && {
+        tilt: { actualDeg: tilt.actualDeg, limitDeg: tilt.limitDeg },
+      }),
+    ...(height &&
+      [height.actualM, height.limitM].every((n) => Number.isFinite(n) && Math.abs(n) <= 10) &&
+      height.actualM < height.limitM && {
+        height: { actualM: height.actualM, limitM: height.limitM },
+      }),
+  };
+}
+
+export async function screenOriginmanReferenceWithWorker(input: {
+  runnerUrl: string;
+  token?: string;
+  accountId: string;
+  trajectory: OriginmanReferenceTrajectory;
+  stanceProfile?: typeof ORIGINMAN_SOURCE_STANCE;
+}) {
+  const url = new URL(normalizeComputeRunnerUrl(input.runnerUrl, 'server-runner'));
+  url.pathname = url.pathname.slice(0, -'/train'.length) + '/originman-reference/screen';
+  const token = safeToken(input.token);
+  const serialized = JSON.stringify({
+    ...input.trajectory,
+    ...(input.stanceProfile && { stanceProfile: input.stanceProfile }),
+  });
+  const response = await fetch(url, {
+    method: 'POST',
+    redirect: 'error',
+    signal: AbortSignal.timeout(50_000),
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'X-Sim2Real-Account': safeAccountId(input.accountId),
+      ...(token ? { Authorization: 'Bearer ' + token } : {}),
+    },
+    body: serialized,
+  });
+  const report = JSON.parse(await boundedResponseText(response));
+  if (response.status === 409) return { busy: true } as const;
+  if (!response.ok || report?.ok !== true) throw Error('reference screen unavailable');
+  const referenceSha256 = createHash('sha256').update(serialized).digest('hex');
+  if (report.referenceSha256 !== referenceSha256) throw Error('invalid reference screen receipt');
+  if (input.stanceProfile && report.stanceProfile !== input.stanceProfile)
+    return { unsupportedStance: true } as const;
+  const stance = input.stanceProfile ? { stanceProfile: input.stanceProfile } : {};
+  if (typeof report.invalid === 'string') {
+    const violation = report.violation;
+    const validViolation =
+      violation &&
+      input.trajectory.joint_names.includes(violation.joint) &&
+      Number.isSafeInteger(violation.frame) &&
+      violation.frame >= 1 &&
+      violation.frame <= input.trajectory.joint_pos.length &&
+      Number.isSafeInteger(violation.framesOutside) &&
+      violation.framesOutside >= 1 &&
+      violation.framesOutside <= input.trajectory.joint_pos.length &&
+      [violation.targetRad, violation.minRad, violation.maxRad].every(
+        (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 100,
+      ) &&
+      violation.minRad <= violation.maxRad;
+    return {
+      ...stance,
+      invalid: safeText(report.invalid, 300),
+      ...(validViolation && {
+        violation: {
+          joint: String(violation.joint),
+          frame: Number(violation.frame),
+          framesOutside: Number(violation.framesOutside),
+          targetRad: Number(violation.targetRad),
+          minRad: Number(violation.minRad),
+          maxRad: Number(violation.maxRad),
+        },
+      }),
+    };
+  }
+  const trajectorySha256 = originmanReferenceDigest(input.trajectory);
+  const gate = report.gate;
+  if (
+    (report.trajectorySha256 !== undefined && report.trajectorySha256 !== trajectorySha256) ||
+    !/^[a-f0-9]{64}$/.test(report.sceneSha256 ?? '') ||
+    !/^[a-f0-9]{64}$/.test(report.calibrationSha256 ?? '') ||
+    gate?.framesExpected !== input.trajectory.joint_pos.length ||
+    !Number.isSafeInteger(gate.framesEvaluated) ||
+    gate.framesEvaluated < 1 ||
+    gate.framesEvaluated > gate.framesExpected ||
+    typeof gate.maxTiltDeg !== 'number' ||
+    !Number.isFinite(gate.maxTiltDeg) ||
+    gate.maxTiltDeg < 0 ||
+    gate.maxTiltDeg > 180 ||
+    typeof gate.completed !== 'boolean' ||
+    (gate.completed
+      ? gate.firstFailedFrame !== null
+      : gate.firstFailedFrame !== gate.framesEvaluated)
+  ) {
+    throw Error('invalid reference screen receipt');
+  }
+  return {
+    ...stance,
+    referenceSha256,
+    trajectorySha256,
+    sceneSha256: String(report.sceneSha256),
+    calibrationSha256: String(report.calibrationSha256),
+    framesExpected: Number(gate.framesExpected),
+    framesEvaluated: Number(gate.framesEvaluated),
+    maxTiltDeg: Number(gate.maxTiltDeg),
+    firstFailedFrame: gate.completed ? null : Number(gate.firstFailedFrame),
+    ...(!gate.completed && { failure: referenceFailure(gate.failure) }),
+    passed:
+      gate.completed &&
+      gate.framesEvaluated === gate.framesExpected &&
+      gate.maxTiltDeg < originmanReferenceCalibration.evaluation.maxTiltDeg,
+  };
+}
+
 function statusUrl(rawRunnerUrl: string, externalRunId: string): string {
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(externalRunId)) {
     throw new Sim2RealError('sim2real_robogo_run_id_invalid');
@@ -1064,6 +1308,7 @@ export async function requestRobogoTrainingStatus(input: {
   externalRunId: string;
   fetchImpl?: typeof fetch;
   runnerUrl?: string;
+  operation?: 'cancel';
   statusUrl?: string;
   timeoutMs?: number;
   allowPrivateHttp?: boolean;
@@ -1087,8 +1332,8 @@ export async function requestRobogoTrainingStatus(input: {
   const timeoutMs = boundedTimeout(input.timeoutMs);
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, {
-      method: 'GET',
+    const response = await fetchImpl(input.operation === 'cancel' ? url + '/cancel' : url, {
+      method: input.operation === 'cancel' ? 'POST' : 'GET',
       signal: controller.signal,
       redirect: 'error',
       headers: {

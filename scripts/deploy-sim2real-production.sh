@@ -271,31 +271,20 @@ MISSING=0
 public=dist-server/services/sim2real-web/public
 current_index="$BASE/current/$public/index.html"
 candidate_public="$BASE/releases/$RELEASE/$public"
-# The existing native classroom has its own simulator and evidence modules.
-# A source build that only embeds the Workshop would drop those controls.
-if [[ -f "$current_index" ]] && grep -Fq 'id="originman-classroom-slot"' "$current_index"; then
-  if ! grep -Fq 'id="originman-classroom-slot"' "$candidate_public/index.html"; then
-    echo "FATAL: 候选缺少现网 OriginMan 原课堂视图；停止切换 release。" >&2
+# Keep the active dance course and the read-only historical experiment view available.
+if [[ -f "$current_index" || -f "$candidate_public/index.html" ]]; then
+  for asset in index.html workshop.html workshop-entry-page.mjs originman-reference.html experiment.html experiment-view.mjs; do
+    if [[ ! -s "$candidate_public/$asset" ]]; then
+      echo "FATAL: 候选缺少 OriginMan 入口文件 $asset；停止切换 release。" >&2
+      exit 1
+    fi
+  done
+  if ! grep -Fq 'id="dance-workshop-main"' "$candidate_public/workshop.html" ||
+    grep -Eq 'id="originman-classroom-slot"|id="workshop-main"|course=recovery' \
+      "$candidate_public/index.html" "$candidate_public/workshop.html"; then
+    echo "FATAL: 候选的 OriginMan 新建入口必须统一到舞蹈 Workshop；停止切换 release。" >&2
     exit 1
   fi
-  for module in workshop simulator round-comparison; do
-    asset=$(grep -oE "src=\"\\./originman-${module}(\\.[a-z0-9]+)?\\.js(\"|\\?v=[a-z0-9-]+\")" "$candidate_public/index.html" | head -n 1 || true)
-    asset=${asset#src=\"./}
-    asset=${asset%\"}
-    asset=${asset%%\?*}
-    if [[ -z "$asset" || ! -f "$candidate_public/$asset" ]]; then
-      echo "FATAL: 候选缺少现网 OriginMan 课堂模块 originman-$module；停止切换 release。" >&2
-      exit 1
-    fi
-  done
-  for entry in server/routes/originman-classroom-routes.js server/routes/originman-simulator-routes.js \
-    server/sim2real/originman-teleop-rehearsal.mjs engines/originman-straight/interactive_sim.py \
-    engines/originman-straight/experiments/standing-residual.json; do
-    if [[ ! -f "$BASE/releases/$RELEASE/dist-server/$entry" ]]; then
-      echo "FATAL: 候选缺少 OriginMan 课堂运行文件 $entry；停止切换 release。" >&2
-      exit 1
-    fi
-  done
 fi
 for unit in "${UNITS[@]}"; do
   exec_start=$(systemctl cat "$unit" | sed -n 's/^ExecStart=//p' | head -1)

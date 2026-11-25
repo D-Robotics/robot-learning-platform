@@ -1,7 +1,10 @@
+import { showWorkshopEntry } from './public/workshop-entry-page.mjs';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
+import { ORIGINMAN_DANCE_SECTION_TYPES } from '../../shared/originman-dance-training.ts';
 import { startRunDetail } from './public/run-detail-page.mjs';
 
 const markup = fs.readFileSync(new URL('./public/run-detail.html', import.meta.url), 'utf8');
@@ -67,7 +70,7 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
                 measurements: { lateralTrackingFraction: 0.63 },
               },
               {
-                type: 'squat-rise',
+                type: 'side-tap',
                 passed: false,
                 measurements: { squatDescentM: 0.031, squatAscentM: 0.01653 },
               },
@@ -98,6 +101,16 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   });
 
   assert.equal(page.runId, 'run_42');
+  assert.deepEqual(
+    Array.from(f.document.querySelectorAll('#dance-reference-links a'), (link) => [
+      link.getAttribute('href'),
+      link.textContent,
+    ]),
+    [
+      ['./originman-dance-references/index.html#alternating-arms', '交替摆臂'],
+      ['./originman-dance-references/index.html#side-tap', '侧点步收回'],
+    ],
+  );
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/v1\/duck\/runs\/run_42$/);
   assert.equal(requests[0].options.credentials, 'same-origin');
@@ -267,7 +280,7 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
       bpm: 120,
       trainingSteps: 8192,
       seed: 7,
-      sections: [{ type: 'alternating-arms', beats: 8, intensity: 0.25 }],
+      sections: [{ type: 'side-tap', beats: 8, intensity: 0.25 }],
     },
   };
   const run = {
@@ -308,12 +321,130 @@ test('copying a dance Run prepares its exact parameters without submitting or sa
   });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(requests, [['/sim2real/runs/' + runId, undefined]]);
+  const actionSelect = workspace.window.document.querySelector('[data-dance-type]');
+  assert.deepEqual(
+    Array.from(actionSelect.options, (option) => option.value),
+    ['', ...ORIGINMAN_DANCE_SECTION_TYPES],
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(planner.dance().sections)),
+    training.originmanDance.sections,
+  );
   assert.equal(planner.dance().bpm, 120);
+  assert.equal(planner.dance().compositionMode, 'custom');
   assert.equal(planner.danceNumEnvs(), 4);
   assert.equal(
     workspace.window.document.getElementById('training-plan-save').textContent,
     '保存为新方案',
   );
+});
+
+test('preset and custom compositions keep independent drafts and can reorder all selected actions', (t) => {
+  const workspace = new JSDOM(
+    fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'),
+    {
+      url: 'https://platform.test/robotics-learning/?robot=originman#train/configure',
+      runScripts: 'outside-only',
+    },
+  );
+  t.after(() => workspace.window.close());
+  workspace.window.eval(
+    fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'),
+  );
+  const planner = workspace.window.TrainingPlans.mount({
+    request: async () => ({ plans: [] }),
+    readContext: () => ({ productId: 'originman' }),
+    refreshControls() {},
+  });
+  const { document, Event } = workspace.window;
+  const input = (element, value) => {
+    element.value = value;
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const mode = document.getElementById('originman-training-goal');
+  const preset = document.getElementById('originman-dance-preset');
+  const title = document.getElementById('originman-dance-title');
+  const add = document.getElementById('originman-dance-add');
+  const rows = document.getElementById('originman-dance-sections');
+  input(preset, 'rhythm-and-pose');
+  assert.equal(planner.dance().compositionMode, 'preset');
+  assert.equal(planner.dance().sections.length, 4);
+  input(mode, 'originman-dance-custom');
+  assert.equal(title.value, '');
+  assert.equal(rows.childElementCount, 0);
+  assert.equal(planner.dance(), null);
+  input(title, '自编开场');
+  add.click();
+  assert.equal(planner.dance(), null);
+  input(rows.lastElementChild.querySelector('[data-dance-type]'), 'single-arm-wave');
+  add.click();
+  input(rows.lastElementChild.querySelector('[data-dance-type]'), 'side-tap');
+  rows.lastElementChild.querySelector('[data-dance-up]').click();
+  assert.deepEqual(
+    Array.from(planner.dance().sections, ({ type }) => type),
+    ['side-tap', 'single-arm-wave'],
+  );
+  input(mode, 'originman-dance');
+  assert.equal(planner.dance().sections.length, 4);
+  input(mode, 'originman-dance-custom');
+  assert.equal(planner.dance().title, '自编开场');
+  assert.equal(planner.dance().compositionMode, 'custom');
+  for (const row of Array.from(rows.children)) row.querySelector('[data-dance-remove]').click();
+  assert.equal(planner.dance(), null);
+});
+
+test('dance reference page and replay assets cover every supported action', (t) => {
+  const directory = new URL('./public/originman-dance-references/', import.meta.url);
+  const catalog = JSON.parse(fs.readFileSync(new URL('catalog.json', directory), 'utf8'));
+  assert.equal(catalog.simulationOnly, true);
+  assert.deepEqual(
+    catalog.references.map(({ type }) => type),
+    ORIGINMAN_DANCE_SECTION_TYPES,
+  );
+
+  const pageUrl = 'https://platform.test/learning/originman-dance-references/index.html';
+  const referencePage = new JSDOM(fs.readFileSync(new URL('index.html', directory), 'utf8'), {
+    url: pageUrl,
+  });
+  t.after(() => referencePage.window.close());
+  const document = referencePage.window.document;
+  showWorkshopEntry(document, pageUrl + '?computeResourceId=worker-1');
+  assert.match(document.querySelector('h1').textContent, /教学动作回放/);
+  assert.deepEqual(
+    [...document.querySelectorAll('[data-workshop-resource]')].map((link) => {
+      const url = new URL(link.href);
+      return [
+        url.pathname,
+        url.searchParams.get('mode'),
+        url.searchParams.get('computeResourceId'),
+      ];
+    }),
+    [
+      ['/learning/workshop.html', null, 'worker-1'],
+      ['/learning/originman-reference.html', 'preset', 'worker-1'],
+      ['/learning/originman-reference.html', 'blocks', 'worker-1'],
+    ],
+  );
+  for (const reference of catalog.references) {
+    const section = referencePage.window.document.getElementById(reference.type);
+    assert.equal(section.querySelector('video').getAttribute('src'), reference.video);
+    assert.deepEqual(
+      Array.from(section.querySelectorAll('a'), (link) => link.getAttribute('href')),
+      [reference.policy, reference.verification],
+    );
+    for (const [file, sha256] of [
+      [reference.policy, reference.policySha256],
+      [reference.video, reference.videoSha256],
+    ]) {
+      const actual = createHash('sha256')
+        .update(fs.readFileSync(new URL(file, directory)))
+        .digest('hex');
+      assert.equal(actual, sha256, file);
+    }
+    assert.doesNotThrow(() =>
+      JSON.parse(fs.readFileSync(new URL(reference.verification, directory), 'utf8')),
+    );
+  }
 });
 
 test('dance Workshop links fill the requested draft without submitting or saving', async (t) => {
@@ -403,4 +534,166 @@ test('auto iteration confirms a claimed pass only after reading the exact final 
     document.querySelector('#iteration-rounds a[href$="/artifact"]').href,
     'https://platform.test/learning/api/v1/duck/runs/run-final/artifact',
   );
+});
+
+test('completed recovery Run shows the same receipt diagnosis as the plugin and retains log tails', async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const run = {
+    id: 'run_42',
+    taskId: 'originman-recovery',
+    status: 'completed',
+    backend: 'local',
+    mock: false,
+    externalRunId: 'worker-run',
+  };
+  const page = await startRunDetail({
+    document: f.document,
+    location: f.location,
+    fetchImpl: async (url) =>
+      String(url).endsWith('/logs')
+        ? Response.json({
+            runId: run.id,
+            lines: [],
+            source: 'retained-tail',
+            stdoutTail: 'original training finished',
+          })
+        : Response.json({ run, workshopEvidenceIssue: 'worker-unavailable' }),
+  });
+  t.after(() => page.dispose());
+  const { workshopEvidenceMessage } =
+    await import('../../plugins/rdk-robot-learning-platform/scripts/plugin-errors.mjs');
+  assert.equal(f.document.getElementById('run-status').textContent, '已完成');
+  assert.equal(
+    f.document.getElementById('run-next-action').textContent,
+    workshopEvidenceMessage('worker-unavailable'),
+  );
+  assert.equal(f.document.getElementById('run-logs').hidden, false);
+  f.document.getElementById('run-logs-load').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    f.document.getElementById('run-logs-output').textContent,
+    'original training finished',
+  );
+});
+
+test('changing a Worker inside the dance editor preserves the selection until change is handled', async (t) => {
+  const f = new JSDOM(fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'), {
+    url: 'https://platform.test/learning/?robot=originman#train/configure',
+    runScripts: 'outside-only',
+  });
+  t.after(() => f.window.close());
+  f.window.eval(fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'));
+  const resource = f.window.document.getElementById('compute-resource-select');
+  f.window.document.getElementById('originman-dance-resource').append(resource);
+  resource.add(new f.window.Option('课堂共享 GPU', 'gpu'));
+  let selected = '';
+  resource.addEventListener('change', () => {
+    selected = resource.value;
+  });
+  f.window.TrainingPlans.mount({
+    request: async () => ({ plans: [] }),
+    readContext: () => ({ productId: 'originman' }),
+    applyContext() {},
+    refreshControls() {},
+    hasDanceContract: () => true,
+    onDraftChange() {
+      resource.value = selected;
+    },
+  });
+  resource.value = 'gpu';
+  resource.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  resource.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal(selected, 'gpu');
+});
+
+test('reference playback seeks only to evaluated sections and handles old and mismatched digests', async (t) => {
+  const template = fs.readFileSync(
+    new URL('./public/originman-reference-run.html', import.meta.url),
+    'utf8',
+  );
+  const dom = new JSDOM(template, {
+    url: 'https://platform.test/robotics-learning/originman-reference-run.html?runId=run_ref',
+  });
+  t.after(() => dom.window.close());
+  dom.window.HTMLMediaElement.prototype.pause = () => {};
+  dom.window.HTMLMediaElement.prototype.load = () => {};
+  const { document, location } = dom.window;
+  const source = 'originmanReference';
+  const run = {
+    id: 'run_ref',
+    taskId: 'originman-reference-track',
+    computeResourceId: 'workshop-worker',
+    status: 'completed',
+    training: {
+      originmanReferenceSummary: { trajectorySha256: digest('d') },
+      originmanReferenceComposition: {
+        ranges: [
+          { id: 'intro', from: 0, to: 50 },
+          { id: 'arms', from: 60, to: 110 },
+          { id: 'skipped', from: 120, to: 170 },
+        ],
+      },
+    },
+    artifact: { sha256: digest('a'), format: 'onnx' },
+    metrics: {
+      [source]: {
+        framesExpected: 170,
+        framesEvaluated: 105,
+        trackingMaeRad: 0.02,
+        trackingRmseRad: 0.03,
+        zeroResidualRmseRad: 0.03,
+        zeroResidualFramesEvaluated: 170,
+        maxTiltDeg: 12,
+        finalYawDeg: 2,
+        referenceSha256: digest('e'),
+        trajectorySha256: digest('d'),
+        replay: { sha256: digest('b') },
+        video: {
+          file: 'dance-replay.mp4',
+          sha256: digest('c'),
+          policySha256: digest('a'),
+          sourceReplaySha256: digest('b'),
+          fps: 50,
+        },
+      },
+    },
+  };
+  const open = () =>
+    startRunDetail({
+      document,
+      location,
+      fetchImpl: async () => Response.json({ ok: true, run }),
+    });
+  const initial = await open();
+  const workshop = new URL(document.getElementById('run-workshop-home').href);
+  assert.equal(workshop.pathname, '/robotics-learning/workshop.html');
+  assert.equal(workshop.searchParams.get('computeResourceId'), 'workshop-worker');
+  const control = document.getElementById('replay-segment-controls');
+  const select = document.getElementById('replay-segment');
+  assert.equal(control.hidden, false);
+  assert.equal(select.options.length, 2);
+  select.value = '1.2';
+  document.getElementById('replay-segment-seek').click();
+  assert.equal(document.getElementById('run-video').currentTime, 1.2);
+  assert.match(document.getElementById('run-trajectory-sha').textContent, /与 Worker 一致/);
+  assert.match(document.getElementById('quality-body').textContent, /纯参考关节跟踪 RMSE/);
+  assert.doesNotMatch(
+    document.getElementById('quality-body').textContent,
+    /相对纯参考的 RMSE 变化/,
+  );
+  initial.dispose();
+
+  run.metrics[source].trajectorySha256 = digest('f');
+  const mismatched = await open();
+  assert.equal(control.hidden, true);
+  assert.match(document.getElementById('replay-status').textContent, /摘要不一致/);
+  mismatched.dispose();
+
+  delete run.metrics[source].trajectorySha256;
+  delete run.training.originmanReferenceSummary.trajectorySha256;
+  const historical = await open();
+  assert.equal(document.getElementById('run-video').hidden, false);
+  assert.equal(document.getElementById('run-reference-file-sha').textContent, digest('e'));
+  historical.dispose();
 });

@@ -88,7 +88,7 @@
     "verify:deployment": "node scripts/verify-deployment-assets.mjs",
     "verify:security": "npm run verify:dependency-security && node scripts/verify-release-security.mjs",
     "verify:examples": "node scripts/verify-examples.mjs",
-    "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs",
+    "verify:local-worker": "node services/sim2real-web/local-training-worker.test.mjs && node services/sim2real-web/local-training-cancel.test.mjs",
     "verify:board-agent": "node services/sim2real-web/local-board-agent.test.mjs",
     "verify:gpu-agent": "node scripts/local-gpu-agent.test.mjs",
     "verify:mcp": "vitest run --configLoader runner services/duck-lab-mcp",

@@ -596,6 +596,15 @@ function recoveryPreflightFailure(preflight, resource, { dedicated }) {
       ? null
       : ['ORIGINMAN_RECOVERY_CUDA_UNVERIFIED', '课程预检未核实 CUDA 环境。'];
   }
+  if (
+    report.engine === 'originman-recovery' &&
+    resource.engines?.includes(report.engine) &&
+    report.schemaVersion === 1 &&
+    report.trainingPerformed === false &&
+    report.device === 'cuda' &&
+    report.checks?.some((check) => check.id === 'training-device' && check.status === 'passed')
+  )
+    return null;
   if (!Array.isArray(resource.engines) || !resource.engines.includes(RECOVERY_ENGINE)) {
     return ['ORIGINMAN_RECOVERY_ENGINE_UNVERIFIED', '原算力机未证明已登记受扰恢复正式训练引擎。'];
   }
@@ -713,6 +722,18 @@ export async function prepareTraining(input, call, toolNames, { courseReadiness 
       taskId: input.taskId ?? (originman ? 'originman-recovery' : 'walk'),
     });
   } catch (error) {
+    if (error.platformCode === 'SIM2REAL_PREFLIGHT_NOT_SUPPORTED') {
+      return {
+        status: 'incomplete',
+        resource,
+        computeResourceId: input.computeResourceId,
+        trainingSubmitted: false,
+        taskEnvironmentVerified: false,
+        unsupportedTools: ['rdk_training_preflight'],
+        reason: '该 Worker 尚未配置任务环境预检。',
+        nextAction: '更新 Worker 并配置引擎的 preflightArgs 后，可重新检查环境。',
+      };
+    }
     if (error.platformCode !== 'SIM2REAL_ENGINE_PREFLIGHT_BUSY') throw error;
     return {
       status: 'waiting',

@@ -32,7 +32,8 @@ try {
       Invoke-WebRequest -UseBasicParsing -Uri $runtime.url -OutFile $archive -TimeoutSec 180
       $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
       if ($actual -ne $runtime.sha256) { throw 'Runtime checksum mismatch; installation stopped.' }
-      Expand-Archive -LiteralPath $archive -DestinationPath $temp
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      [IO.Compression.ZipFile]::ExtractToDirectory($archive, $temp)
       if (Test-Path -LiteralPath $destination) { throw 'Existing runtime is invalid; check the private cache before retrying.' }
       Move-Item -LiteralPath (Join-Path $temp $runtime.folder) -Destination $destination
     }

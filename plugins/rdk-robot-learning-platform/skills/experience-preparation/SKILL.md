@@ -14,9 +14,9 @@ description: 用户说“带我开始 Workshop”“继续”“看看效果”�
 舞蹈训练提交后沿回执的 `nextTool` 和 `nextArguments` 自动完成仿真验收。用户对已知舞蹈 Run 要求一键验收时，直接调用 `rdk_originman_dance_acceptance`，达标、未达标或待核对分别按回执说明。有 `studioNavigation` 时直接在 Studio 右侧打开本轮。
 
 
-明确选择恢复课程后，使用 `rdk_workshop({intent:"start"})`，继续、结果和新实验分别用 `continue`、`results`、`new`。已完成实验的回执包含核验过的质量结论。已知实验标识传 `contextId`，评测明细用回执里的评测 Run 标识。算力和预算在恢复课程页面选择。
+开始 Workshop 使用 `rdk_workshop({intent:"new"})` 打开舞蹈准备页。历史实验用原 `contextId` 查看结果。
 
-本课程的完整教学边界与步骤见[Workshop课程说明](../../references/workshop-course.md)。
+本课程的教学边界见[舞蹈 Workshop 课程范围](../../references/workshop-course.md)。
 
 用户问 OriginMan 舞蹈训练或要自定义舞段时，按[舞蹈插件状态与证据](../../references/originman-dance-status.md)区分已接入代码与已验收运行环境；幅度、限幅和证据边界见[舞蹈幅度与有效限幅](../../references/originman-dance-envelope.md)，准确参数结构见[训练技能的舞蹈分支](../training-runs/SKILL.md)。只设计舞蹈时调用`rdk_originman_dance_draft`；明确要训练并确认配方后，用引导返回的 `nextArguments` 调用 `rdk_originman_dance_train`。提交使用[独立的OriginMan 78→18舞蹈模型契约](../../references/originman-dance-manifest.json)，不可替换成受扰恢复的14→2模型。资源或Worker未通过检查时停止，不切到恢复任务。提交后立即打开本轮Run的只读详情页，训练期间等待和每次状态查询继续指向同一Run；终态再读取qualityGate、制品与回放。舞蹈“继续/看看效果”直接读取已知舞蹈Run，不重新提交。详情页逐项展示本次配置、曲线与质量门；只有平台返回同源本次Run视频链接且策略、轨迹摘要匹配时才播放。训练completed不代表风格质量通过；当前流程不允许真机部署。
 

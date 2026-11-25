@@ -460,6 +460,19 @@ export function normalizeOriginmanWorkshopResult(
     )
       return undefined;
     // Clone only declared fields, never arbitrary worker markup or file paths.
+    const device = v.trainingDevice;
+    const trainingDevice =
+      typeof device === 'object'
+        ? {
+            requestedDevice: device.requestedDevice,
+            resolvedDevice: device.resolvedDevice,
+            parameterDevices: [...device.parameterDevices],
+            torchVersion: device.torchVersion,
+            cudaRuntime: device.cudaRuntime,
+            physicsBackend: device.physicsBackend,
+            ...(device.gpuName !== undefined ? { gpuName: device.gpuName } : {}),
+          }
+        : device;
     return {
       schemaVersion: 1,
       phase: v.phase,
@@ -470,7 +483,7 @@ export function normalizeOriginmanWorkshopResult(
       pushMaxForce: v.pushMaxForce,
       policySha256: v.policySha256,
       hardwareEligible: false,
-      ...(v.trainingDevice ? { trainingDevice: v.trainingDevice } : {}),
+      ...(trainingDevice ? { trainingDevice } : {}),
       ...(v.gradientUpdates !== undefined ? { gradientUpdates: v.gradientUpdates } : {}),
       ...(v.physicsDevice ? { physicsDevice: v.physicsDevice } : {}),
       ...(v.groupId !== undefined ? { groupId: v.groupId } : {}),

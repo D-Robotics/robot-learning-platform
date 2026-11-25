@@ -19,11 +19,13 @@ import hashlib
 import json
 import io
 import os
+import runpy
 import shutil
 import stat
 import sys
 import tempfile
 import time
+import types
 import unittest
 from unittest import mock
 
@@ -329,6 +331,33 @@ class DriveEnabledContract(unittest.TestCase):
         self.assertIn("x: 0.0", content)
         self.assertIn("z: 0.0", content)
 
+    def test_stop_reclaims_publisher_or_reports_unconfirmed_on_write_failure(self):
+        self.agent._drive_state["active"] = True
+        with mock.patch.object(self.agent, "_write_drive_yaml", side_effect=OSError), \
+                mock.patch.object(self.agent, "_stop_drive_publisher", side_effect=[False, True]) as stop:
+            self.assertFalse(self.agent.drive_stop("operator-emergency-stop"))
+            self.assertTrue(self.agent.drive_status()["active"])
+            self.assertEqual(self.agent.drive_status()["lastStopReason"], "stop-unconfirmed")
+            self.assertTrue(self.agent.drive_stop("operator-emergency-stop"))
+            self.assertFalse(self.agent.drive_status()["active"])
+            self.assertEqual(stop.call_count, 2)
+
+    def test_publisher_rejects_expired_and_legacy_nonzero_commands(self):
+        modules = {
+            "rclpy": types.SimpleNamespace(),
+            "yaml": types.SimpleNamespace(safe_load=json.loads, YAMLError=ValueError),
+            "geometry_msgs.msg": types.SimpleNamespace(Twist=object),
+        }
+        with mock.patch.dict(sys.modules, modules):
+            read = runpy.run_path(os.path.join(HERE, "board-drive-publisher.py"))["read_cmd"]
+        with mock.patch.object(time, "monotonic", return_value=10.0):
+            for deadline, expected in [(11.0, 0.05), (10.0, 0.0), (None, 0.0)]:
+                command = {"linear": {"x": 0.05}}
+                if deadline is not None:
+                    command["expires_monotonic"] = deadline
+                with mock.patch.dict(read.__globals__, {"secure_read_text": lambda _: json.dumps(command)}):
+                    self.assertEqual(read()[:2], (expected, 0.0))
+
     def test_fixed_tmp_symlink_is_never_followed(self):
         """A legacy <target>.tmp symlink cannot redirect a command write."""
         outside = os.path.join(self.workdir, "outside.txt")
@@ -475,9 +504,9 @@ class DriveEnabledContract(unittest.TestCase):
             json.dump({"id": "custom-diff-drive", "runtime": {"decisionHz": 5}}, handle)
         agent = load_agent_module(enable_drive=True, profile_path=profile_path)
         self.assertEqual(agent.DRIVE_PUBLISH_HZ, 5)
-        self.agent.DRIVE_COMMAND_FILE = os.path.join(self.workdir, "cmd.yaml")
-        self.agent.DRIVE_PUBLISHER_READY = os.path.join(self.workdir, "pub.ready")
-        self.agent.DRIVE_PUBLISHER_SCRIPT = os.path.join(self.workdir, "nope.py")
+        agent.DRIVE_COMMAND_FILE = os.path.join(self.workdir, "cmd.yaml")
+        agent.DRIVE_PUBLISHER_READY = os.path.join(self.workdir, "pub.ready")
+        agent.DRIVE_PUBLISHER_SCRIPT = os.path.join(self.workdir, "nope.py")
 
         captured = {}
 

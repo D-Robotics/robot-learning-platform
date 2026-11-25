@@ -32,7 +32,7 @@ test('short continue/results use shared current without scanning runs or writing
     assert.equal(result.contextId, current.contextId);
     assert.match(result.links.workshop, /context=ws-current$/);
     assert.equal(result.submission.training, false);
-    assert.match(result.studentReply, /查看训练进度/);
+    assert.match(result.studentReply, /查看历史实验/);
     assert.doesNotMatch(result.studentReply, /先看参考|选预算/);
     assert.match(result.delivery, /内置/);
   }
@@ -42,11 +42,8 @@ test('ambiguous history offers page selection and never guesses latest', async (
     remote: async () => ({ current: null, sessions: [{ contextId: 'one' }, { contextId: 'two' }] }),
   });
   assert.equal(result.contextId, null);
-  assert.equal(
-    result.links.workshop,
-    'https://platform.test/learning/workshop.html?course=recovery',
-  );
-  assert.match(result.studentReply, /选择/);
+  assert.equal(result.links.workshop, 'https://platform.test/learning/?robot=originman#records');
+  assert.match(result.studentReply, /打开运行记录/);
 });
 test('explicit selection belongs to the current authenticated platform; arbitrary args and unauthed calls stop', async () => {
   const ops = [];
@@ -82,7 +79,7 @@ test('native text-only host gets short actionable entry and preserves expert too
     workshopSession: async () => ({ current }),
   });
   const initialized = await p('initialize', { clientInfo: { name: 'Qoder', version: '0.5.3' } });
-  assert.match(initialized.instructions, /打开按钮工作台/);
+  assert.match(initialized.instructions, /打开舞蹈工作台/);
   assert.doesNotMatch(
     initialized.instructions,
     /用户只说Workshop\/彩排\/验证流程但没选预算，调用空参数/,
@@ -93,7 +90,7 @@ test('native text-only host gets short actionable entry and preserves expert too
   const r = await p('tools/call', { name: 'rdk_workshop', arguments: { intent: 'continue' } });
   assert.notEqual(r.isError, true);
   assert.equal(r.structuredContent.contextId, 'ws-current');
-  assert.match(r.content[0].text, /workshop.html/);
+  assert.match(r.content[0].text, /experiment.html/);
   const compact = JSON.parse(r.content[0].text);
   assert.deepEqual(
     compact.qoderNavigation.steps.map((s) => s.tool),
@@ -101,7 +98,7 @@ test('native text-only host gets short actionable entry and preserves expert too
   );
   assert.equal(compact.qoderNavigation.steps[0].arguments.url, compact.links.workshop);
   assert.match(compact.qoderNavigation.steps[2].argumentsFrom, /pageId/);
-  assert.equal(compact.studentReply.split('\n').length, 2);
+  assert.match(compact.studentReply, /查看历史实验/);
 });
 
 test('account switch during a shared-current read fails closed before returning an experiment link', async () => {
@@ -121,92 +118,21 @@ test('account switch during a shared-current read fails closed before returning 
   );
 });
 
-test('new draft reuses selected course assets among multiple resources, after ownership and health checks', async () => {
-  const { readFile } = await import('node:fs/promises');
-  const manifest = JSON.parse(
-    await readFile(
-      new URL(
-        '../plugins/rdk-robot-learning-platform/references/originman-manifest.json',
-        import.meta.url,
-      ),
-      'utf8',
-    ),
-  );
-  const calls = [];
-  const invoke = async (
-    visible = true,
-    args = { intent: 'new', course: 'recovery', computeResourceId: 'chosen-resource' },
-    chosen = 'chosen-resource',
-  ) =>
-    workshopEntry(
-      args,
-      async (name, args) => {
-        calls.push({ name, args });
-        if (name === 'rdk_platform_status') return status;
-        if (name === 'rdk_model_validate') return { valid: true };
-        if (name === 'rdk_compute_resources_list')
-          return {
-            computeResources: [
-              { id: 'other', name: 'OriginMan other' },
-              ...(visible ? [{ id: 'chosen-resource', name: 'OriginMan selected' }] : []),
-            ],
-          };
-        if (name === 'rdk_compute_resource_test')
-          return { id: args.computeResourceId, connected: true, status: 'online', mock: false };
-        throw Error('Unexpected call ' + name);
-      },
-      {
-        readModels: async () => ({ models: [{ id: 'chosen-model', manifest }] }),
-        courseReadiness: async ({ computeResourceId }) => ({
-          computeResourceId,
-          trainingSubmitted: false,
-          report: {
-            schemaVersion: 1,
-            readyForSmokeTraining: true,
-            trainingPerformed: false,
-            device: 'cuda',
-            engine: 'originman-recovery-reflect',
-            taskId: 'originman-recovery',
-          },
-        }),
-        remote: async (op, input) => {
-          if (op === 'list')
-            return {
-              current: {
-                contextId: 'old',
-                stage: 'results',
-                modelId: 'chosen-model',
-                computeResourceId: 'chosen-resource',
-              },
-            };
-          assert.equal(op, 'create');
-          assert.deepEqual(input, {
-            modelId: 'chosen-model',
-            computeResourceId: chosen,
-          });
-          return { session: { contextId: 'new', stage: 'ready', ...input } };
-        },
-      },
-    );
-  assert.equal((await invoke()).contextId, 'new');
-  assert.ok(
-    calls.some(
-      (c) =>
-        c.name === 'rdk_compute_resource_test' && c.args.computeResourceId === 'chosen-resource',
-    ),
-  );
-  const changed = await invoke(
-    true,
-    { intent: 'new', course: 'recovery', computeResourceId: 'other' },
-    'other',
-  );
-  assert.equal(changed.session.computeResourceId, 'other');
-  assert.match(changed.studentReply, /OriginMan other/);
-  await assert.rejects(
-    invoke(true, { intent: 'continue', computeResourceId: 'other' }),
-    /新建实验/,
-  );
-  await assert.rejects(invoke(false), /当前账号不可见/);
+test('legacy new requests select a visible Worker for dance without creating a recovery session', async () => {
+  const invoke = (computeResourceId) =>
+    workshopEntry({ intent: 'new', course: 'recovery', computeResourceId }, async (name) => {
+      if (name === 'rdk_platform_status') return status;
+      if (name === 'rdk_compute_resources_list')
+        return { computeResources: [{ id: 'chosen', name: 'Classroom GPU' }] };
+      assert.fail('Unexpected mutation ' + name);
+    });
+  const result = await invoke('chosen');
+  const url = new URL(result.links.workshop);
+  assert.equal(url.searchParams.get('course'), 'dance');
+  assert.equal(url.searchParams.get('computeResourceId'), 'chosen');
+  assert.equal(result.contextId, null);
+  assert.match(result.studentReply, /Classroom GPU/);
+  await assert.rejects(invoke('private'), /当前账号看不到/);
 });
 
 test('cold Workshop previews offline and only surfaces an already requested authorization', async () => {
@@ -219,6 +145,7 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   assert.equal(preview.stage, 'preview');
   assert.match(preview.links.workshop, /workshop\.html\?course=dance&start=1$/);
   assert.match(preview.studentReply, /8,192 步快检/);
+  assert.match(preview.studentReply, /「交替摆臂」仿真回放.*预置参考舞蹈.*动作组自由编排/);
   assert.equal(preview.submission.training, false);
   // A fresh 'new' preview intentionally reads no account data; authorization is
   // only requested when the learner resumes or actually starts practice.
@@ -331,10 +258,10 @@ test('new workshops select the correct page without calling a backend or allocat
       })
     ).structuredContent;
     const url = new URL(result.links.workshop);
-    assert.equal(url.searchParams.get('course'), course);
+    assert.equal(url.searchParams.get('course'), 'dance');
     assert.equal(result.studioNavigation.arguments.url, url.href);
     assert.deepEqual(result.submission, { training: false, evaluation: false });
-    assert.match(result.studentReply, course === 'dance' ? /8,192 步快检/ : /播放讲师参考/);
+    assert.match(result.studentReply, /8,192 步快检/);
   }
 });
 
@@ -427,4 +354,49 @@ test('recovery results resolve experiment ID to the verified training and evalua
     calls.filter(([name]) => name === 'rdk_training_status').map(([, args]) => args.runId),
     ['training-run', 'evaluation-run'],
   );
+});
+
+test('Workshop opens the exact authorized Run for either course and rejects course mismatches', async () => {
+  const canonical = '90a158b1-bfa6-4c55-a13f-3c988c424511';
+  const reads = [];
+  let taskId = 'originman-recovery';
+  const dispatch = experienceProxy(
+    {
+      async readTrainingRun(id, options) {
+        reads.push(id);
+        assert.equal(options.allowPrefix, true);
+        return {
+          id: canonical,
+          taskId,
+          artifact: { sha256: 'a'.repeat(64) },
+          status: 'completed',
+          workshopEvidenceIssue: 'worker-unavailable',
+        };
+      },
+      async request(method) {
+        throw Error('Unexpected upstream call ' + method);
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: status.baseUrl } },
+  );
+  const call = (args) => dispatch('tools/call', { name: 'rdk_workshop', arguments: args });
+  const result = await call({ intent: 'continue', runId: canonical.slice(0, 8) });
+  assert.equal(result.structuredContent.course, 'recovery');
+  assert.equal(result.structuredContent.run.id, canonical);
+  assert.match(result.structuredContent.studentReply, /暂时连不上原训练的 Worker/);
+  assert.match(
+    result.structuredContent.studioNavigation.arguments.url,
+    new RegExp(canonical + '$'),
+  );
+  assert.equal(JSON.parse(result.content[0].text).run.id, canonical);
+  assert.equal(
+    (await call({ intent: 'results', course: 'dance', runId: canonical })).isError,
+    true,
+  );
+  assert.equal((await call({ intent: 'new', runId: canonical })).isError, true);
+  taskId = 'originman-dance';
+  const dance = await call({ intent: 'results', course: 'dance', runId: canonical });
+  assert.equal(dance.structuredContent.course, 'dance');
+  assert.equal(dance.structuredContent.run.id, canonical);
+  assert.deepEqual(reads, [canonical.slice(0, 8), canonical, canonical]);
 });

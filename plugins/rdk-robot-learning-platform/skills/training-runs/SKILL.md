@@ -14,6 +14,8 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 ## OriginMan 自定义舞蹈
 
+预置参考舞蹈和动作组自由编排先用 `rdk_originman_motion_library` 取得当前平台的动作或预置 ID，再用 `rdk_originman_motion_preview` 核对实际时长和轨迹摘要。确认后用 `rdk_originman_dance_train` 提交 `dance: {presetId}` 或 `dance: {blocks, transitionSeconds}`。指定支持跟跳的 Worker，并把预览返回的 `trajectorySha256` 作为 `expectedTrajectorySha256`；若返回 `stanceProfile`，一并作为 `expectedStanceProfile` 提交。将本轮 Run 打开到 Studio 右侧，用 `rdk_training_wait` 等待结果。旧式 `sections` 配方仍用原入口和原策略契约。只提供文件时打开 `rdk_originman_reference_track`，由用户在页面导入。
+
 舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项。算力未选时展示当前账号的可选算力和执行资源入口，按 `resumeArguments` 保留已有编舞和预算。明确确认编舞、算力和预算后，将引导返回的 `nextArguments` 原样传给 `rdk_originman_dance_train`。改参重训用 `intent:"retry"` 和原 Run。只改一段时传 `sectionEdits`，段号从 1 开始。学员可明确选择模型或算力，确认前先展示变化。`modelId` 可省略，工具按专用契约查找或登记。
 
 提交舞蹈后立即接续回执提供的 `rdk_originman_dance_acceptance`。学员也可以对一条已有的舞蹈 Run 说「一键仿真验收」。工具按同一 Run 等待，每次仍在训练时用 `nextArguments` 继续。训练完成后自动用原 ONNX 做独立评测，核对策略、场景和契约。取得判定后按 `studioNavigation` 打开右侧，在同一页看达标判定、逐项检查、回放和策略下载。只查状态仍可用 `rdk_training_wait`。
@@ -32,16 +34,9 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 结果核对本轮 `metrics.originmanDance.qualityGatePassed` 与各 BPM 的舞段成绩。出现平台返回的同源 `links.danceVideo` 时用宿主播放器打开本次仿真视频；实际播放和训练、风格达标分别报告。没有媒体链接时保留原结果，不构造未验证的媒体地址，也不为补回放重新训练。舞蹈仿真通过不授权真机部署。
 
-## OriginMan 受扰恢复训练预算与结果口径
+## 历史实验和原 Run
 
-明确选择受扰恢复课程后，使用 `rdk_workshop` 打开按钮工作台，预算在页面选择；不要在聊天重复问。以下仅用于用户明确的高级手动或独立训练：先调用 `rdk_originman_training_choice`。用户未选择预算时传空参数，只展示返回的一个中文选择题并等待；不要默认短训。已明确“快检/短训/8192”传 `choice=quick`，已明确“正式/50万”传 `choice=formal`，不重问。回答“不清楚”传 `choice=unknown` 并暂停，不能自动提交。用户说先不开始时只记录选择。
-
-预算单位是训练步：8192 步不是8192次优化或外层迭代。旧进度字段iteration也可能记录步数，按本引擎回执说明单位。
-
-8192 步快检只验训练→评测→回放链路，可能比基线差；50 万步正式效果实验用 `rdk_originman_train({contextId,timesteps:500000})` 和 `rdk_originman_evaluate`，不能落到固定短训工具。预算改变须新实验，原实验用工具返回引用恢复，不手抄或猜 UUID。完整 Workshop 仍先看基础 PD 参考，再按已选预算执行。
-
-分别报告：流程执行是否完成、同源仿真效果是否达到收益判据、实体效果是否验证。`completed` 仅说明执行结束。必须读取本轮 `rdk_originman_evaluation_read`，核对来源、两组条件与 original/tuned/rl 实际恢复数；`clearGain=false` 明确“效果未达标”，无评测或来源未核对保持待验证，仿真成功不代表真机成功。历史结果不能当本组成绩。正常回答三句以内加实验页链接；历史解释只在追问时读 [预算对照证据](../../references/workshop-training-evidence.md)，不要重复读整包。
-
+已有实验按原账号和 Run 查询。旧评测的基线、恢复指标和预算只用于解释该条历史记录，见[历史预算与证据](../../references/workshop-training-evidence.md)。
 
 # 训练与 Run
 

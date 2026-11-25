@@ -1,3 +1,16 @@
+import {
+  originmanReferenceDigest,
+  REFERENCE_DIGEST_VERSION,
+} from '../sim2real/originman-reference-digest.js';
+import type { OriginmanMotionProvenance } from '../../shared/originman-reference-training.js';
+import {
+  listOriginmanMotion,
+  OriginmanMotionError,
+  prepareOriginmanMotion,
+  preparePinnedOriginmanMotion,
+  summarizeOriginmanMotion,
+} from '../sim2real/originman-motion.js';
+import { getWorkshopRun } from '../sim2real/workshop-run-evidence.js';
 import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
 import {
   ORIGINMAN_REFERENCE_ENGINE,
@@ -7,6 +20,7 @@ import {
 } from '../../shared/originman-reference-training.js';
 import originManDanceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json' with { type: 'json' };
 import { isDeepStrictEqual } from 'node:util';
+import { createHash } from 'node:crypto';
 import originManManifest from '../../plugins/rdk-robot-learning-platform/references/originman-manifest.json' with { type: 'json' };
 import { validateSim2RealManifest } from '../../shared/sim2real.js';
 import type { Request, Response, Router } from 'express';
@@ -16,12 +30,14 @@ import {
   createSim2RealModel,
   listSim2RealModels,
   listSim2RealComputeResources,
-  getSim2RealRun,
   getSim2RealModel,
   getSim2RealComputeResource,
+  getSim2RealComputeResourceSecret,
   findSim2RealRunByIdempotency,
 } from '../sim2real/sim2real-store.js';
+import { isWebCloudDeployment } from '../sim2real/standalone-adapters.js';
 import { wrapAsync, sendApiError } from '../sim2real/http-helpers.js';
+import { screenOriginmanReferenceWithWorker } from '../sim2real/robogo-runner.js';
 // The public platform validates manifest-defined robots under the custom profile.
 const courseManifest =
   validateSim2RealManifest(originManManifest).manifest ??
@@ -31,13 +47,19 @@ const courseManifest =
     contract: { ...originManManifest.contract, robotId: 'custom' },
   }).manifest;
 
+function courseEngine(engines?: string[]) {
+  return engines?.includes('originman-recovery') && !engines.includes('originman-recovery-reflect')
+    ? 'originman-recovery'
+    : 'originman-recovery-reflect';
+}
+
 export function createPlatformWorkshopSessions() {
   const root = () => String(process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
-  const experiments = createExperimentSessions({ root, getRun: getSim2RealRun });
+  const experiments = createExperimentSessions({ root, getRun: getWorkshopRun });
   const sessions = createWorkshopSessions({
     readExperiment: async (id, owner) => (await experiments.resume(id, owner)).view,
     root,
-    getRun: getSim2RealRun,
+    getRun: getWorkshopRun,
     findRun: async (key, owner) => (await findSim2RealRunByIdempotency(key, owner))?.run ?? null,
     remember: experiments.remember,
   });
@@ -60,9 +82,30 @@ export function registerSim2RealWorkshopRoutes(
         s.json({ ok: true, schemaVersion: 1, ...((await fn(r, owner)) as object) });
       } catch (e) {
         if (e instanceof ExperimentError) sendApiError(s, e.status, e.code, e.message);
+        else if (e instanceof OriginmanMotionError)
+          sendApiError(s, e.status, 'ORIGINMAN_MOTION_INVALID', e.message);
         else sendApiError(s, 503, 'WORKSHOP_UNAVAILABLE', '课程暂不可用，保留原实验，不重新提交。');
       }
     });
+  const requireActiveCourse = () => {
+    if (isWebCloudDeployment())
+      throw new ExperimentError(
+        'WORKSHOP_RETIRED',
+        '该课程已下线，新实验请打开 OriginMan 舞蹈 Workshop。',
+        410,
+      );
+  };
+  const motionApi = options.prefix + '/originman-motion';
+  router.get(
+    motionApi + '/catalog',
+    handle(async () => listOriginmanMotion()),
+  );
+  router.post(
+    motionApi + '/preview',
+    handle(async (request) => ({
+      preview: summarizeOriginmanMotion(await prepareOriginmanMotion(request.body)),
+    })),
+  );
   const referenceApi = options.prefix + '/originman-reference';
   router.get(
     referenceApi,
@@ -89,6 +132,9 @@ export function registerSim2RealWorkshopRoutes(
           frames: trajectory.joint_pos.length,
           durationSeconds: trajectory.joint_pos.length / trajectory.fps,
           fps: trajectory.fps,
+          referenceSha256: createHash('sha256').update(JSON.stringify(trajectory)).digest('hex'),
+          trajectorySha256: originmanReferenceDigest(trajectory),
+          trajectoryDigestVersion: REFERENCE_DIGEST_VERSION,
         };
       } catch (error) {
         throw new ExperimentError(
@@ -97,6 +143,122 @@ export function registerSim2RealWorkshopRoutes(
           400,
         );
       }
+    }),
+  );
+  router.post(
+    referenceApi + '/screen',
+    handle(async (request, owner) => {
+      let trajectory;
+      let composition: OriginmanMotionProvenance | undefined;
+      const input = request.body ?? {};
+      try {
+        if (Object.hasOwn(input, 'composition')) {
+          if (input.trajectory !== undefined)
+            throw new OriginmanMotionError('编排与上传轨迹只能选择其中一种。');
+          const prepared = await preparePinnedOriginmanMotion(
+            input.composition,
+            input.expectedTrajectorySha256,
+          );
+          if (
+            input.expectedStanceProfile !== undefined &&
+            input.expectedStanceProfile !== prepared.provenance.stanceProfile
+          )
+            throw new OriginmanMotionError('参考站姿已更新，请重新预览。', 409);
+          trajectory = prepared.trajectory;
+          composition = prepared.provenance;
+        } else {
+          trajectory = validateOriginmanReferenceTrajectory(input.trajectory);
+        }
+      } catch (error) {
+        if (error instanceof OriginmanMotionError) throw error;
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_INVALID',
+          error instanceof Error ? error.message : '参考轨迹无效。',
+          400,
+        );
+      }
+      const failureLocation = (frame: number | null) => {
+        if (!composition?.ranges.length || frame === null) return {};
+        const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
+        if (block >= 0) return { blockNumber: block + 1, motionId: composition.ranges[block].id };
+        const after = composition.ranges.findIndex(({ from }) => from >= frame);
+        return after > 0
+          ? {
+              betweenBlocks: true,
+              fromBlockNumber: after,
+              toBlockNumber: after + 1,
+              fromMotionId: composition.ranges[after - 1].id,
+              toMotionId: composition.ranges[after].id,
+            }
+          : { betweenBlocks: true };
+      };
+      const selected = await getSim2RealComputeResourceSecret(
+        String(request.body?.computeResourceId ?? ''),
+        owner,
+      );
+      const resource = selected?.resource;
+      if (
+        !resource ||
+        resource.status !== 'online' ||
+        resource.source === 'local-agent' ||
+        resource.mock !== false ||
+        !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
+      ) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_WORKER_MISSING',
+          '请先检查支持跟跳的 Worker 连接。',
+          409,
+        );
+      }
+      const result = await screenOriginmanReferenceWithWorker({
+        runnerUrl: resource.runnerUrl,
+        token: selected.runnerToken,
+        accountId: owner ?? 'local-dev',
+        trajectory,
+        stanceProfile: composition?.stanceProfile,
+      }).catch(() => {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_SCREEN_FAILED',
+          'Worker 未返回可核验的筛查结果。请检查连接后重试。',
+          503,
+        );
+      });
+      if (result.unsupportedStance) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_STANCE_UNAVAILABLE',
+          '所选 Worker 还不支持原版站姿标定，请换用云端仿真 Worker 或更新本地 Worker。',
+          409,
+        );
+      }
+      if (result.busy) {
+        throw new ExperimentError(
+          'ORIGINMAN_REFERENCE_SCREEN_BUSY',
+          'Worker 正在处理任务，请稍后重试。',
+          409,
+        );
+      }
+      if (result.invalid) {
+        if (result.violation) {
+          const { frame, joint } = result.violation;
+          return {
+            result: {
+              passed: false,
+              trajectorySha256: originmanReferenceDigest(trajectory),
+              framesExpected: trajectory.joint_pos.length,
+              framesEvaluated: 0,
+              firstFailedFrame: frame,
+              ...(result.stanceProfile && { stanceProfile: result.stanceProfile }),
+              limitViolation: result.violation,
+              failureLocation: failureLocation(frame),
+              message: `第 ${frame} 帧的 ${joint} 目标角度超出所选场景的执行器限位。`,
+            },
+          };
+        }
+        throw new ExperimentError('ORIGINMAN_REFERENCE_SCREEN_INVALID', result.invalid, 422);
+      }
+      return {
+        result: { ...result, failureLocation: failureLocation(result.firstFailedFrame ?? null) },
+      };
     }),
   );
   router.post(
@@ -154,7 +316,6 @@ export function registerSim2RealWorkshopRoutes(
     options.prefix + '/model-templates/originman',
     handle(async () => ({
       templates: [
-        { id: 'recovery', name: '受扰恢复', algorithm: 'SAC', manifest: originManManifest },
         { id: 'dance', name: '舞蹈编排', algorithm: 'PPO', manifest: originManDanceManifest },
       ],
     })),
@@ -172,6 +333,7 @@ export function registerSim2RealWorkshopRoutes(
   router.post(
     api(''),
     handle(async (r, owner) => {
+      requireActiveCourse();
       const b = r.body ?? {};
       const model = await getSim2RealModel(String(b.modelId ?? ''), owner);
       const resource = await getSim2RealComputeResource(String(b.computeResourceId ?? ''), owner);
@@ -188,28 +350,47 @@ export function registerSim2RealWorkshopRoutes(
           '课程模型或算力不属于当前账号。',
           404,
         );
-      return { session: await sessions.create(b, owner) };
+      return { session: await sessions.create(b, owner, courseEngine(resource.engines)) };
     }),
   );
   router.get(
     api('/setup'),
-    handle(async (_r, owner) => ({
-      accountId: owner ?? null,
-      resources: (await listSim2RealComputeResources(owner))
-        .filter((resource) => resource.source !== 'local-agent')
-        .map(({ id, name, status, engines, cuda, mock }) => ({
-          id,
-          name,
-          status,
-          ...(Array.isArray(engines) ? { engines } : {}),
-          ...(typeof cuda === 'boolean' ? { cuda } : {}),
-          ...(typeof mock === 'boolean' ? { mock } : {}),
-        })),
-    })),
+    handle(async (_r, owner) => {
+      requireActiveCourse();
+      return {
+        accountId: owner ?? null,
+        resources: (await listSim2RealComputeResources(owner, { refreshShared: true }))
+          .filter((resource) => resource.source !== 'local-agent')
+          .map(
+            ({
+              id,
+              name,
+              status,
+              engines,
+              cuda,
+              mock,
+              activeJobs,
+              queuedJobs,
+              maxConcurrentJobs,
+            }) => ({
+              id,
+              name,
+              status,
+              activeJobs,
+              queuedJobs,
+              maxConcurrentJobs,
+              ...(Array.isArray(engines) ? { engines } : {}),
+              ...(typeof cuda === 'boolean' ? { cuda } : {}),
+              ...(typeof mock === 'boolean' ? { mock } : {}),
+            }),
+          ),
+      };
+    }),
   );
   router.post(
     api('/setup'),
     handle(async (r, owner) => {
+      requireActiveCourse();
       const b = r.body ?? {};
       if (
         Object.keys(b).some((key) => !['accountId', 'computeResourceId'].includes(key)) ||
@@ -264,6 +445,7 @@ export function registerSim2RealWorkshopRoutes(
         session: await sessions.create(
           { modelId: model.id, computeResourceId: resource.id },
           owner,
+          courseEngine(resource.engines),
         ),
       };
     }),
@@ -301,9 +483,10 @@ export function registerSim2RealWorkshopRoutes(
   );
   router.post(
     api('/:contextId/continue'),
-    handle(async (r, owner) => ({
-      session: await sessions.continue(String(r.params.contextId), owner),
-    })),
+    handle(async (r, owner) => {
+      requireActiveCourse();
+      return { session: await sessions.continue(String(r.params.contextId), owner) };
+    }),
   );
   router.post(
     api('/:contextId/pause'),
@@ -313,13 +496,14 @@ export function registerSim2RealWorkshopRoutes(
   );
   router.post(
     api('/:contextId/claim/:phase'),
-    handle(async (r, owner) =>
-      sessions.claim(
+    handle(async (r, owner) => {
+      requireActiveCourse();
+      return sessions.claim(
         String(r.params.contextId),
         String(r.params.phase) as 'train' | 'evaluate',
         r.body,
         owner,
-      ),
-    ),
+      );
+    }),
   );
 }

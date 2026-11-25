@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -1144,6 +1145,46 @@ describe('Sim2Real telemetry retention', () => {
     const listed = await listSim2RealTelemetry(runId, 'alice', 10);
     expect(listed).toHaveLength(1);
     expect(listed[0]).toMatchObject({ sequence: 2, samples: [{ t: 2 }] });
+  });
+
+  it('acknowledges the committed chunk and resumes failed compaction on idempotent retry', async () => {
+    const root = await useTempStorage();
+    const { modelId, runId } = await seedRun('prune-io');
+    const append = (sequence: number) =>
+      appendSim2RealTelemetryWithResult(
+        {
+          runId,
+          modelId,
+          source: 'import',
+          sequence,
+          samples: [{ t: sequence }],
+          idempotencyKey: 'chunk-' + sequence,
+        },
+        'alice',
+      );
+    await append(0);
+    await ageRunTelemetry(root, runId, 30);
+    process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS = '1';
+    const rename = fs.rename;
+    const injected = vi.spyOn(fs, 'rename').mockImplementation(async (file, destination) => {
+      if (destination === telemetryShardFile(root, runId))
+        throw new Error('simulated disk failure');
+      await rename(file, destination);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(append(1)).resolves.toMatchObject({ duplicate: false });
+      await expect(readShardLines(root, runId)).resolves.toHaveLength(2);
+      await expect(listSim2RealTelemetry(runId, 'alice', 10)).resolves.toMatchObject([
+        { sequence: 1 },
+      ]);
+    } finally {
+      injected.mockRestore();
+      syncBuiltinESMExports();
+    }
+    invalidateSim2RealStoreCacheForTest();
+    await expect(append(1)).resolves.toMatchObject({ duplicate: true });
+    await expect(readShardLines(root, runId)).resolves.toHaveLength(1);
   });
 
   it('releases run sample quota before admitting a fresh chunk', async () => {

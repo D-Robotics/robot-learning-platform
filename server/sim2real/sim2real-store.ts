@@ -36,6 +36,8 @@ import {
 import { redactInternalError } from './http-helpers.js';
 import { validateRunForDeployment } from './release-evidence.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
+import { computeWorkerHealthPatch, probeComputeWorker } from './compute-worker-health.js';
+import { normalizeComputeRunnerUrl } from './robogo-runner.js';
 import { acquireStorageLease } from './storage-lease.js';
 
 const LEDGER_VERSION = 1 as const;
@@ -894,6 +896,7 @@ async function readTelemetryShard(
   runId: string,
   owner?: string,
   indexedIds?: ReadonlySet<string>,
+  onOrphan?: (record: TelemetryShardRecord) => void,
 ): Promise<TelemetryShardRecord[]> {
   const shard = telemetryShardPath(runId);
   if (!shard) return [];
@@ -913,7 +916,9 @@ async function readTelemetryShard(
     // the committed id set. The optional form preserves the low-level reader's
     // utility for migration/diagnostic callers that intentionally inspect all
     // lines.
-    if (record && (!indexedIds || indexedIds.has(record.id))) records.push(record);
+    if (!record) continue;
+    if (!indexedIds || indexedIds.has(record.id)) records.push(record);
+    else onOrphan?.(record);
   }
   return records;
 }
@@ -926,9 +931,8 @@ async function readTelemetryShard(
  * chunk). Shards are append-only NDJSON under the single-writer lease, so
  * (file stat, committed-index count) pins the exact visible row set: an
  * append, a retention prune or any index change moves at least one key part.
- * Retention-expired rows vary with wall-clock time rather than a write, so
- * the cache is only consulted while retention is disabled; the retention
- * path keeps the exact per-append recomputation.
+ * The run being appended is handled separately because its retention
+ * window may remove rows from the current transaction.
  */
 interface TelemetryShardUsage {
   shardSize: number;
@@ -2370,20 +2374,134 @@ export async function getSim2RealLineage(
   };
 }
 
+type SharedGpu = { resource: Sim2RealComputeResource; runnerToken: string };
+let sharedGpus = new Map<string, SharedGpu>();
+let sharedGpuSettings: Array<string | undefined> = [];
+
+function configuredSharedGpus(): ReadonlyMap<string, SharedGpu> {
+  const settings = [
+    process.env.RDK_SIM2REAL_SHARED_GPU_POOL_JSON,
+    process.env.RDK_SIM2REAL_SHARED_GPU_URL,
+    process.env.RDK_SIM2REAL_SHARED_GPU_TOKEN,
+    process.env.RDK_SIM2REAL_SHARED_GPU_NAME,
+  ];
+  if (settings.every((value, index) => value === sharedGpuSettings[index])) return sharedGpus;
+
+  const [poolJson, legacyUrl, legacyToken, legacyName] = settings;
+  const next = new Map<string, SharedGpu>();
+  const endpoints = new Set<string>();
+  function register(input: unknown, preserveLegacyId = false) {
+    if (!input || typeof input !== 'object' || next.size >= 32) return;
+    const { name, runnerUrl, runnerToken } = input as Record<string, unknown>;
+    if (
+      typeof name !== 'string' ||
+      !name.trim() ||
+      name.length > 120 ||
+      /[\u0000-\u001f\u007f]/.test(name) ||
+      typeof runnerUrl !== 'string' ||
+      typeof runnerToken !== 'string' ||
+      !/^[\x21-\x7e]{32,4096}$/.test(runnerToken.trim())
+    )
+      return;
+    let url: string;
+    try {
+      url = normalizeComputeRunnerUrl(runnerUrl.trim(), 'server-runner');
+    } catch {
+      return;
+    }
+    if (endpoints.has(url)) return;
+    endpoints.add(url);
+    // Preserve the ID already stored on runs that used the single-worker setting.
+    if (preserveLegacyId) url = runnerUrl.trim();
+    const id = 'c1a55-' + createHash('sha256').update(url).digest('hex').slice(0, 24);
+    const token = runnerToken.trim();
+    const previous = sharedGpus.get(id);
+    const now = new Date().toISOString();
+    const resource: Sim2RealComputeResource =
+      previous?.runnerToken === token
+        ? { ...previous.resource, name: name.trim() }
+        : {
+            id,
+            name: name.trim(),
+            kind: 'local-gpu',
+            source: 'server-runner',
+            runnerUrl: url,
+            status: 'unknown',
+            tokenConfigured: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+    next.set(id, { resource, runnerToken: token });
+  }
+  register(
+    { name: legacyName?.trim() || '课堂共享 GPU', runnerUrl: legacyUrl, runnerToken: legacyToken },
+    true,
+  );
+  if (poolJson) {
+    try {
+      const pool: unknown = JSON.parse(poolJson);
+      if (Array.isArray(pool)) for (const entry of pool.slice(0, 32)) register(entry);
+    } catch {
+      // An invalid pool configuration must not remove the legacy shared resource.
+    }
+  }
+
+  sharedGpuSettings = settings;
+  sharedGpus = next;
+  return sharedGpus;
+}
+
+const sharedGpuHealthChecks = new WeakMap<SharedGpu, Promise<void>>();
+const SHARED_GPU_HEALTH_TTL_MS = 5_000;
+
+async function refreshSharedGpuHealth() {
+  await Promise.all(
+    [...configuredSharedGpus().values()].map((shared) => {
+      const pending = sharedGpuHealthChecks.get(shared);
+      if (pending) return pending;
+      const resource = shared.resource;
+      const lastChecked = Date.parse(resource.lastCheckedAt ?? '');
+      if (Date.now() - lastChecked < SHARED_GPU_HEALTH_TTL_MS) return;
+      const checkedAt = new Date().toISOString();
+      const result = probeComputeWorker(resource.runnerUrl, shared.runnerToken)
+        .then((checked) => {
+          // A user may have actively tested this resource since this probe started.
+          if (shared.resource.lastCheckedAt !== resource.lastCheckedAt) return;
+          shared.resource = {
+            ...shared.resource,
+            ...computeWorkerHealthPatch(checked, checkedAt),
+            updatedAt: new Date().toISOString(),
+          };
+        })
+        .finally(() => sharedGpuHealthChecks.delete(shared));
+      sharedGpuHealthChecks.set(shared, result);
+      return result;
+    }),
+  );
+}
+
 export async function listSim2RealComputeResources(
   owner?: string,
+  options: { refreshShared?: boolean } = {},
 ): Promise<Sim2RealComputeResource[]> {
-  const ledger = await readLedger();
-  return (ledger.computeResources ?? [])
+  const [ledger] = await Promise.all([
+    readLedger(),
+    options.refreshShared ? refreshSharedGpuHealth() : undefined,
+  ]);
+  const shared = [...configuredSharedGpus().values()].map(({ resource }) => copy(resource));
+  const resources = (ledger.computeResources ?? [])
     .filter((item) => ownerMatches(item, owner))
     .slice(0, 100)
     .map((item) => copy(withoutComputeResourcePrivate(item)));
+  return [...shared, ...resources];
 }
 
 export async function getSim2RealComputeResource(
   id: string,
   owner?: string,
 ): Promise<Sim2RealComputeResource | null> {
+  const shared = configuredSharedGpus().get(id);
+  if (shared) return copy(shared.resource);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2395,6 +2513,8 @@ export async function getSim2RealComputeResourceSecret(
   id: string,
   owner?: string,
 ): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
+  const shared = configuredSharedGpus().get(id);
+  if (shared) return copy(shared);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2447,12 +2567,28 @@ export async function updateSim2RealComputeResource(
       | 'cuda'
       | 'vramMb'
       | 'maxConcurrentJobs'
+      | 'activeJobs'
+      | 'queuedJobs'
       | 'message'
       | 'lastCheckedAt'
     >
   > & { runnerToken?: string },
   owner?: string,
+  checked?: { runnerUrl: string; runnerToken: string; source?: string },
 ): Promise<Sim2RealComputeResource | null> {
+  const shared = configuredSharedGpus().get(id);
+  if (shared) {
+    // Only the server-side active probe supplies checked coordinates. A client PATCH
+    // cannot change the shared destination, credentials, or attest worker health.
+    if (
+      !checked ||
+      checked.runnerUrl !== shared.resource.runnerUrl ||
+      checked.runnerToken !== shared.runnerToken
+    )
+      return null;
+    shared.resource = { ...shared.resource, ...patch, updatedAt: new Date().toISOString() };
+    return copy(shared.resource);
+  }
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
@@ -2460,6 +2596,13 @@ export async function updateSim2RealComputeResource(
     const index = resources.findIndex((item) => item.id === id && ownerMatches(item, owner));
     if (index < 0) return null;
     const current = resources[index];
+    if (
+      checked &&
+      (checked.runnerUrl !== current.runnerUrl ||
+        checked.runnerToken !== (current.runnerToken ?? '') ||
+        checked.source !== current.source)
+    )
+      return null;
     const updated: StoredComputeResource = {
       ...current,
       ...copy(patch),
@@ -2626,7 +2769,16 @@ export async function listSim2RealRuns(owner?: string): Promise<Sim2RealRunRecor
 
 export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
   const ledger = await readLedger();
-  const statuses = { ready: 0, queued: 0, running: 0, completed: 0, blocked: 0, failed: 0 };
+  const statuses = {
+    cancelled: 0,
+    cancelling: 0,
+    ready: 0,
+    queued: 0,
+    running: 0,
+    completed: 0,
+    blocked: 0,
+    failed: 0,
+  };
   let runs = 0;
   let latest: StoredRun | undefined;
   for (const run of ledger.runs) {
@@ -2637,7 +2789,7 @@ export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
   }
   return {
     runs,
-    activeRuns: statuses.queued + statuses.running,
+    activeRuns: statuses.cancelling + statuses.queued + statuses.running,
     statuses,
     latest: latest ? copy(withoutRunPrivate(latest)) : undefined,
     registeredArtifacts: ledger.artifacts.filter((item) => ownerMatches(item, owner)).length,
@@ -2696,7 +2848,7 @@ export interface Sim2RealRunReservation {
 function isActiveRunnerRun(run: Pick<Sim2RealRunRecord, 'backend' | 'status'>): boolean {
   return (
     (run.backend === 'local' || run.backend === 'robogo') &&
-    (run.status === 'queued' || run.status === 'running')
+    ['queued', 'running', 'cancelling'].includes(run.status)
   );
 }
 
@@ -2714,7 +2866,11 @@ function isActiveRunnerRun(run: Pick<Sim2RealRunRecord, 'backend' | 'status'>): 
  */
 function isTerminalRunStatus(status: Sim2RealRunStatus): boolean {
   return (
-    status === 'ready' || status === 'completed' || status === 'blocked' || status === 'failed'
+    status === 'cancelled' ||
+    status === 'ready' ||
+    status === 'completed' ||
+    status === 'blocked' ||
+    status === 'failed'
   );
 }
 
@@ -2945,7 +3101,8 @@ export async function updateSim2RealRun(
     // terminal state, ignore a late active/other status update instead of
     // allowing stale observations to move it backwards in the lifecycle.
     if (
-      isTerminalRunStatus(current.status) &&
+      ((current.status === 'cancelling' && ['running', 'queued'].includes(patch.status ?? '')) ||
+        isTerminalRunStatus(current.status)) &&
       patch.status !== undefined &&
       patch.status !== current.status
     ) {
@@ -3063,15 +3220,28 @@ function relayArtifactPath(sha256: string): string | null {
 /**
  * Persist an uploaded relay artifact. The digest must already be the
  * server-computed hash of exactly these bytes (callers verify before calling
- * so a mismatch never reaches disk). Idempotent: a second upload of the same
- * content is a no-op.
+ * so a mismatch never reaches disk). Atomic publication keeps concurrent
+ * readers on complete copies during a retry.
  */
 export async function storeSim2RealRelayArtifact(sha256: string, bytes: Buffer): Promise<void> {
   const file = relayArtifactPath(sha256);
   if (!file) throw new Sim2RealError('sim2real_relay_artifact_digest_invalid');
   ensureWritable();
-  await fs.mkdir(relayArtifactDir(), { recursive: true });
-  await fs.writeFile(file, bytes, { mode: 0o600 });
+  const directory = path.dirname(file);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  const temporary = path.join(directory, `${randomUUID()}.tmp`);
+  try {
+    const handle = await fs.open(temporary, 'wx', 0o600);
+    try {
+      await handle.writeFile(bytes);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
 }
 
 /**
@@ -3346,6 +3516,33 @@ export async function appendSim2RealTelemetryWithResult(
   ensureWritable();
   return serialized(async () => {
     const ledger = await readLedger();
+    const retentionDays = sim2RealTelemetryRetentionDays();
+    const cutoffMs = Date.now() - retentionDays * MS_PER_DAY;
+    const expiredOrphanIds = new Set<string>();
+    let runShard: Promise<TelemetryShardRecord[]> | undefined;
+    const readRunShard = () =>
+      (runShard ??= readTelemetryShard(
+        input.runId,
+        owner,
+        committedTelemetryIds(ledger, input.runId, owner),
+        retentionDays > 0
+          ? (row) => {
+              if (Date.parse(row.receivedAt) < cutoffMs) expiredOrphanIds.add(row.id);
+            }
+          : undefined,
+      ));
+    const compactShard = async (removedIds: ReadonlySet<string>) => {
+      const shard = removedIds.size ? telemetryShardPath(input.runId) : null;
+      if (!shard) return;
+      try {
+        await acquireStorageLease(path.dirname(ledgerPath()));
+        await rewriteTelemetryShardWithout(shard, removedIds);
+      } catch (error) {
+        // The committed index already hides these rows. Their timestamps let
+        // the next ingest or idempotent retry rediscover them after restart.
+        console.warn('[sim2real] telemetry compaction deferred:', redactInternalError(error));
+      }
+    };
     const requestFingerprint = input._requestFingerprint || telemetryRequestFingerprint(input);
     const contentFingerprint = telemetryContentFingerprint(input);
     if (input.idempotencyKey) {
@@ -3363,13 +3560,8 @@ export async function appendSim2RealTelemetryWithResult(
         ) {
           throw new Sim2RealError('sim2real_telemetry_idempotency_conflict');
         }
-        const full = (
-          await readTelemetryShard(
-            input.runId,
-            owner,
-            committedTelemetryIds(ledger, input.runId, owner),
-          )
-        ).find((item) => item.id === existing.id);
+        const full = (await readRunShard()).find((item) => item.id === existing.id);
+        await compactShard(expiredOrphanIds);
         const resolved = full ?? existing;
         return {
           telemetry: copy(withoutTelemetryPrivate(resolved as StoredTelemetry)),
@@ -3396,17 +3588,12 @@ export async function appendSim2RealTelemetryWithResult(
           item.attested === true,
       );
       if (sameSequence) {
-        const full = (
-          await readTelemetryShard(
-            input.runId,
-            owner,
-            committedTelemetryIds(ledger, input.runId, owner),
-          )
-        ).find((item) => item.id === sameSequence.id);
+        const full = (await readRunShard()).find((item) => item.id === sameSequence.id);
         const existingContent =
           sameSequence._contentFingerprint ||
           (full ? telemetryContentFingerprint(full) : undefined);
         if (existingContent === contentFingerprint) {
+          await compactShard(expiredOrphanIds);
           const resolved = full ?? sameSequence;
           return {
             telemetry: copy(withoutTelemetryPrivate(resolved as StoredTelemetry)),
@@ -3425,70 +3612,44 @@ export async function appendSim2RealTelemetryWithResult(
       ...(requestFingerprint ? { _requestFingerprint: requestFingerprint } : {}),
       ...(contentFingerprint ? { _contentFingerprint: contentFingerprint } : {}),
     };
-    // Retention is evaluated before quota accounting.  Otherwise rows that
-    // are about to be removed from this run still consume the owner/run byte
-    // and sample budgets, making an enabled retention policy unable to free
-    // capacity.  Physical pruning remains scoped to the run being appended;
-    // untouched historical runs are reclaimed on their next append (or by the
-    // explicit storage maintenance job).
-    const retentionDays = sim2RealTelemetryRetentionDays();
     const expiredIndexIds =
       retentionDays > 0
-        ? expiredTelemetryIndexIds(
-            ledger,
-            input.runId,
-            owner,
-            Date.now() - retentionDays * MS_PER_DAY,
-          )
+        ? expiredTelemetryIndexIds(ledger, input.runId, owner, cutoffMs)
         : new Set<string>();
-
-    // Quota and timeline checks run over the full chunk history (shard plus
-    // legacy inline rows), not the sample-stripped index rows. Rows selected
-    // for this append's retention prune are excluded from both checks. The
-    // owner-wide pass only feeds the sample/byte quota, so while retention is
-    // disabled the shard-backed share goes through the per-run usage cache
-    // instead of re-reading every shard of every run on each append.
-    const runHistory = (await loadRunTelemetry(input.runId, owner)).filter(
-      (item) => !expiredIndexIds.has(item.id),
-    );
-    const ownerUsageAccumulated = { samples: 0, bytes: 0 };
-    const loadedShardRuns = new Set<string>();
+    const runHistory = (await readRunShard()).filter((item) => !expiredIndexIds.has(item.id));
+    const ownerShardIds = new Map<string, Set<string>>();
+    const otherInline: StoredTelemetry[] = [];
     for (const item of ledger.telemetry) {
       if (!ownerMatches(item, owner)) continue;
-      // Inline rows and shard-backed rows can coexist for a run after an
-      // upgrade/import. Count each inline row, while loading that run's shard
-      // exactly once even when the first index row still carries samples.
-      if (Array.isArray(item.samples) && item.samples.length && !expiredIndexIds.has(item.id)) {
-        const inlineUsage = telemetryUsage([item as unknown as StoredTelemetry]);
-        ownerUsageAccumulated.samples += inlineUsage.samples;
-        ownerUsageAccumulated.bytes += inlineUsage.bytes;
+      if (item.runId === input.runId) {
+        if (Array.isArray(item.samples)) runHistory.push(item as TelemetryShardRecord);
+        continue;
       }
-      if (!loadedShardRuns.has(item.runId)) {
-        loadedShardRuns.add(item.runId);
-        const committed = committedTelemetryIds(ledger, item.runId, owner);
-        const usage =
-          retentionDays === 0
-            ? await telemetryShardUsage(item.runId, owner, committed)
-            : telemetryUsage(
-                (await readTelemetryShard(item.runId, owner, committed)).filter(
-                  (shardItem) =>
-                    ownerMatches(shardItem, owner) && !expiredIndexIds.has(shardItem.id),
-                ),
-              );
-        ownerUsageAccumulated.samples += usage.samples;
-        ownerUsageAccumulated.bytes += usage.bytes;
+      if (Array.isArray(item.samples)) otherInline.push(item);
+      let ids = ownerShardIds.get(item.runId);
+      if (!ids) {
+        ids = new Set();
+        ownerShardIds.set(item.runId, ids);
       }
+      ids.add(item.id);
     }
-    assertTelemetryTimeline(runHistory as unknown as StoredTelemetry[], record, owner);
+    assertTelemetryTimeline(runHistory, record, owner);
     const incomingUsage = telemetryUsage([record]);
-    const runUsage = telemetryUsage(runHistory as unknown as StoredTelemetry[]);
+    const runUsage = telemetryUsage(runHistory);
     if (
       runUsage.samples + incomingUsage.samples > SIM2REAL_TELEMETRY_LIMITS.runSamples ||
       runUsage.bytes + incomingUsage.bytes > SIM2REAL_TELEMETRY_LIMITS.runBytes
     ) {
       throw new Sim2RealError('sim2real_telemetry_quota_exceeded');
     }
-    const ownerUsage = ownerUsageAccumulated;
+    const ownerUsage = telemetryUsage(otherInline);
+    ownerUsage.samples += runUsage.samples;
+    ownerUsage.bytes += runUsage.bytes;
+    for (const [runId, ids] of ownerShardIds) {
+      const usage = await telemetryShardUsage(runId, owner, ids);
+      ownerUsage.samples += usage.samples;
+      ownerUsage.bytes += usage.bytes;
+    }
     if (
       ownerUsage.samples + incomingUsage.samples > SIM2REAL_TELEMETRY_LIMITS.ownerSamples ||
       ownerUsage.bytes + incomingUsage.bytes > SIM2REAL_TELEMETRY_LIMITS.ownerBytes
@@ -3544,14 +3705,9 @@ export async function appendSim2RealTelemetryWithResult(
       evaluations,
       telemetry: [indexRow as StoredTelemetry, ...retainedIndexRows],
     });
-    // The shard is rewritten after the index rows are durable. A crash in
-    // between leaves expired lines the ledger no longer indexes (a read may
-    // still merge them until the next successful prune), never an index row
-    // whose samples no longer exist anywhere.
-    if (expiredIndexIds.size) {
-      const shard = telemetryShardPath(record.runId);
-      if (shard) await rewriteTelemetryShardWithout(shard, expiredIndexIds);
-    }
+    // The durable index is the commit point. Compaction only removes rows
+    // outside that index and can be retried independently.
+    await compactShard(new Set([...expiredIndexIds, ...expiredOrphanIds]));
     void emitSim2RealEvent(
       'telemetry.appended',
       record.runId,

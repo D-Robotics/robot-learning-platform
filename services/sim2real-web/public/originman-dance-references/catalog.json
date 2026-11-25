@@ -1,0 +1,177 @@
+{
+  "schemaVersion": 1,
+  "robot": "originman",
+  "simulationOnly": true,
+  "references": [
+    {
+      "type": "alternating-arms",
+      "name": "交替摆臂",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "alternating-arms/policy.onnx",
+      "video": "alternating-arms/replay.mp4",
+      "verification": "alternating-arms/verification.json",
+      "policySha256": "57cdbb65abe1bbd3bf6962a8bf89600d1b29a568739c5bb0a66ddbb651f31fb1",
+      "videoSha256": "adcaf93fa3d99df37abeb060644b904e45c0bac173ef4909a5e277a9e50a09f2"
+    },
+    {
+      "type": "weight-shift",
+      "name": "左右换重心",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "weight-shift/policy.onnx",
+      "video": "weight-shift/replay.mp4",
+      "verification": "weight-shift/verification.json",
+      "policySha256": "9323e9c2663d72a06d4efd2b5ce1b9c3a616def8cf0d19f8bb0e89dcff98e4d9",
+      "videoSha256": "f08c5aeaa00d291680967e5fa9886eaad9207cee40da2bd7df308ab870eb9266"
+    },
+    {
+      "type": "squat-rise",
+      "name": "下蹲起身",
+      "beats": 4,
+      "bpm": 95.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        90.25,
+        95.0,
+        99.75
+      ],
+      "policy": "squat-rise/policy.onnx",
+      "video": "squat-rise/replay.mp4",
+      "verification": "squat-rise/verification.json",
+      "policySha256": "9da70bf62416575acb232cb0709d4c03ebe93f0b3fd8c7d12ea4ae54b844940a",
+      "videoSha256": "e848396d960dd83a6a58ed6af5ca460a6f1608a031db66b10615c2c0342f0de6"
+    },
+    {
+      "type": "open-pose",
+      "name": "展开定格",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "open-pose/policy.onnx",
+      "video": "open-pose/replay.mp4",
+      "verification": "open-pose/verification.json",
+      "policySha256": "409c5e454a01d3407c5fed5ed8919c9011ba8eed512aafce14ea06b3e334f9d8",
+      "videoSha256": "df03f408730926540922bb32246395479ca00fcfc485d67a6d1213567215cbfb"
+    },
+    {
+      "type": "single-arm-wave",
+      "name": "单臂挥手",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "single-arm-wave/policy.onnx",
+      "video": "single-arm-wave/replay.mp4",
+      "verification": "single-arm-wave/verification.json",
+      "policySha256": "0bedec9f3de9535d2e2a7364d48c1ee5ce0f5162f566974623fac88db8be1717",
+      "videoSha256": "92ce063d71715bf16015ff8bd8ea7c70d46b73f9fe61b4e669338cab54d9aaf1"
+    },
+    {
+      "type": "arms-overhead",
+      "name": "双臂上举",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "arms-overhead/policy.onnx",
+      "video": "arms-overhead/replay.mp4",
+      "verification": "arms-overhead/verification.json",
+      "policySha256": "d7bbd1fca72aa303b6b6ec6c0240070037cbc57aa7d1e68b7a17c47fc3ffe294",
+      "videoSha256": "3543904f532f2109623109aca01cec57bd776591d2b3e0d29c43719051a8f6d3"
+    },
+    {
+      "type": "cross-and-open",
+      "name": "胸前交叉展开",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "cross-and-open/policy.onnx",
+      "video": "cross-and-open/replay.mp4",
+      "verification": "cross-and-open/verification.json",
+      "policySha256": "a8ea7961a0c2b41835a919a5f95d8dc97b2c2ba332ef5126c19f0486b9259aec",
+      "videoSha256": "0e752a8288dab76e34fe4db57d3359a03492875951b7cbad386cb8d9e6f1fa19"
+    },
+    {
+      "type": "side-lean",
+      "name": "左右侧身",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.6,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "side-lean/policy.onnx",
+      "video": "side-lean/replay.mp4",
+      "verification": "side-lean/verification.json",
+      "policySha256": "e76fa09df93931658a4097869d4c3be2a4f998dcba0ffc78c184fd9875b021c0",
+      "videoSha256": "b3035d3253be97b960fa388b22f855de7470ca94091b1c3ac521d29989955e28"
+    },
+    {
+      "type": "alternating-knee-lift",
+      "name": "交替抬膝",
+      "beats": 4,
+      "bpm": 105,
+      "intensity": 0.25,
+      "passedBpms": [
+        99.75,
+        105.0,
+        110.25
+      ],
+      "policy": "alternating-knee-lift/policy.onnx",
+      "video": "alternating-knee-lift/replay.mp4",
+      "verification": "alternating-knee-lift/verification.json",
+      "policySha256": "4ba540430c37fd804b30baa80519373e99b820f2a885c6878442b7f60ce5a51a",
+      "videoSha256": "b26a72470646258529b51ad0ce35caf7db7f1d7fe131a324158ecb5fcb8e4b9d"
+    },
+    {
+      "type": "side-tap",
+      "name": "侧点步收回",
+      "beats": 4,
+      "bpm": 100.0,
+      "intensity": 0.25,
+      "passedBpms": [
+        95.0,
+        100.0,
+        105.0
+      ],
+      "policy": "side-tap/policy.onnx",
+      "video": "side-tap/replay.mp4",
+      "verification": "side-tap/verification.json",
+      "policySha256": "8711a3b1a837d422134a0cd0e81570fbaf4b5c432f706d9d938b40014a33330a",
+      "videoSha256": "9ff2df740d43eff01f13e38a2f71b263ce144727d9eb34cf87e3ebd15a754d63"
+    }
+  ]
+}

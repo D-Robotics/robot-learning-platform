@@ -6,7 +6,9 @@ export const ORIGINMAN_REFERENCE_ENGINE = 'originman-reference-ppo';
 export const ORIGINMAN_REFERENCE_CONTRACT = 'custom-policy-originman-reference-v1';
 export const ORIGINMAN_REFERENCE_JOINTS = originmanReferenceCalibration.robot.jointOrder;
 const { fps, maxAbsRad, maxSpeedRadPerS } = originmanReferenceCalibration.trajectory;
+const ROUNDING_TOLERANCE = 1e-4;
 export const ORIGINMAN_REFERENCE_MAX_FRAMES = 12_000;
+export const ORIGINMAN_SOURCE_STANCE = 'source-neutral-v1';
 
 export interface OriginmanReferenceTrajectory {
   schemaVersion: 1;
@@ -14,6 +16,21 @@ export interface OriginmanReferenceTrajectory {
   joint_names: string[];
   joint_pos: number[][];
   joint_vel: number[][];
+}
+
+export interface OriginmanMotionProvenance {
+  source: string;
+  displayName: string;
+  blocks: { id: string; repeats: number; sha256: string }[];
+  ranges: { id: string; from: number; to: number }[];
+  transitionSeconds?: number;
+  referenceAssetSha256?: string;
+  referenceMode?: 'source-exact' | 'timing-preserved';
+  stanceProfile?: typeof ORIGINMAN_SOURCE_STANCE;
+  sourceSha256?: string;
+  bpm: number;
+  trajectorySha256: string;
+  trajectoryDigestVersion?: 'originman-reference-f64be-v1';
 }
 
 export interface OriginmanReferenceTraining {
@@ -26,7 +43,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-export function validateOriginmanReferenceTrajectory(value: unknown): OriginmanReferenceTrajectory {
+export function validateOriginmanReferenceTrajectory(
+  value: unknown,
+  purpose: 'training' | 'motion-block' = 'training',
+): OriginmanReferenceTrajectory {
+  const minimumFrames = purpose === 'motion-block' ? 2 : 50;
   if (!isRecord(value) || value.schemaVersion !== 1 || value.fps !== fps)
     throw Error('参考轨迹须使用 schemaVersion 1，采样频率为 50 Hz。');
   const names = value.joint_names;
@@ -40,20 +61,27 @@ export function validateOriginmanReferenceTrajectory(value: unknown): OriginmanR
   const velocities = value.joint_vel;
   if (
     !Array.isArray(poses) ||
-    poses.length < 50 ||
+    poses.length < minimumFrames ||
     poses.length > ORIGINMAN_REFERENCE_MAX_FRAMES ||
     !Array.isArray(velocities) ||
     velocities.length !== poses.length
   )
-    throw Error('joint_pos 和 joint_vel 须同长，包含 50–12,000 帧（1–240 秒）。');
+    throw Error(
+      purpose === 'motion-block'
+        ? '动作块的 joint_pos 和 joint_vel 须同长，至少包含两帧。'
+        : 'joint_pos 和 joint_vel 须同长，包含 50–12,000 帧（1–240 秒）。',
+    );
   function verifyRows(rows: unknown[], limit: number, field: string): number[][] {
     return rows.map((frame, index) => {
-      if (
-        !Array.isArray(frame) ||
-        frame.length !== ORIGINMAN_REFERENCE_JOINTS.length ||
-        frame.some((n) => typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > limit)
-      )
-        throw Error(`${field} 第 ${index + 1} 帧须包含 20 个有限数，绝对值不超过 ${limit}。`);
+      if (!Array.isArray(frame) || frame.length !== ORIGINMAN_REFERENCE_JOINTS.length)
+        throw Error(`${field} 第 ${index + 1} 帧须包含 20 个数。`);
+      const invalid = frame.findIndex(
+        (n) => typeof n !== 'number' || !Number.isFinite(n) || Math.abs(n) > limit,
+      );
+      if (invalid >= 0)
+        throw Error(
+          `${field} 第 ${index + 1} 帧的 ${ORIGINMAN_REFERENCE_JOINTS[invalid]} 须为有限数，绝对值不超过 ${limit}。`,
+        );
       if (frame[0] !== 0 || frame[1] !== 0)
         throw Error(`${field} 第 ${index + 1} 帧的两个头部通道须为 0。`);
       return frame;
@@ -62,12 +90,16 @@ export function validateOriginmanReferenceTrajectory(value: unknown): OriginmanR
   const joint_pos = verifyRows(poses, maxAbsRad, 'joint_pos（相对站姿的弧度）');
   const joint_vel = verifyRows(velocities, maxSpeedRadPerS, 'joint_vel（弧度/秒）');
   for (let i = 1; i < joint_pos.length; i++) {
-    if (
-      joint_pos[i].some((p, j) => Math.abs(p - joint_pos[i - 1][j]) * fps > maxSpeedRadPerS + 1e-4)
-    )
-      throw Error(`joint_pos 第 ${i + 1} 帧与上一帧之间超过每秒 ${maxSpeedRadPerS} 弧度。`);
+    const joint = joint_pos[i].findIndex(
+      (p, j) => Math.abs(p - joint_pos[i - 1][j]) * fps > maxSpeedRadPerS + ROUNDING_TOLERANCE,
+    );
+    if (joint >= 0)
+      throw Error(
+        `joint_pos 第 ${i + 1} 帧的 ${ORIGINMAN_REFERENCE_JOINTS[joint]} 与上一帧之间超过每秒 ${maxSpeedRadPerS} 弧度。`,
+      );
   }
   if (
+    purpose === 'training' &&
     !joint_pos.some((frame) =>
       frame.some((position, joint) => Math.abs(position - joint_pos[0][joint]) >= 0.05),
     )

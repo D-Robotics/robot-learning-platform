@@ -1,0 +1,117 @@
+{
+  "action": "squat-rise",
+  "simulationOnly": true,
+  "method": "optimization in MuJoCo followed by phase-table ONNX export",
+  "contractId": "custom-policy-originman-dance-v2",
+  "config": {
+    "schemaVersion": 1,
+    "title": "squat-rise",
+    "bpm": 95.0,
+    "seed": 7,
+    "trainingSteps": 8192,
+    "sections": [
+      {
+        "type": "squat-rise",
+        "beats": 4,
+        "intensity": 0.6
+      }
+    ]
+  },
+  "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+  "policySha256": "9da70bf62416575acb232cb0709d4c03ebe93f0b3fd8c7d12ea4ae54b844940a",
+  "replaySha256": "678b7865eceb3ea434b71c6f4fd97deb1101a2c8be624cc493b8cb3fddb704a8",
+  "evaluations": [
+    {
+      "bpm": 90.25,
+      "completed": true,
+      "failed": false,
+      "reward": 160.06399956880313,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "squat-rise",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "heightRangeM": 0.03068321378904701,
+          "riseAndDipCorrelation": 0.9551164900579006,
+          "squatDescentM": 0.02566589184392326,
+          "squatAscentM": 0.026082899175638635,
+          "armSweepM": 0.06391825021030133
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 30.854612634771783,
+      "fallContacts": [],
+      "steps": 133
+    },
+    {
+      "bpm": 95.0,
+      "completed": true,
+      "failed": false,
+      "reward": 152.90190329168252,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "squat-rise",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "heightRangeM": 0.030754876664307818,
+          "riseAndDipCorrelation": 0.9537879035356749,
+          "squatDescentM": 0.02550211625492288,
+          "squatAscentM": 0.02600009876765097,
+          "armSweepM": 0.06393325987594231
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 30.916409246688925,
+      "fallContacts": [],
+      "steps": 127
+    },
+    {
+      "bpm": 99.75,
+      "completed": true,
+      "failed": false,
+      "reward": 145.32849646945127,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "squat-rise",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "heightRangeM": 0.03064683000189944,
+          "riseAndDipCorrelation": 0.9529124693014704,
+          "squatDescentM": 0.025468088501276298,
+          "squatAscentM": 0.025976979029877778,
+          "armSweepM": 0.06394423075076967
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 30.868778911199346,
+      "fallContacts": [],
+      "steps": 121
+    }
+  ],
+  "videoReceipt": {
+    "source": "recorded-simulation-qpos",
+    "physicalRobot": false,
+    "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+    "replaySha256": "678b7865eceb3ea434b71c6f4fd97deb1101a2c8be624cc493b8cb3fddb704a8",
+    "videoSha256": "e848396d960dd83a6a58ed6af5ca460a6f1608a031db66b10615c2c0342f0de6",
+    "frames": 128,
+    "fps": 50,
+    "durationSeconds": 2.56,
+    "renderSettings": {
+      "cameraAzimuth": 135,
+      "cameraElevation": -12,
+      "cameraDistance": 1.25,
+      "headlightAmbient": 0.4,
+      "headlightDiffuse": 0.8
+    }
+  }
+}

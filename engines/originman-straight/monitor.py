@@ -14,6 +14,8 @@ from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
 
+REUSED_ACTOR_SOURCE = Path(__file__).resolve().parent.parent / "microduck-football/train_football.py"
+
 
 def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -132,9 +134,8 @@ class RunRecorder:
         for p in sorted(source.glob("*.py")):
             shutil.copyfile(p, snapshots / p.name)
             hashes[p.name] = digest(p)
-        reused = source.parent / "microduck-football/train_football.py"
-        shutil.copyfile(reused, snapshots / "reused-actor.py")
-        hashes["reused-actor.py"] = digest(reused)
+        shutil.copyfile(REUSED_ACTOR_SOURCE, snapshots / "reused-actor.py")
+        hashes["reused-actor.py"] = digest(REUSED_ACTOR_SOURCE)
         manifest = Path(scene).parent / "model-manifest.json"
         model = json.loads(manifest.read_text()) if manifest.exists() else {}
         # Source/assets are fingerprinted before any environment or update runs.

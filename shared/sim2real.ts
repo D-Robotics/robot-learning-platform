@@ -2,6 +2,7 @@ import {
   ORIGINMAN_REFERENCE_ENGINE,
   validateOriginmanReferenceTraining,
   type OriginmanReferenceTraining,
+  type OriginmanMotionProvenance,
 } from './originman-reference-training.js';
 import type {
   ModelArtifactDescriptor,
@@ -275,8 +276,16 @@ export interface Sim2RealTrainingSpec {
   syntheticSmoke?: boolean;
   originmanDance?: OriginmanDanceTraining;
   originmanReference?: OriginmanReferenceTraining;
+  /** Platform-generated snapshot of the selected choreography. */
+  originmanReferenceComposition?: OriginmanMotionProvenance;
   /** Only the trajectory metadata is retained in the platform run ledger. */
-  originmanReferenceSummary?: { trainingSteps: number; seed: number; frames: number; fps: 50 };
+  originmanReferenceSummary?: {
+    trainingSteps: number;
+    seed: number;
+    frames: number;
+    fps: 50;
+    trajectorySha256?: string;
+  };
 }
 
 /** Server-resolved, digest-pinned imitation input; never a client file path. */
@@ -436,7 +445,8 @@ export interface Sim2RealCompatibilityView {
   artifactWorkload?: ModelArtifactWorkload;
 }
 
-export type Sim2RealRunStatus = 'ready' | 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
+export type Sim2RealRunStatus =
+  'cancelled' | 'cancelling' | 'ready' | 'queued' | 'running' | 'completed' | 'blocked' | 'failed';
 
 export interface Sim2RealRunRecord {
   id: string;
@@ -787,6 +797,9 @@ export interface Sim2RealComputeResource {
   cuda?: boolean;
   vramMb?: number;
   maxConcurrentJobs?: number;
+  /** Aggregate counts from the last server-side health check. */
+  activeJobs?: number;
+  queuedJobs?: number;
   message?: string;
   lastCheckedAt?: string;
   createdAt: string;

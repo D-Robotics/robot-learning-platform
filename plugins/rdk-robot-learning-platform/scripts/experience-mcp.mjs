@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import {
+  ORIGINMAN_MOTION_TOOLS,
+  isReferenceDance,
+  validateReferenceDance,
+  trainReferenceDance,
+} from './originman-motion.mjs';
 /** Add read-only experience composition while preserving the installed upstream MCP. */
 import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -19,7 +25,7 @@ import {
   prepareTraining,
   readOriginmanEvaluation,
 } from './workflow-inspection.mjs';
-import { enrichToolError } from './plugin-errors.mjs';
+import { enrichToolError, workshopEvidenceMessage } from './plugin-errors.mjs';
 import { AUTH_TOOLS } from './plugin-auth.mjs';
 import { SHORT_TRAINING_TOOLS, shortTraining } from './short-training.mjs';
 import { EXPERIMENT_TOOLS, experimentContext } from './experiment-context.mjs';
@@ -42,10 +48,7 @@ import {
   learningGuide,
   validateLearningGuideArgs,
   trainingChoice,
-  ORIGINMAN_COURSE,
-  ORIGINMAN_COURSE_INSTRUCTIONS,
   courseToolHint,
-  courseLinks,
   sectionTitles,
 } from './workshop-course.mjs';
 
@@ -312,6 +315,8 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
   let learningEvidence;
   let nextStep;
   let studentReply = payload.studentReply || `本轮训练${status}。`;
+  const evidenceMessage = workshopEvidenceMessage(payload.run?.workshopEvidenceIssue);
+  if (evidenceMessage) studentReply += evidenceMessage;
   const device = metrics?.trainingDevice;
   if (typeof device === 'string' && /^(cpu|mps|cuda(:[0-9]{1,3})?)$/.test(device)) {
     const deviceName = metrics.trainingDeviceName;
@@ -499,6 +504,7 @@ const loadedSources = Object.fromEntries(
     'submission-journal.mjs',
     'workshop-course.mjs',
     'originman-dance-config.mjs',
+    'originman-motion.mjs',
     'dance-coaching.mjs',
     'dance-training.mjs',
     'dance-evaluation.mjs',
@@ -608,10 +614,14 @@ const ORIGINMAN_REFERENCE_TOOL = {
   name: 'rdk_originman_reference_track',
   title: 'OriginMan · 参考轨迹跟跳',
   description:
-    '在 Studio 右侧打开独立跟跳任务。支持导入 50 Hz NPZ/JSON、校验、仿真训练、评测、回放和 ONNX 下载。查看已有结果时传完整 Run ID 或至少 8 位前缀，唯一匹配才打开。',
+    '在 Studio 右侧打开跟跳任务。mode 可直达预置舞蹈（preset）、动作组自由编排（blocks）或导入 50 Hz NPZ/JSON（upload，默认）。查看已有评测与回放时仅传完整 Run ID 或至少 8 位前缀。',
   inputSchema: {
     type: 'object',
-    properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
+    properties: {
+      runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' },
+      mode: { type: 'string', enum: ['preset', 'blocks', 'upload'] },
+    },
+    not: { required: ['runId', 'mode'] },
     additionalProperties: false,
   },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
@@ -637,6 +647,7 @@ export const EXPERIENCE_TOOLS = [
   LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
   ORIGINMAN_REFERENCE_TOOL,
+  ...ORIGINMAN_MOTION_TOOLS,
   DANCE_ITERATION_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
@@ -648,7 +659,6 @@ export const EXPERIENCE_TOOLS = [
   ...CLASSROOM_TOOLS,
   ...ROBOT_ONBOARDING_TOOLS,
   ...AUTH_TOOLS,
-  ...SHORT_TRAINING_TOOLS,
   {
     name: 'rdk_training_wait',
     title: '查看已有训练 Run 的留存、下载和回放',
@@ -777,6 +787,9 @@ export function experienceProxy(
     if (
       upstream.readTrainingRun &&
       (!payload.run?.artifact?.sha256 ||
+        ((payload.run?.taskId ?? payload.taskId) === 'originman-recovery' &&
+          !payload.run?.metrics?.originmanWorkshop &&
+          !payload.run?.workshopEvidenceIssue) ||
         ((payload.run?.taskId ?? payload.taskId) === REFERENCE_TRACKING_TASK &&
           !payload.run?.metrics?.originmanReference))
     ) {
@@ -1086,7 +1099,7 @@ export function experienceProxy(
         platformCode: 'WORKSHOP_FLOW_STOPPED',
         message: '本次短训流程已受阻或已绑定原Run，不接受换标识、换资源或改用通用提交工具重交。',
         nextAction:
-          '保留原Run，只读查看状态和原因。新实验须由用户明确开始新任务；当前任务立即结束。',
+          '查看原 Run 可使用 rdk_training_status。开始新实验时调用 rdk_workshop 打开舞蹈 Workshop。',
       },
     };
     return {
@@ -1331,11 +1344,11 @@ export function experienceProxy(
           : {}),
         instructions:
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
-          '\n用户明确提到 OriginMan「参考轨迹跟跳」、导入 NPZ、跟跳的标定或原 Run 回放时调用 rdk_originman_reference_track。在 Studio 中先从当前工具目录用 load_tools query 查找，并调用实际返回的完整工具名。查结果传原 runId，按 studioNavigation 打开 Studio 右侧。查询只读。' +
+          '\n用户明确提到 OriginMan「参考轨迹跟跳」、导入 NPZ、跟跳的标定或原 Run 回放时调用 rdk_originman_reference_track。在 Studio 中先从当前工具目录用 load_tools query 查找，并调用实际返回的完整工具名。选整舞传 mode=preset，自由编排传 mode=blocks，导入传 mode=upload。查结果传原 runId，按 studioNavigation 打开 Studio 右侧。查询只读。' +
           '\n查询已知 Run 的留存、归档、ONNX/策略下载、制品可用性或已有回放时，第一步调用 rdk_training_status，传原 runId，展示 artifactRetention、links.policyDownload 和已核验的 links.replay。用户追问刚才那条 Run 时，在当前轮按需登记后重新查询，不用历史回执代替实时读取。只有用户明确要求等待正在运行的任务时才用 rdk_training_wait。已有结果查询不调用独立评测、验收、训练或渲染工具。\n' +
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
-          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。明确受扰恢复时增加 course:"recovery"。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
+          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n' +
@@ -1349,23 +1362,23 @@ export function experienceProxy(
           '\n用户要上传、下载或管理托管数据集时，调用 rdk_learning_guide({intent:"start",task:"datasets"})，展示证据与记录入口。上传走「上传数据集」，下载走数据集详情中的「下载托管文件」。rdk_dataset_register 只登记元数据。' +
           '\n' +
           STUDIO_WORKSHOP_NAVIGATION +
-          ' 已明确选择受扰恢复 Workshop 时用 rdk_workshop 传 course:"recovery"。预算由页面确认。纯咨询用课程说明。' +
+          ' 新 Workshop 只走舞蹈入口。预算由页面确认。纯咨询用课程说明。' +
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
-          '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new、当前课程和computeResourceId。未指定课程的新 Workshop 默认舞蹈；仅用户明确受扰恢复时传recovery。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
-          '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。舞蹈继续/看看效果只查询原Run。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
+          '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new、当前课程和computeResourceId。新 Workshop 使用舞蹈；仅用户明确受扰恢复时传recovery。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
+          '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；执行已确认的舞蹈方案，并按本轮 Run 展示结果。继续或查看原舞蹈结果，用 rdk_workshop 传 intent:continue 或 results 和原 runId。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
-          '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。已选择恢复课程后用rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
+          '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。使用rdk_workshop打开舞蹈工作台，在页面选择预算；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
           '\n等待：沿用同一Run及nextPollArguments，正常等待窗口结束继续读；不启动shell sleep。失败或stopWorkflow=true停止所有自动提交，不换标识、资源或参数重交；仍可只读查询原Run、日志及恢复已有引用。SUBMISSION_REFERENCE_SAVE_FAILED表示任务已经提交，保留回执并恢复，绝不能说尚未提交。' +
           '\n实验接续：通用流程提交后用明确contextId保存训练及同源评测引用；专用短训工具已保存，无需重复。跨聊天或软件继续时使用明确实验标识调用experiment_resume，并重新验证当前平台和账号；不选择全局最新Run，不扫描其他账号。本机引用不等于跨机器同步。404、网络失败和断线不触发重交。新实验使用新contextId，调参须用户明确提出。' +
           '\n找不到原实验引用时，用rdk_learning_guide的intent:results列出近期记录，展示工具给出的可点击名称、时间和状态，请用户选一次。舞蹈失败先给确切段号和检查项，再给本轮详情链接。用户只改一段时用sectionEdits，按studentReply和unchangedSections回显。用户问算力离线后怎么做时，沿用已有编舞和预算调用rdk_learning_guide，展示返回的算力或执行资源链接；无需重复整理草案。选择算力或改参预览不代表用户已确认提交。' +
           '\n结果：只展示本次Run的真实original/tuned/rl对比；执行完成、质量提升和真机资格分别判断，短训不承诺提升。提交、等待或状态查询新Run后立刻按回执的qoderNavigation在内置浏览器打开并置前，或使用visualization.url；没有导航能力时保留可点击链接。舞蹈训练排队或运行时，跳转到工作台 Run 与进度并选中本次 Run；终态在 run-detail.html 按 Run ID 读取详情，账号无权查看时明确提示，不改看全局最新Run。舞蹈回放须先通过本次策略和轨迹SHA核验，再由页面内播放器播放；不调用真机rdk_replay_video或evaluationId接口；媒体链接不做正文抓取、HEAD、curl或独立浏览器认证探测。没有观测就报告播放待验证。一般流程用workflow_inspect按需看证据，不默认打印整张技术状态表；新训练前training_prepare刷新资源。默认GPU，CPU须明确选择，不自动降级、不操作真机。\n本次原生计算配置：' +
           clientContext().nativeCompute.configuration +
           '。宿主接口缺失时不要要求已经在桌面中的用户重复“去桌面操作”；用指南中的 clientContext 说明实际缺口。' +
-          ORIGINMAN_COURSE_INSTRUCTIONS +
+          '\nOriginMan Workshop 以舞蹈为训练课程。先打开页面，再选预置舞蹈或从空作品自由编排，确认预算和共享 GPU 后由用户提交。跟跳使用独立入口。' +
           '\n用户明确要求助手自动播放已有结果时，保留0.5.5能力：按experiment_resume.playbackPlan使用内置页面工具，list_pages取实际pageId，select_page({pageId,bringToFront:true})，核对可见性与本次来源后只执行startScript一次，再观察真实时间推进与ended。计划不等于执行；禁止seek、伪造进度、改安全设置或重交任务。默认按钮课程仍由页面推进，不主动调用此高级计划。' +
-          '\n受扰恢复用 rdk_workshop 的 continue 或 results 接续原实验。已有 contextId 时，它是实验标识。需要评测明细时，从恢复结果的 detailRead 或 evaluation.runId 读取实际 Run ID。先报告 quality.clearGain，再展示本轮页面。Qoder 按返回的 qoderNavigation 操作。舞蹈继续用原舞蹈 Run。' +
+          '\n历史实验只查看已有结果。已有 contextId 时按原实验定位；已有 Run ID 时读取原 Run。Qoder 按返回的 qoderNavigation 操作。' +
           '\n普通Workshop回执：优先使用工具studentReply，默认入口不播报加载和打开过程，导航后仅一句中文加一个实验页链接。页面已显示曲线和对比时不重复抄技术表；账号、UUID、英文套件名、摘要、video字节和部署细节按用户明确要求再展开。明确要求播放才尝试播放器操作；没有播放观察时说明回放待播放。只报告完成的四个主阶段；单变量调参是可选后续，不算本轮未完成项。',
       };
     }
@@ -1553,12 +1566,17 @@ export function experienceProxy(
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
         if (params.name === ORIGINMAN_REFERENCE_TOOL.name) {
           if (
-            Object.keys(input).some((name) => name !== 'runId') ||
+            Object.keys(input).some((name) => !['runId', 'mode'].includes(name)) ||
+            (input.mode !== undefined &&
+              (input.runId !== undefined ||
+                !['preset', 'blocks', 'upload'].includes(input.mode))) ||
             (input.runId !== undefined &&
               (typeof input.runId !== 'string' ||
                 !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(input.runId)))
           )
-            throw Error('请提供跟跳 Run 的完整 ID 或至少 8 位前缀，或省略以打开任务。');
+            throw Error(
+              '请单独提供跟跳 Run 的完整 ID 或至少 8 位前缀，打开新任务可选择预置、自由编排或导入。',
+            );
           const launch = new URL(baseUrl);
           if (
             !['http:', 'https:'].includes(launch.protocol) ||
@@ -1570,6 +1588,7 @@ export function experienceProxy(
             throw Error('平台网页入口无效。请重新连接学习平台。');
           const root = launch.pathname.replace(/\/+$/, '');
           launch.pathname = root + '/originman-reference.html';
+          if (input.mode) launch.searchParams.set('mode', input.mode);
           if (input.runId) {
             const run = upstream.readTrainingRun
               ? await upstream.readTrainingRun(input.runId, { signal, allowPrefix: true })
@@ -1592,8 +1611,23 @@ export function experienceProxy(
             studioNavigation: { tool: 'studio_open_url', arguments: { url } },
             studentReply: input.runId
               ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
-              : '在右侧导入 NPZ 或加载示例摆臂。轨迹校验通过后，选择 Worker 并提交仿真训练。',
+              : {
+                  preset: '在右侧选择预置舞蹈，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  blocks:
+                    '在右侧搜索动作并加入编排，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  upload:
+                    '在右侧导入自己的 NPZ 或 JSON 轨迹，也可先加载示例体验。校验后可选择 Worker 开始仿真训练。',
+                }[input.mode ?? 'upload'],
           };
+        } else if (params.name === 'rdk_originman_motion_library') {
+          if (Object.keys(input).length) throw Error('动作库查询不需要参数。');
+          if (!upstream.listOriginmanMotion) throw Error('请先连接机器人学习平台。');
+          payload = await upstream.listOriginmanMotion({ signal });
+        } else if (params.name === 'rdk_originman_motion_preview') {
+          if (!upstream.previewOriginmanMotion) throw Error('请先连接机器人学习平台。');
+          payload = await upstream.previewOriginmanMotion(validateReferenceDance(input), {
+            signal,
+          });
         } else if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
@@ -1732,50 +1766,78 @@ export function experienceProxy(
               await upstream.request('tools/call', { name, arguments: args }, { signal }),
             );
           const args = params.arguments ?? {};
-          if (
-            args.course === 'dance' &&
-            ['continue', 'results'].includes(args.intent) &&
-            !args.computeResourceId
-          ) {
-            return dispatch(
-              'tools/call',
-              {
-                name: LEARNING_GUIDE_TOOL.name,
-                arguments: {
-                  task: 'dance',
-                  intent: 'results',
-                  ...(args.contextId && { contextId: args.contextId }),
-                },
-              },
-              signal,
-            );
-          }
-          const catalog =
-            args.course === 'recovery' && args.computeResourceId ? await readCatalog(signal) : null;
-          payload = await workshopEntry(args, call, {
-            remote:
-              upstream.workshopSession &&
-              ((operation, input, accountId) =>
-                upstream.workshopSession(operation, input, {
-                  signal,
-                  accountId,
-                })),
-            readResult: async (contextId) =>
-              readToolResult(
-                await dispatch(
-                  'tools/call',
-                  { name: 'rdk_experiment_resume', arguments: { contextId } },
-                  signal,
-                ),
+          if (args.runId !== undefined) {
+            if (
+              !['continue', 'results'].includes(args.intent) ||
+              Object.keys(args).some((key) => !['intent', 'course', 'runId'].includes(key)) ||
+              (args.course !== undefined && !['dance', 'recovery'].includes(args.course)) ||
+              typeof args.runId !== 'string' ||
+              !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.runId)
+            )
+              throw Error('查看已有 Workshop 请使用原 Run ID 或实验标识其中一个。');
+            const value = upstream.readTrainingRun
+              ? { run: await upstream.readTrainingRun(args.runId, { signal, allowPrefix: true }) }
+              : await readRun(args.runId, signal);
+            const run = value.run ?? value;
+            const runId = run.id ?? run.runId;
+            const course = { 'originman-dance': 'dance', 'originman-recovery': 'recovery' }[
+              run.taskId
+            ];
+            if (
+              !matchesRunIdentifier(args.runId, runId) ||
+              !course ||
+              (args.course && args.course !== course)
+            )
+              throw Error('原 Run 与所选 Workshop 课程不匹配，请核对原记录。');
+            payload = attachRunVisualization(
+              await runResults(
+                observe({ ...value, run, course, stage: run.status }, runId),
+                runId,
+                signal,
               ),
-            readModels: upstream.readModels && (() => upstream.readModels({ signal })),
-            courseReadiness:
-              upstream.courseReadiness && ((args) => upstream.courseReadiness({ ...args, signal })),
-            toolNames: catalog?.tools.map((t) => t.name),
-            defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
-            authentication,
-            signal,
-          });
+              runId,
+              baseUrl,
+            );
+          } else {
+            if (
+              args.course === 'dance' &&
+              ['continue', 'results'].includes(args.intent) &&
+              !args.computeResourceId
+            ) {
+              return dispatch(
+                'tools/call',
+                {
+                  name: LEARNING_GUIDE_TOOL.name,
+                  arguments: {
+                    task: 'dance',
+                    intent: 'results',
+                    ...(args.contextId && { contextId: args.contextId }),
+                  },
+                },
+                signal,
+              );
+            }
+            payload = await workshopEntry(args, call, {
+              remote:
+                upstream.workshopSession &&
+                ((operation, input, accountId) =>
+                  upstream.workshopSession(operation, input, {
+                    signal,
+                    accountId,
+                  })),
+              readResult: async (contextId) =>
+                readToolResult(
+                  await dispatch(
+                    'tools/call',
+                    { name: 'rdk_experiment_resume', arguments: { contextId } },
+                    signal,
+                  ),
+                ),
+              defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
+              authentication,
+              signal,
+            });
+          }
         } else if (params.name === 'rdk_originman_course_brief')
           payload = courseBrief(params.arguments ?? {});
         else if (params.name === 'rdk_originman_training_choice')
@@ -1919,7 +1981,9 @@ export function experienceProxy(
           const plan = confirmedDancePlans.get(params.arguments?.contextId);
           if (plan && !isDeepStrictEqual(params.arguments, plan))
             throw Error('配方已变更，请重新预览并确认本轮参数。');
-          payload = await submitDance(params.arguments ?? {}, signal);
+          payload = isReferenceDance(input.dance)
+            ? await trainReferenceDance(input, upstream, signal)
+            : await submitDance(input, signal);
         } else if (params.name === 'rdk_classroom_guide')
           payload = classroomGuide(params.arguments ?? {});
         else if (params.name === 'rdk_robot_onboarding_guide')
@@ -1947,15 +2011,7 @@ export function experienceProxy(
           payload = {
             trainingChoice: trainingChoice(),
             clientContext: clientContext(),
-            formalTraining: {
-              trainTool: 'rdk_originman_train',
-              evaluateTool: 'rdk_originman_evaluate',
-              note: '仅在用户明确选择预算时使用。完整彩排无默认预算；默认在Workshop页面选择，只有高级手动流程才在聊天引导，不自动扩训。',
-            },
-            course: {
-              ...ORIGINMAN_COURSE,
-              links: courseLinks(env.RDK_SIM2REAL_MCP_BASE_URL),
-            },
+            course: { name: 'OriginMan 舞蹈 Workshop', entryTool: 'rdk_workshop' },
             learnerInterface: {
               entryPrompt: '带我开始 Workshop',
               locale: 'zh-CN',
@@ -1967,50 +2023,6 @@ export function experienceProxy(
               note: uiEnabled
                 ? '已协商MCP Apps；是否渲染和播放仍需宿主实际验收。'
                 : '当前宿主未协商内联视图；使用平台实验页或简短文字。',
-            },
-            shortTraining: {
-              intent:
-                '一句话要求OriginMan短训练、对比效果和回放时使用；无需用户提供UUID或技术参数。',
-              course:
-                'OriginMan 受扰恢复：完整课程材料由短训工具内部校验，无需手工填写模型或训练参数。',
-              manifestSource:
-                'bundled-reference-contract; verify against registered model, not retrieved registration',
-              courseResourceConfigured: Boolean(env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID),
-              operation: (() => {
-                const id = operationId;
-                return {
-                  contextId: id,
-                  groupId: id,
-                  trainIdempotencyKey: id + '-train',
-                  evaluationIdempotencyKey: id + '-eval',
-                  note: '本次新训练使用此组标识；重试和评测保留，勿重新生成。',
-                };
-              })(),
-              defaults: {
-                backend: 'local',
-                taskId: 'originman-recovery',
-                profile: 'standard',
-                engine: 'originman-recovery-reflect',
-                algorithm: 'sac',
-                numEnvs: 4,
-                maxIterations: 32,
-                originmanWorkshop: {
-                  phase: 'train',
-                  groupId: operationId,
-                  timesteps: 8192,
-                  seed: 7,
-                  pushMaxForce: 8.1,
-                },
-              },
-              steps: [
-                '完整Workshop先做参考观察：由宿主打开course.links.simulation，在页面启动基础PD并实际观察运行，再执行下面的训练。仅打开入口不算观察完成；没有页面操作或观察能力时先明确由学员完成此步，不先训练再补看。用户明确只要求训练时按其范围执行。',
-                '第一步：只传contextId调用rdk_originman_short_train({contextId:operation.contextId})，不要复制manifest.modelId或自行挑资源。此工具执行完整manifest校验、当前账号课程模型/明确资源匹配、健康检查、必填参数装配与单次提交。不要手工重复model_validate或training_submit，不调用experience_prepare/workshop_catalog。',
-                '第二步：首次rdk_training_wait({runId:返回的submission.runId})；若仍在运行，下次必须原样使用该回执nextPollArguments接续查询（含pollCursor），直到completed。等待窗口正常结束不是超时错误。失败立即停止，不换contextId、资源或参数重试。',
-                '第三步：rdk_originman_short_evaluate({contextId:同一标识})；只允许已完成训练，自动冻结sourceRunId、groupId与参数。用rdk_training_wait及返回的nextPollArguments接续等待同一评测Run至终态。',
-                '第四步：rdk_experiment_resume({contextId:同一标识})，核对本次父Run与摘要，展示original/tuned/rl实际对比。优先打开links.experiment；旧平台打开links.workbench并按selection选择本次训练与评测，展开页面播放器播放一次，不直接导航媒体URL；rdk_replay_video只适用于真机遥测，本课程禁止调用。MP4/WebM禁止网页正文抓取、独立HTTP探测或新浏览器登录测试。打开后直接收尾，播放器由宿主实际观察，不循环验证。',
-                '只输出简短中文四步进度与真实对比；不主动提出延长训练、换seed或复用contextId调优，不推测效果差的原因。调优必须由用户明确要求并建立新实验。短训不保证提升，未做真机。',
-                'stopWorkflow=true停止新的写操作，不拼manifest或换工具重交。若回执明确submitted=true且有原runId，只读查询该Run并展示已有结果；未知提交不猜任务。多个资源仅按名称选择；宿主已配置课程资源时沿用它，不换机。',
-              ],
             },
             danceTraining: {
               intent:
@@ -2040,7 +2052,7 @@ export function experienceProxy(
               ],
             },
             guide:
-              '场景准备：OriginMan一句话短训练必须按shortTraining.steps调用专用编排工具；完整配方已在专用工具内固定，不要手工提交。其他场景按profile与当前工具能力准备。',
+              '场景准备：OriginMan 舞蹈快检和正式训练都用舞蹈 Workshop 确认配置；其他机型按任务和当前能力准备。',
             profile: (() => {
               const p = readProfile();
               return p.robot === 'originman' ? { id: p.id, title: p.title, robot: p.robot } : p;
@@ -2063,6 +2075,9 @@ export function experienceProxy(
                 upstream.courseReadiness &&
                 ((args) => upstream.courseReadiness({ ...args, signal })),
               readModels: upstream.readModels && (() => upstream.readModels({ signal })),
+              readTrainingRun:
+                upstream.readTrainingRun &&
+                ((runId) => upstream.readTrainingRun(runId, { signal })),
               remote:
                 upstream.experimentSession &&
                 ((operation, input) => upstream.experimentSession(operation, input, { signal })),
@@ -2163,7 +2178,16 @@ export function experienceProxy(
               payload.training.status === 'completed' && payload.evaluation?.status === 'completed',
           };
         }
-        if (params.name === 'rdk_originman_dance_train') {
+        if (
+          params.name === 'rdk_originman_dance_train' &&
+          payload.taskId === REFERENCE_TRACKING_TASK
+        ) {
+          if (payload.run?.id) {
+            payload = attachRunVisualization(payload, payload.run.id, baseUrl);
+            payload.nextTool = 'rdk_training_wait';
+            payload.nextArguments = { runId: payload.run.id };
+          }
+        } else if (params.name === 'rdk_originman_dance_train') {
           const runId = payload.submission?.runId;
           if (runId) {
             workflow = {
@@ -2244,7 +2268,7 @@ export function experienceProxy(
                   : JSON.stringify(
                       EXPERIMENT_TOOLS.some((t) => t.name === params.name)
                         ? experimentModelResult(payload)
-                        : params.name === 'rdk_workshop'
+                        : params.name === 'rdk_workshop' && !payload.run
                           ? {
                               ...(payload.training ? experimentModelResult(payload) : {}),
                               contextId: payload.contextId,
@@ -2400,16 +2424,13 @@ export function experienceProxy(
       !response.isError &&
       baseUrl
     ) {
-      const catalog = readToolResult(response);
       const dance = workshopPreview(baseUrl);
-      const recovery = workshopPreview(baseUrl, 'recovery');
       const value = {
-        ...catalog,
         ...dance,
-        workshopUrls: { dance: dance.entryUrl, recovery: recovery.entryUrl },
+        workshopUrls: { dance: dance.entryUrl },
         nextTool: 'rdk_workshop',
         nextArguments: { intent: 'new', course: 'dance' },
-        studentReply: `[打开 OriginMan 舞蹈 Workshop](${dance.entryUrl})。也可选择[受扰恢复课程](${recovery.entryUrl})。`,
+        studentReply: `[打开 OriginMan 舞蹈 Workshop](${dance.entryUrl})，可选预置舞蹈或自由编排。`,
       };
       return {
         ...response,

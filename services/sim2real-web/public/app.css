@@ -2450,6 +2450,8 @@ h2 {
 .training-plans-dialog .training-plans-actions { justify-content: flex-end; }
 
 .dance-goal[hidden], .dance-goal [hidden] { display: none; }
+.dance-goal > nav { margin-block-end: 12px; }
+#originman-dance-presets { margin-block-start: 12px; }
 .dance-goal-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 155px), 1fr));

@@ -1,0 +1,372 @@
+<div id="originman-workshop" data-originman-view="simulate">
+  <select id="originman-run"></select>
+  <section aria-labelledby="originman-sim-title" id="originman-live-sim" class="originman-studio">
+    <header class="originman-studio-heading">
+      <div>
+        <h3 id="originman-sim-title">OriginMan 仿真场</h3>
+        <p class="small-note">移动与转向 · 侧推与恢复 · MuJoCo 物理仿真</p>
+      </div>
+      <span id="originman-sim-badge" class="status-pill" role="status">场景加载中</span>
+    </header>
+    <div class="originman-studio-grid">
+      <div class="originman-scene-column">
+        <div class="originman-scene" id="originman-scene" aria-busy="true">
+          <img
+            id="originman-scene-preview"
+            class="originman-scene-preview"
+            alt="OriginMan 机器人与仿真场地的静态预览"
+            hidden=""
+          />
+          <canvas
+            id="originman-sim-canvas"
+            width="1152"
+            height="648"
+            tabindex="0"
+            role="img"
+            aria-label="OriginMan 实时物理仿真"
+            aria-describedby="originman-motion-help"
+            hidden=""
+          ></canvas>
+          <p id="originman-scene-placeholder" class="originman-scene-placeholder">
+            正在读取机器人与场地…
+          </p>
+        </div>
+        <div class="originman-scene-bar">
+          <span id="originman-scene-caption">静态预览</span>
+          <span>网格 10 cm · 20 关节</span>
+        </div>
+        <div class="originman-scene-readout" role="group" aria-label="受扰过程">
+          <strong id="originman-lab-phase" role="status">等待开始</strong>
+          <span id="originman-lab-clock">0.00s</span>
+          <span>受力 <b id="originman-lab-force">0.0 N</b></span>
+          <span>倾角 <b id="originman-lab-tilt">0.0°</b></span>
+        </div>
+        <div class="originman-scene-actions">
+          <button type="button" id="originman-sim-preview-start" class="button button-primary">
+            ▶ 开始基础仿真
+          </button>
+          <div class="originman-scene-runtime" role="group" aria-label="仿真运行控制">
+            <button class="button button-ghost" type="button" id="originman-sim-pause" disabled="">
+              继续
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-step" disabled="">
+              单步
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-reset" disabled="">
+              重置
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-home" disabled="">
+              恢复视角
+            </button>
+            <button
+              class="button button-ghost"
+              type="button"
+              id="originman-sim-disconnect"
+              disabled=""
+            >
+              结束仿真
+            </button>
+          </div>
+        </div>
+        <div
+          class="originman-scene-input"
+          role="group"
+          aria-label="操控 OriginMan 动作"
+          aria-describedby="originman-motion-help"
+        >
+          <div role="group" aria-labelledby="originman-drive-label">
+            <strong id="originman-drive-label">移动与转向</strong>
+            <div class="originman-scene-keys originman-scene-drive">
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="walk-forward"
+                disabled=""
+              >
+                前进 <kbd>W</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="walk-backward"
+                disabled=""
+              >
+                后退 <kbd>S</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="turn-left"
+                disabled=""
+              >
+                左转 <kbd>A</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="turn-right"
+                disabled=""
+              >
+                右转 <kbd>D</kbd>
+              </button>
+            </div>
+          </div>
+          <div role="group" aria-labelledby="originman-gesture-label">
+            <strong id="originman-gesture-label">头部与手臂</strong>
+            <div class="originman-scene-keys originman-scene-gestures">
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="look-left"
+                disabled=""
+              >
+                向左看 <kbd>J</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="look-right"
+                disabled=""
+              >
+                向右看 <kbd>L</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="nod"
+                disabled=""
+              >
+                点头 <kbd>N</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="wave-left"
+                disabled=""
+              >
+                左手挥手 <kbd>Q</kbd>
+              </button>
+              <button
+                class="button button-ghost"
+                type="button"
+                data-originman-motion="wave-right"
+                disabled=""
+              >
+                右手挥手 <kbd>E</kbd>
+              </button>
+            </div>
+          </div>
+          <p class="small-note" id="originman-motion-help">
+            点击相应按钮，或聚焦画面后使用对应按键。长按移动键，松开后收步。
+          </p>
+        </div>
+        <details class="originman-scene-details">
+          <summary>操作说明与遥测</summary>
+          <p class="small-note">
+            聚焦画面后，方向键 ← / → 侧推，空格暂停，R 重置。拖动旋转，滚轮缩放。转向使用仿真辅助。
+          </p>
+          <p id="originman-sim-metrics" class="small-note">开始仿真后可查看详细遥测。</p>
+        </details>
+        <details class="originman-scene-details originman-rehearsal">
+          <summary>WASD 联动演练 <span class="originman-rehearsal-active">进行中</span></summary>
+          <div class="originman-scene-actions" role="group" aria-label="WASD 联动演练">
+            <button
+              id="originman-link-toggle"
+              type="button"
+              class="button button-ghost"
+              aria-pressed="false"
+            >
+              开启 WASD 联动演练
+            </button>
+            <button id="originman-link-cut" type="button" class="button button-ghost" hidden="">
+              模拟断连
+            </button>
+          </div>
+          <p id="originman-link-status" class="small-note" role="status">
+            演练关闭 · 真机执行器关闭
+          </p>
+          <p id="originman-link-readout" class="small-note"></p>
+        </details>
+      </div>
+      <section class="originman-lab" id="originman-lab-panel" aria-label="受扰恢复实验与回看">
+        <div class="originman-lab-heading">
+          <div>
+            <h3>受扰恢复实验</h3>
+            <p class="small-note">
+              ① 选择下方力度与策略 → ② 运行8秒实验 → ③ 拖动时间线，慢放或对照
+            </p>
+          </div>
+          <button class="button button-ghost" type="button" id="originman-lab-present">
+            演示模式 · 大屏
+          </button>
+        </div>
+        <div class="model-actions">
+          <label for="originman-lab-direction">定时侧推方向</label
+          ><select id="originman-lab-direction">
+            <option value="-1">← 左侧推</option>
+            <option value="1">右侧推 →</option></select
+          ><button class="button button-primary" id="originman-lab-demo" type="button">
+            运行8秒定时实验</button
+          ><button class="button button-ghost" id="originman-lab-compare" type="button">
+            对照基础 PD 与所选模型</button
+          ><button class="button button-ghost" id="originman-lab-cancel" type="button" hidden="">
+            取消实验
+          </button>
+        </div>
+        <p class="small-note" id="originman-lab-source"></p>
+        <p id="originman-lab-note" role="status">
+          每轮从相同站姿开始，1.55秒施力、持续0.2秒；观察至8秒或跌倒。也可使用下方按钮自由侧推。
+        </p>
+        <svg
+          id="originman-lab-chart"
+          class="originman-lab-chart"
+          viewBox="0 0 640 160"
+          role="img"
+          aria-label="尚无倾角采样；开始实验后显示真实曲线"
+        >
+          <g id="originman-lab-curves"></g>
+          <line
+            id="originman-lab-cursor"
+            class="originman-chart-cursor"
+            x1="36"
+            x2="36"
+            y1="15"
+            y2="132"
+          ></line>
+        </svg>
+        <p class="small-note">
+          倾角随时间变化 · 灰线：基础 PD · 橙线：本轮／所选策略 · 底部橙条：实际施力
+        </p>
+        <div class="originman-lab-replay">
+          <label for="originman-lab-trace">回看轮次</label
+          ><select id="originman-lab-trace">
+            <option value="">本轮</option></select
+          ><button class="button button-ghost" id="originman-lab-replay" type="button">
+            播放本轮</button
+          ><label for="originman-lab-speed">回看速度</label
+          ><select id="originman-lab-speed">
+            <option value="0.25">0.25× 慢放</option>
+            <option value="0.5" selected="">0.5× 慢放</option>
+            <option value="1">1× 原速</option></select
+          ><button class="button button-ghost" id="originman-lab-live" type="button">
+            返回实时
+          </button>
+        </div>
+        <label class="field-label" for="originman-lab-seek"
+          >本轮时间线 <output id="originman-lab-replay-time">0.00 / 0.00s</output></label
+        ><input id="originman-lab-seek" type="range" min="0" max="8" step="0.02" value="0" />
+        <div class="originman-case-table" id="originman-lab-result-section" hidden="">
+          <button class="button button-ghost" id="originman-lab-save" type="button">
+            保存本轮观察记录
+          </button>
+          <table>
+            <caption>
+              本次交互实验结果
+            </caption>
+            <thead>
+              <tr>
+                <th scope="col">策略</th>
+                <th scope="col">观察结果</th>
+                <th scope="col">峰值倾角</th>
+                <th scope="col">回稳用时</th>
+              </tr>
+            </thead>
+            <tbody id="originman-lab-results"></tbody>
+          </table>
+        </div>
+        <details>
+          <summary>如何理解这些结果</summary>
+          <p class="small-note">
+            回稳用时：实际施力结束后，倾角回到3°以内并持续0.5秒的首次区间起点。对照固定初始状态与相同扰动，使用所选训练的真实权重。此处是课堂单次交互观察；完整效果以固定条件集评测为准。慢放只改变本地回看，不改变物理或录制数据。
+          </p>
+        </details>
+      </section>
+      <aside class="originman-scene-inspector" aria-label="OriginMan 策略与操作">
+        <div class="originman-inspector-section">
+          <label class="field-label" for="originman-sim-controller">1 · 选择控制策略</label>
+          <select id="originman-sim-controller">
+            <option value="baseline">基础 PD · 无需训练即可体验</option>
+            <option value="trained">我的训练模型</option>
+          </select>
+          <div id="originman-sim-model-picker" hidden="">
+            <label class="field-label" for="originman-sim-run">已完成的训练</label
+            ><select id="originman-sim-run">
+              <option value="">正在读取训练记录…</option>
+            </select>
+          </div>
+          <p id="originman-sim-source" class="small-note">基础 PD 对照，不使用学习权重。</p>
+          <button class="button button-primary" type="button" id="originman-sim-connect">
+            装载并开始仿真
+          </button>
+          <p id="originman-sim-status" role="status">
+            场景就绪后，点击开始；也可选择自己的训练模型一键装载。
+          </p>
+        </div>
+        <div class="originman-inspector-section">
+          <strong>2 · 给机器人一次侧推</strong>
+          <label class="field-label" for="originman-sim-force"
+            >侧推力度：<output id="originman-sim-force-value" for="originman-sim-force"
+              >2.0 N</output
+            ></label
+          >
+          <input
+            id="originman-sim-force"
+            type="range"
+            min="0.5"
+            max="9"
+            step="0.1"
+            value="2"
+            aria-describedby="originman-sim-force-help"
+          />
+          <p class="small-note" id="originman-sim-force-help">
+            默认轻推 2N；可调 0.5–9N，每次持续 0.2 秒。方向键使用当前力度；按住不会连续施力。
+          </p>
+          <div class="model-actions">
+            <button class="button button-ghost" type="button" id="originman-sim-force-gentle">
+              轻推 2N
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-force-medium">
+              中推 4N
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-force-strong">
+              强推 7.9N
+            </button>
+          </div>
+          <div class="model-actions">
+            <button class="button button-ghost" type="button" id="originman-sim-left" disabled="">
+              ← 左侧推 2.0N
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-right" disabled="">
+              右侧推 2.0N →
+            </button>
+            <button
+              class="button button-ghost"
+              type="button"
+              id="originman-sim-benchmark"
+              disabled=""
+            >
+              复现公开评测条件 0
+            </button>
+          </div>
+          <p class="small-note">
+            基础 PD 的抗扰能力有限，强推可能跌倒；先从轻推观察恢复。公开评测条件仍固定为
+            7.9N，不受滑块影响。
+          </p>
+        </div>
+        <div class="originman-inspector-section">
+          <strong>3 · 录制与保存</strong>
+          <p id="originman-sim-record-count" class="small-note">尚未录制</p>
+          <div class="model-actions">
+            <button class="button button-ghost" type="button" id="originman-sim-record" disabled="">
+              开始录制
+            </button>
+            <button class="button button-ghost" type="button" id="originman-sim-export" disabled="">
+              导出 JSONL
+            </button>
+          </div>
+          <p class="small-note">录制保留真实观测、动作及权重来源，仅作为仿真数据。</p>
+        </div>
+      </aside>
+    </div>
+  </section>
+</div>

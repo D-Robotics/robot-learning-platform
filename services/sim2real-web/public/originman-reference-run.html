@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
-    <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./run-detail-page.mjs?v=3"></script>
+    <link rel="stylesheet" href="./experiment.css?v=reference-replay-2" />
+    <script type="module" src="./run-detail-page.mjs?v=10"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -26,6 +26,7 @@
         </ol>
         <p id="run-next-action" aria-live="polite">正在按链接中的 Run ID 读取详情。</p>
         <button id="refresh-run" type="button">刷新本次运行</button>
+        <p><a id="run-workshop-home" href="./workshop.html">返回舞蹈 Workshop</a></p>
         <p><a id="run-platform-home" href="./">返回学习平台</a></p>
       </aside>
       <section class="experiment-content" aria-label="运行详情与仿真结果">
@@ -44,6 +45,11 @@
           <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
           <p id="run-hardware-readiness" hidden></p>
           <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
+          <details class="experiment-details" id="run-logs" hidden>
+            <summary>本轮引擎日志</summary>
+            <button type="button" id="run-logs-load">读取日志</button>
+            <pre id="run-logs-output" class="empty-state" tabindex="0" aria-label="本轮引擎日志">等待读取。</pre>
+          </details>
         </section>
 
         <section aria-labelledby="quality-heading">
@@ -67,6 +73,11 @@
             <span id="replay-status">尚未核验</span>
           </div>
           <video id="run-video" controls playsinline preload="none" hidden aria-label="本次 ONNX 策略的跟跳仿真视频"></video>
+          <div id="replay-segment-controls" hidden>
+            <label>舞段 <select id="replay-segment"></select></label>
+            <button id="replay-segment-seek" type="button">跳到舞段</button>
+            <span id="replay-segment-status" role="status" aria-live="polite"></span>
+          </div>
           <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
         </section>
 
@@ -79,6 +90,12 @@
           <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
         </section>
 
+        <section aria-labelledby="completion-heading">
+          <h2 id="completion-heading">训练回合完成率</h2>
+          <p>每个采样点统计最近最多 50 个已结束的仿真回合。</p>
+          <svg id="completion-chart" viewBox="0 0 720 240" role="img" aria-label="训练回合完成率" hidden></svg>
+          <p id="completion-empty" class="empty-state">等待本轮已结束的回合采样。</p>
+        </section>
         <details class="experiment-details">
           <summary>本轮训练配置</summary>
           <div class="comparison-scroll">
@@ -94,6 +111,8 @@
           <dl>
             <dt>Run ID</dt><dd id="run-id-detail">—</dd>
             <dt>模型 ID</dt><dd id="run-model-id">—</dd>
+            <dt>训练轨迹 SHA-256</dt><dd id="run-trajectory-sha">—</dd>
+            <dt>Worker 轨迹文件 SHA-256</dt><dd id="run-reference-file-sha">—</dd>
             <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
           </dl>
         </details>

@@ -46,6 +46,7 @@ const PLATFORM_STATUS_TOOL = 'rdk_platform_status';
 const DESTRUCTIVE_TOOLS: ReadonlySet<string> = new Set([
   'rdk_artifact_promote',
   'rdk_deployment_cancel',
+  'rdk_training_cancel',
   'rdk_device_disconnect',
   'rdk_board_policy_reset',
   'rdk_board_stop',
@@ -183,6 +184,25 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
   },
   ...MANUAL_PARAM_HINT_OVERRIDES,
   rdk_compute_resources_list: { required: [], properties: {} },
+  rdk_compute_resource_update: {
+    required: ['computeResourceId'],
+    properties: {
+      computeResourceId: { type: 'string' },
+      name: { type: 'string' },
+      runnerUrl: { type: 'string' },
+      runnerToken: { type: 'string' },
+    },
+  },
+  rdk_training_cancel: { required: ['runId'], properties: { runId: { type: 'string' } } },
+  rdk_training_preflight: {
+    required: ['computeResourceId'],
+    properties: {
+      computeResourceId: { type: 'string' },
+      engine: { type: 'string' },
+      taskId: { type: 'string' },
+      device: { type: 'string' },
+    },
+  },
   rdk_compute_resource_test: {
     required: ['computeResourceId'],
     properties: {
@@ -222,6 +242,8 @@ export const TOOL_PARAM_HINTS: Record<string, ToolParamHint> = {
       engine: { type: 'string' },
       demonstrationRunId: { type: 'string' },
       syntheticSmoke: { type: 'boolean' },
+      originmanWorkshop: { type: 'object' },
+      idempotencyKey: { type: 'string' },
       originmanDance: { type: 'object' },
       algorithm: { type: 'string' },
       numEnvs: { type: 'number' },

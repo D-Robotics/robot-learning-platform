@@ -743,6 +743,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
     'submission-journal.mjs',
     'workshop-course.mjs',
     'originman-dance-config.mjs',
+    'originman-motion.mjs',
     'dance-training.mjs',
     'dance-coaching.mjs',
     'dance-evaluation.mjs',
@@ -784,6 +785,7 @@ test('runtime version requires matching loaded source hashes and rejects a stale
             'submission-journal.mjs',
             'workshop-course.mjs',
             'originman-dance-config.mjs',
+            'originman-motion.mjs',
             'dance-training.mjs',
             'dance-coaching.mjs',
             'dance-evaluation.mjs',
@@ -835,10 +837,11 @@ test('beginner guide starts fresh and routes known tasks without reading old Run
       .structuredContent;
   assert.equal((await guide({ intent: 'new' })).stage, 'task');
   assert.equal((await guide({ intent: 'new', task: 'dance' })).stage, 'movement');
-  assert.deepEqual((await guide({ intent: 'new', task: 'recovery' })).nextArguments, {
-    intent: 'new',
-    course: 'recovery',
+  const retired = await dispatch('tools/call', {
+    name: 'rdk_learning_guide',
+    arguments: { intent: 'new', task: 'recovery' },
   });
+  assert.equal(retired.isError, true);
   assert.equal(
     (await guide({ task: 'imitation' })).links.workbench,
     'https://platform.test/robotics-learning/?learningMode=imitation#overview',
@@ -1630,6 +1633,20 @@ test('reference track opens the correct platform mount and keeps result navigati
     tool: 'studio_open_url',
     arguments: { url: 'https://platform.test/robotics-learning/originman-reference.html' },
   });
+  for (const [mode, expectedMessage] of [
+    ['preset', /预置舞蹈/],
+    ['blocks', /加入编排/],
+    ['upload', /自己的 NPZ 或 JSON/],
+  ]) {
+    const result = (await call({ mode })).structuredContent;
+    assert.equal(
+      result.studioNavigation.arguments.url,
+      'https://platform.test/robotics-learning/originman-reference.html?mode=' + mode,
+    );
+    assert.match(result.studentReply, expectedMessage);
+  }
+  assert.equal((await call({ mode: 'other' })).isError, true);
+  assert.equal((await call({ runId: 'ref-run', mode: 'blocks' })).isError, true);
   const result = (await call({ runId: 'ref-run' })).structuredContent;
   assert.equal(
     result.studioNavigation.arguments.url,

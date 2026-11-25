@@ -41,7 +41,8 @@ const markupSummary = assertMarkupInvariants(html);
 
 assert.match(html, /<option value="dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
 assert.match(html, /<option value="originman">OriginMan · 人形机器人<\/option>/);
-assert.match(html, /<option value="originman-dance" selected>舞蹈编排 · PPO（默认）<\/option>/);
+assert.match(html, /<option value="originman-dance" selected>预置舞蹈<\/option>/);
+assert.match(html, /<option value="originman-dance-custom">动作组自由编排<\/option>/);
 assert.match(app, /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/);
 
 // ---- accessibility anchors ----
@@ -176,12 +177,12 @@ assert.deepEqual(
 );
 assert.deepEqual(
   [...sections].sort(),
-  [...viewNames, 'classroom'].sort(),
-  'workflow views and the contextual classroom must have rendered sections',
+  [...viewNames].sort(),
+  'workflow views must have rendered sections',
 );
 assert.deepEqual(
   [...new Set(targets)].sort(),
-  [...viewNames, 'classroom'].sort(),
+  [...viewNames].sort(),
   'navigation targets must resolve to a workflow view',
 );
 
@@ -396,15 +397,9 @@ assert.doesNotMatch(
   /受扰恢复课堂|workshop\.html/,
   'the global menu has no classroom shortcut',
 );
-assert.match(
+assert.doesNotMatch(
   html,
-  /id="originman-default-contracts"[\s\S]*?id="originman-contract-template"[\s\S]*?id="originman-recovery-class"[^>]*hidden[\s\S]*?<\/section>/,
-  'the classroom shortcut belongs to the OriginMan task selector',
-);
-assert.match(
-  html,
-  /data-view-section="classroom"[\s\S]*?id="originman-classroom-slot"[\s\S]*?id="originman-sim-canvas"[\s\S]*?id="originman-round-comparison"/,
-  'the in-workbench classroom ships with its native simulator and evidence panel',
+  /data-view-section="classroom"|id="originman-(?:configure-recovery|recovery-class|workshop)"|value="recovery"/,
 );
 assert.equal(
   [
@@ -791,30 +786,21 @@ assert.ok(
 );
 
 const workshopPage = fs.readFileSync(path.join(here, 'public/workshop.html'), 'utf8');
-assert.match(workshopPage, /<nav class="workshop-progress" aria-label="课程进度">/);
-for (const stage of ['reference', 'budget', 'execution', 'result'])
-  assert.match(workshopPage, new RegExp('id="workshop-step-' + stage + '"'));
-assert.match(workshopPage, /id="go-results"/);
-assert.match(workshopPage, /<summary>自定义训练参数<\/summary>/);
-assert.match(workshopPage, /id="budget-presets"[\s\S]*?id="start-quick"[\s\S]*?id="start-formal"/);
-assert.match(workshopPage, /id="play-reference"/);
-for (const id of [
-  'start-quick',
-  'start-formal',
-  'go-recovery-counts',
-  'go-replay',
-  'workshop-retry',
-  'custom-recipe',
-  'pause-workshop',
-  'history-list',
-  'workshop-login',
-  'open-run-details',
-  'workshop-setup',
-  'workshop-compute',
-  'workshop-compute-check',
-  'workshop-recovery',
-  'refresh-original-workshop',
-  'result-frame',
-])
+const originmanReferencePage = fs.readFileSync(
+  path.join(here, 'public/originman-reference.html'),
+  'utf8',
+);
+const originmanReferenceHeader = originmanReferencePage.match(
+  /<header class="experiment-header">([\s\S]*?)<\/header>/,
+);
+assert.ok(originmanReferenceHeader, 'reference tracking must provide a return link');
+assert.deepEqual(
+  Array.from(originmanReferenceHeader[1].matchAll(/<a href="([^"]+)">/g), ([, href]) => href),
+  ['./workshop.html'],
+  'reference tracking must return through the OriginMan Workshop',
+);
+assert.match(workshopPage, /OriginMan 舞蹈 Workshop/);
+for (const id of ['dance-reference-video', 'dance-budget-quick', 'dance-budget-formal'])
   assert.match(workshopPage, new RegExp('id="' + id + '"'));
+assert.doesNotMatch(workshopPage, /受扰恢复|course=recovery|id="workshop-main"|<canvas\b/);
 assert.doesNotMatch(workshopPage, /\son\w+\s*=|javascript:/i);

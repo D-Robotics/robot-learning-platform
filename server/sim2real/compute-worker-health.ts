@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import type { Sim2RealComputeResource } from '../../shared/sim2real.js';
 import { normalizeComputeRunnerUrl } from './robogo-runner.js';
 
 const COMPUTE_HEALTH_RESPONSE_MAX_BYTES = 32 * 1024;
@@ -64,6 +65,8 @@ interface ComputeHealthPayload {
   gpuName?: string;
   vramMb?: number;
   maxConcurrentJobs?: number;
+  activeJobs?: number;
+  queuedJobs?: number;
 }
 
 /** Accept only the small, explicit health contract used by the worker. */
@@ -86,6 +89,8 @@ function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
   };
   const maxConcurrentJobs = boundedInteger('maxConcurrentJobs', 1, 32);
   const vramMb = boundedInteger('vramMb', 0, 2_000_000);
+  const activeJobs = boundedInteger('activeJobs', 0, maxConcurrentJobs ?? 32);
+  const queuedJobs = boundedInteger('queuedJobs', 0, 1000);
   // If a worker sends a field, reject malformed values rather than silently
   // storing a misleading partial health record.
   if (source.maxConcurrentJobs != null && maxConcurrentJobs == null) return null;
@@ -106,6 +111,8 @@ function parseComputeHealthPayload(text: string): ComputeHealthPayload | null {
     ...(gpuName ? { gpuName } : {}),
     ...(vramMb == null ? {} : { vramMb }),
     ...(maxConcurrentJobs == null ? {} : { maxConcurrentJobs }),
+    ...(activeJobs == null ? {} : { activeJobs }),
+    ...(queuedJobs == null ? {} : { queuedJobs }),
   };
 }
 
@@ -115,6 +122,25 @@ type Diagnostic = {
   recovery: string;
   httpStatus?: number;
 };
+
+export function computeWorkerHealthPatch(
+  { diagnostic, payload }: { diagnostic: Diagnostic; payload: ComputeHealthPayload | null },
+  checkedAt: string,
+): Partial<Sim2RealComputeResource> {
+  return {
+    status: payload ? 'online' : 'offline',
+    message: diagnostic.message,
+    lastCheckedAt: checkedAt,
+    engines: payload?.engines ?? [],
+    mock: payload?.mock,
+    ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
+    ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
+    ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
+    ...(payload?.maxConcurrentJobs == null ? {} : { maxConcurrentJobs: payload.maxConcurrentJobs }),
+    activeJobs: payload?.activeJobs,
+    queuedJobs: payload?.queuedJobs,
+  };
+}
 
 const workerFailures = {
   timeout: {

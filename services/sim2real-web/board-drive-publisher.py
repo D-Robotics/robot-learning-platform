@@ -20,6 +20,7 @@ Run inside the board's TROS + OriginBot workspace environment:
   python3 board-drive-publisher.py
 """
 
+import math
 import os
 import sys
 import time
@@ -72,13 +73,21 @@ def log(msg):
 def read_cmd():
     try:
         data = yaml.safe_load(secure_read_text(CMD_FILE)) or {}
+        if not isinstance(data, dict):
+            return 0.0, 0.0, "invalid-command"
+        linear = float((data.get("linear") or {}).get("x", 0))
+        angular = float((data.get("angular") or {}).get("z", 0))
+        if not math.isfinite(linear) or not math.isfinite(angular):
+            return 0.0, 0.0, "invalid-command"
+        if linear == 0.0 and angular == 0.0:
+            return 0.0, 0.0, None
+        deadline = float(data.get("expires_monotonic", 0))
+        if not math.isfinite(deadline) or deadline <= time.monotonic():
+            return 0.0, 0.0, None
+        return linear, angular, None
     except (OSError, yaml.YAMLError) as exc:
         return 0.0, 0.0, f"read-failed: {exc!r}"
-    linear = ((data.get("linear") or {}).get("x")) or 0.0
-    angular = ((data.get("angular") or {}).get("z")) or 0.0
-    try:
-        return float(linear), float(angular), None
-    except (TypeError, ValueError):
+    except (AttributeError, TypeError, ValueError, OverflowError):
         return 0.0, 0.0, "cast-failed"
 
 

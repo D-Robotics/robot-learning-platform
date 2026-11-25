@@ -74,7 +74,7 @@ export function createRunQuery() {
           toolTrail: [trail],
         };
       const result = query.wantsPolicy
-        ? await resolveRunPolicyDownload(run, owner, accountId, 8_000)
+        ? await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 8_000 })
         : undefined;
       signal.throwIfAborted();
       if (recent.size >= SESSION_LIMIT) {
@@ -85,6 +85,8 @@ export function createRunQuery() {
 
       const status =
         {
+          cancelled: '已取消',
+          cancelling: '取消中',
           ready: '就绪',
           queued: '排队中',
           running: '运行中',

@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=60" />
+    <link rel="stylesheet" href="./app.css?v=61" />
     <link rel="stylesheet" href="./originman-scene.css?v=1" />
   </head>
   <body>
@@ -104,6 +104,7 @@
               <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
                 刷新工作区
               </button>
+              <a class="top-menu-item" role="menuitem" href="https://rdkstudio.d-robotics.cc/robotics-learning/plugins/rdk-robot-learning-platform-latest.zip" download>下载学习平台插件</a>
               <button class="top-menu-item" id="onboarding-help-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="usage-guide">使用指引</button>
               <div class="top-menu-item top-menu-account" id="account-menu-item" hidden>
                 <span class="top-menu-account-k">账号</span>
@@ -742,10 +743,8 @@
                   <select id="originman-contract-template" aria-label="选择训练任务契约">
                     <option value="dance" selected>舞蹈编排 · PPO（默认）</option>
                     <option value="">请选择其他任务</option>
-                    <option value="recovery">受扰恢复 · SAC</option>
                   </select>
                   <button class="button button-primary button-small" id="originman-use-contract" type="button" disabled>使用所选任务契约</button>
-                  <button class="button button-ghost button-small" id="originman-recovery-class" type="button" hidden>打开受扰恢复课堂</button>
                 </div>
                 <p class="small-note" id="originman-contract-status" role="status"></p>
                 <p class="small-note"><a href="./originman-reference.html">查看关节与舵机标定，或打开参考轨迹跟跳</a></p>
@@ -956,24 +955,43 @@
                   <summary>训练参数与续训</summary>
                   <div class="panel-heading panel-heading-lean config-module-heading"><h2>训练配置</h2><small class="panel-tip">选算法、档位与算力；提交后在「Run 与进度」看曲线和日志</small></div>
                   <section class="training-plans dance-goal" id="originman-goal-editor" aria-label="训练目标" hidden>
-                    <label class="field-label" for="originman-training-goal">训练目标</label>
+                    <nav class="training-plans-actions" aria-label="OriginMan 训练任务">
+                      <strong aria-current="page">舞蹈训练</strong>
+                      <a class="button button-ghost button-small" href="./originman-reference.html?mode=preset">用参考动作库编舞</a>
+                    </nav>
+                    <label class="field-label" for="originman-training-goal">编排方式</label>
                     <select id="originman-training-goal">
-                      <option value="originman-dance" selected>舞蹈编排 · PPO（默认）</option>
-                      <option value="">请选择目标</option>
+                      <option value="originman-dance" selected>预置舞蹈</option>
+                      <option value="originman-dance-custom">动作组自由编排</option>
                     </select>
                     <div id="originman-dance-fields" hidden>
+                      <div id="originman-dance-presets">
+                        <label class="field-label" for="originman-dance-preset">整套舞蹈</label>
+                        <select id="originman-dance-preset"></select>
+                        <p class="small-note" id="originman-dance-preview"></p>
+                      </div>
                       <div class="dance-goal-fields">
-                        <label>舞段名称 <input id="originman-dance-title" maxlength="80" value="左右交替摆臂"></label>
+                        <label>作品名称 <input id="originman-dance-title" maxlength="80" placeholder="例如 开场舞"></label>
                         <label>节奏（BPM） <input id="originman-dance-bpm" type="number" min="80" max="140" step="any" value="100"></label>
                         <label>训练步数 <input id="originman-dance-steps" type="number" min="8192" max="2000000" step="1" value="8192" aria-describedby="originman-dance-budget-help"></label>
                         <label>并行仿真环境 <input id="originman-dance-num-envs" type="number" min="1" max="64" step="1" value="64"></label>
                         <label>随机种子 <input id="originman-dance-seed" type="number" min="0" max="2147483647" step="1" value="7"></label>
                       </div>
                       <p class="small-note" id="originman-dance-budget-help">8192 步用于快检。可以用 500000 步做正式训练，动作表现以评测为准。</p>
-                      <div id="originman-dance-sections"></div>
-                      <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加舞段</button>
+                      <div id="originman-dance-custom" hidden>
+                        <p class="small-note" id="originman-dance-empty">从空作品开始。添加动作段，每段可以单独选动作、拍数和强度。</p>
+                        <div id="originman-dance-sections"></div>
+                        <button class="button button-ghost button-small" id="originman-dance-add" type="button">添加动作段</button>
+                      </div>
+                      <p class="small-note"><a href="./originman-dance-references/index.html">查看动作参考与仿真回放</a></p>
                       <p class="small-note" id="originman-dance-error" aria-live="polite"></p>
-                      <p class="small-note">下方选择支持舞蹈训练的算力。设好后可保存方案，或到「Run 与进度」确认提交。</p>
+                      <div id="originman-dance-resource"></div>
+                      <p class="small-note" id="originman-dance-readiness" role="status"></p>
+                      <div class="training-plans-actions">
+                        <button class="button button-ghost button-small" id="originman-configure-contract" type="button">选择舞蹈契约</button>
+                        <button class="button button-ghost button-small" id="originman-manage-compute" type="button">打开执行资源</button>
+                        <button class="button button-primary button-small" id="originman-configure-run" type="button">检查并提交训练</button>
+                      </div>
                     </div>
                   </section>
                   <section class="training-plans" id="training-plans" aria-label="训练方案">
@@ -1003,7 +1021,7 @@
                     </dialog>
                   </section>
 
-                  <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
+                  <div class="training-grid"><div class="training-field-group" id="training-basic-settings" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
                     ><select id="training-profile" aria-label="选择训练档位">
@@ -1038,11 +1056,16 @@
                       <optgroup label="研究栈 · 上游原生">
                         <option value="isaac-lab">Isaac Lab · CUDA 主机（含 sim2sim）</option>
                       </optgroup></select
-                    ><label class="field-label" for="compute-resource-select">训练资源</label
-                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
-                      <option value="">服务端默认本地 Worker</option>
-                    </select
                     >
+                    <div id="training-resource-slot">
+                      <div id="training-resource-field" class="training-plans-picker">
+                        <label class="field-label" for="compute-resource-select">训练资源</label>
+                        <select id="compute-resource-select" aria-label="选择训练资源">
+                          <option value="">使用已配置的本地 Worker</option>
+                        </select>
+                        <button class="button button-ghost button-small" id="originman-check-compute" type="button" hidden>检查所选 Worker</button>
+                      </div>
+                    </div>
                     </div>
                     <div class="training-field-group" id="training-demonstrations" hidden role="group" aria-labelledby="training-group-demonstrations">
                       <div class="training-group-title" id="training-group-demonstrations">示教轨迹</div>
@@ -1592,7 +1615,7 @@
                   >
                 </div>
               </details>
-              <article class="panel compute-resources-panel">
+              <article class="panel compute-resources-panel" id="compute-resources-panel" tabindex="-1">
                 <div class="panel-heading panel-heading-lean">
                   <div><h2>我的 GPU 训练资源</h2><p class="panel-caption">支持本机 CPU/GPU、SSH 远端服务器和平台 Runner。首次使用可以点击“获取安装命令”，用户只需在自己的终端执行一次；网页随后通过 127.0.0.1 连接 Agent，核心服务器不会接触用户本地 GPU。</p></div>
                   <span id="compute-resource-count" class="state-badge state-neutral">0 个</span>
@@ -2164,251 +2187,6 @@
               </article>
             </div>
           </section>
-          <section class="view-section" data-view-section="classroom" hidden="" aria-labelledby="originman-classroom-title"><div id="originman-classroom-slot"><section class="panel" aria-label="OriginMan 课程入口">
-              <h2 id="originman-classroom-title" tabindex="-1">OriginMan · 受扰恢复课堂</h2>
-              <p><a href="./?robot=originman#train/configure">前往舞蹈编排与训练 →</a></p>
-            </section><details class="panel originman-workshop" id="originman-workshop" hidden="">
-              <summary>OriginMan · 受扰恢复策略</summary><p class="small-note">本实验用于比较同一扰动条件下的仿真恢复表现。常规训练与设备预检在研发导航中。</p><div class="model-actions" id="originman-workflow-links"><button type="button" class="button button-ghost button-small" data-view-target="train" data-flow-child="prepare">模型与契约</button><button type="button" class="button button-ghost button-small" data-view-target="train" data-flow-child="configure">训练配置</button><button type="button" class="button button-ghost button-small" data-view-target="train" data-flow-child="submit">Run 与进度</button><button type="button" class="button button-ghost button-small" data-view-target="evaluate" data-flow-child="comparison">运行对比</button><button type="button" class="button button-primary button-small" data-view-target="classroom">交互仿真</button></div>
-              <p>先训练机器人保持平衡，再查看固定扰动下的表现和物理回放。仅仿真。</p>
-              <p id="originman-verdict" role="status" hidden=""></p>
-              <section id="originman-model-section"><details id="originman-model-fold" class="advanced-settings"><summary>OriginMan 机器人模型与仿真结构 · 20 关节</summary><figure><img id="originman-model-preview" class="originman-comparison-video" alt="当前接入的 OriginMan MuJoCo 机器人结构，未运行训练策略" hidden=""><figcaption id="originman-model-info" class="small-note">正在读取机器人结构与仿真模型…</figcaption></figure></details></section><div id="originman-simulation-media">
-              <section aria-labelledby="originman-sim-title" id="originman-live-sim" class="originman-studio">
-                <header class="originman-studio-heading"><div><h3 id="originman-sim-title">OriginMan 仿真场</h3><p class="small-note">移动与转向 · 侧推与恢复 · MuJoCo 物理仿真</p></div><span id="originman-sim-badge" class="status-pill" role="status">场景加载中</span></header>
-                <div class="originman-studio-grid">
-                  <div class="originman-scene-column">
-                    <div class="originman-scene" id="originman-scene" aria-busy="true">
-                      <img id="originman-scene-preview" class="originman-scene-preview" alt="OriginMan 机器人与仿真场地的静态预览" hidden="">
-                      <canvas id="originman-sim-canvas" width="1152" height="648" tabindex="0" role="img" aria-label="OriginMan 实时物理仿真" aria-describedby="originman-motion-help" hidden=""></canvas>
-                      <p id="originman-scene-placeholder" class="originman-scene-placeholder">
-                        正在读取机器人与场地…
-                      </p>
-                    </div>
-                    <div class="originman-scene-bar">
-                      <span id="originman-scene-caption">静态预览</span>
-                      <span>网格 10 cm · 20 关节</span>
-                    </div>
-                    <div class="originman-scene-readout" role="group" aria-label="受扰过程">
-                      <strong id="originman-lab-phase" role="status">等待开始</strong>
-                      <span id="originman-lab-clock">0.00s</span>
-                      <span>受力 <b id="originman-lab-force">0.0 N</b></span>
-                      <span>倾角 <b id="originman-lab-tilt">0.0°</b></span>
-                    </div>
-                    <div class="originman-scene-actions">
-                      <button type="button" id="originman-sim-preview-start" class="button button-primary">
-                        ▶ 开始基础仿真
-                      </button>
-                      <div class="originman-scene-runtime" role="group" aria-label="仿真运行控制">
-                        <button class="button button-ghost" type="button" id="originman-sim-pause" disabled="">
-                          继续
-                        </button>
-                        <button class="button button-ghost" type="button" id="originman-sim-step" disabled="">
-                          单步
-                        </button>
-                        <button class="button button-ghost" type="button" id="originman-sim-reset" disabled="">
-                          重置
-                        </button>
-                        <button class="button button-ghost" type="button" id="originman-sim-home" disabled="">
-                          恢复视角
-                        </button>
-                        <button class="button button-ghost" type="button" id="originman-sim-disconnect" disabled="">
-                          结束仿真
-                        </button>
-                      </div>
-                    </div>
-                    <div class="originman-scene-input" role="group" aria-label="操控 OriginMan 动作" aria-describedby="originman-motion-help">
-                      <div role="group" aria-labelledby="originman-drive-label">
-                        <strong id="originman-drive-label">移动与转向</strong>
-                        <div class="originman-scene-keys originman-scene-drive">
-                          <button class="button button-ghost" type="button" data-originman-motion="walk-forward" disabled="">
-                            前进 <kbd>W</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="walk-backward" disabled="">
-                            后退 <kbd>S</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="turn-left" disabled="">
-                            左转 <kbd>A</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="turn-right" disabled="">
-                            右转 <kbd>D</kbd>
-                          </button>
-                        </div>
-                      </div>
-                      <div role="group" aria-labelledby="originman-gesture-label">
-                        <strong id="originman-gesture-label">头部与手臂</strong>
-                        <div class="originman-scene-keys originman-scene-gestures">
-                          <button class="button button-ghost" type="button" data-originman-motion="look-left" disabled="">
-                            向左看 <kbd>J</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="look-right" disabled="">
-                            向右看 <kbd>L</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="nod" disabled="">
-                            点头 <kbd>N</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="wave-left" disabled="">
-                            左手挥手 <kbd>Q</kbd>
-                          </button>
-                          <button class="button button-ghost" type="button" data-originman-motion="wave-right" disabled="">
-                            右手挥手 <kbd>E</kbd>
-                          </button>
-                        </div>
-                      </div>
-                      <p class="small-note" id="originman-motion-help">
-                        点击相应按钮，或聚焦画面后使用对应按键。长按移动键，松开后收步。
-                      </p>
-                    </div>
-                    <details class="originman-scene-details">
-                      <summary>操作说明与遥测</summary>
-                      <p class="small-note">
-                        聚焦画面后，方向键 ← / → 侧推，空格暂停，R 重置。拖动旋转，滚轮缩放。转向使用仿真辅助。
-                      </p>
-                      <p id="originman-sim-metrics" class="small-note">开始仿真后可查看详细遥测。</p>
-                    </details>
-                    <details class="originman-scene-details originman-rehearsal">
-                      <summary>WASD 联动演练 <span class="originman-rehearsal-active">进行中</span></summary>
-                      <div class="originman-scene-actions" role="group" aria-label="WASD 联动演练">
-                        <button id="originman-link-toggle" type="button" class="button button-ghost" aria-pressed="false">
-                          开启 WASD 联动演练
-                        </button>
-                        <button id="originman-link-cut" type="button" class="button button-ghost" hidden="">
-                          模拟断连
-                        </button>
-                      </div>
-                      <p id="originman-link-status" class="small-note" role="status">演练关闭 · 真机执行器关闭</p>
-                      <p id="originman-link-readout" class="small-note"></p>
-                    </details>
-                  </div>
-                  <section class="originman-lab" id="originman-lab-panel" aria-label="受扰恢复实验与回看">
-                    <div class="originman-lab-heading"><div><h3>受扰恢复实验</h3><p class="small-note">① 选择下方力度与策略 → ② 运行8秒实验 → ③ 拖动时间线，慢放或对照</p></div><button class="button button-ghost" type="button" id="originman-lab-present">演示模式 · 大屏</button></div>
-                    <div class="model-actions"><label for="originman-lab-direction">定时侧推方向</label><select id="originman-lab-direction"><option value="-1">← 左侧推</option><option value="1">右侧推 →</option></select><button class="button button-primary" id="originman-lab-demo" type="button">运行8秒定时实验</button><button class="button button-ghost" id="originman-lab-compare" type="button">对照基础 PD 与所选模型</button><button class="button button-ghost" id="originman-lab-cancel" type="button" hidden="">取消实验</button></div>
-                    <p class="small-note" id="originman-lab-source"></p><p id="originman-lab-note" role="status">每轮从相同站姿开始，1.55秒施力、持续0.2秒；观察至8秒或跌倒。也可使用下方按钮自由侧推。</p>
-                    <svg id="originman-lab-chart" class="originman-lab-chart" viewBox="0 0 640 160" role="img" aria-label="尚无倾角采样；开始实验后显示真实曲线"><g id="originman-lab-curves"></g><line id="originman-lab-cursor" class="originman-chart-cursor" x1="36" x2="36" y1="15" y2="132"></line></svg>
-                    <p class="small-note">倾角随时间变化 · 灰线：基础 PD · 橙线：本轮／所选策略 · 底部橙条：实际施力</p>
-                    <div class="originman-lab-replay"><label for="originman-lab-trace">回看轮次</label><select id="originman-lab-trace"><option value="">本轮</option></select><button class="button button-ghost" id="originman-lab-replay" type="button">播放本轮</button><label for="originman-lab-speed">回看速度</label><select id="originman-lab-speed"><option value="0.25">0.25× 慢放</option><option value="0.5" selected="">0.5× 慢放</option><option value="1">1× 原速</option></select><button class="button button-ghost" id="originman-lab-live" type="button">返回实时</button></div>
-                    <label class="field-label" for="originman-lab-seek">本轮时间线 <output id="originman-lab-replay-time">0.00 / 0.00s</output></label><input id="originman-lab-seek" type="range" min="0" max="8" step="0.02" value="0">
-                    <div class="originman-case-table" id="originman-lab-result-section" hidden=""><button class="button button-ghost" id="originman-lab-save" type="button">保存本轮观察记录</button><table><caption>本次交互实验结果</caption><thead><tr><th scope="col">策略</th><th scope="col">观察结果</th><th scope="col">峰值倾角</th><th scope="col">回稳用时</th></tr></thead><tbody id="originman-lab-results"></tbody></table></div>
-                    <details><summary>如何理解这些结果</summary><p class="small-note">回稳用时：实际施力结束后，倾角回到3°以内并持续0.5秒的首次区间起点。对照固定初始状态与相同扰动，使用所选训练的真实权重。此处是课堂单次交互观察；完整效果以固定条件集评测为准。慢放只改变本地回看，不改变物理或录制数据。</p></details>
-                  </section>
-                  <aside class="originman-scene-inspector" aria-label="OriginMan 策略与操作">
-                    <div class="originman-inspector-section"><label class="field-label" for="originman-sim-controller">1 · 选择控制策略</label>
-                    <select id="originman-sim-controller"><option value="baseline">基础 PD · 无需训练即可体验</option><option value="trained">我的训练模型</option></select>
-                    <div id="originman-sim-model-picker" hidden=""><label class="field-label" for="originman-sim-run">已完成的训练</label><select id="originman-sim-run"><option value="">正在读取训练记录…</option></select></div>
-                    <p id="originman-sim-source" class="small-note">基础 PD 对照，不使用学习权重。</p>
-                    <button class="button button-primary" type="button" id="originman-sim-connect">装载并开始仿真</button>
-                    <p id="originman-sim-status" role="status">场景就绪后，点击开始；也可选择自己的训练模型一键装载。</p></div>
-                    <div class="originman-inspector-section"><strong>2 · 给机器人一次侧推</strong>
-                    <label class="field-label" for="originman-sim-force">侧推力度：<output id="originman-sim-force-value" for="originman-sim-force">2.0 N</output></label>
-                    <input id="originman-sim-force" type="range" min="0.5" max="9" step="0.1" value="2" aria-describedby="originman-sim-force-help">
-                    <p class="small-note" id="originman-sim-force-help">默认轻推 2N；可调 0.5–9N，每次持续 0.2 秒。方向键使用当前力度；按住不会连续施力。</p>
-                    <div class="model-actions">
-                      <button class="button button-ghost" type="button" id="originman-sim-force-gentle">轻推 2N</button>
-                      <button class="button button-ghost" type="button" id="originman-sim-force-medium">中推 4N</button>
-                      <button class="button button-ghost" type="button" id="originman-sim-force-strong">强推 7.9N</button>
-                    </div><div class="model-actions">
-                      <button class="button button-ghost" type="button" id="originman-sim-left" disabled="">← 左侧推 2.0N</button>
-                      <button class="button button-ghost" type="button" id="originman-sim-right" disabled="">右侧推 2.0N →</button>
-                      <button class="button button-ghost" type="button" id="originman-sim-benchmark" disabled="">复现公开评测条件 0</button>
-                    </div><p class="small-note">基础 PD 的抗扰能力有限，强推可能跌倒；先从轻推观察恢复。公开评测条件仍固定为 7.9N，不受滑块影响。</p></div>
-                    <div class="originman-inspector-section"><strong>3 · 录制与保存</strong><p id="originman-sim-record-count" class="small-note">尚未录制</p><div class="model-actions">
-                      <button class="button button-ghost" type="button" id="originman-sim-record" disabled="">开始录制</button>
-                      <button class="button button-ghost" type="button" id="originman-sim-export" disabled="">导出 JSONL</button>
-                    </div><p class="small-note">录制保留真实观测、动作及权重来源，仅作为仿真数据。</p></div>
-                  </aside>
-                </div>
-              </section>
-              <details id="originman-replay"><summary>查看本次评测的视频回放</summary>
-                <video id="originman-video" class="originman-comparison-video" controls="" preload="metadata" aria-label="本次同条件物理回放" hidden=""></video>
-                <p class="small-note" id="originman-video-note"></p></details></div>
-              <p class="small-note" id="originman-course-context">本课程使用 OriginMan 专用模型和连续髋踝修正策略。按本组记录完成配置、训练、结果对照、回放和导出；训练时间以课程资源预检为准。</p>
-
-                <p id="originman-status" class="action-block-hint" role="status" aria-live="polite">展开后加载本组实验。Worker 需已配置模型与 OriginMan 引擎。</p>
-
-                <section id="originman-config-section">
-                  <p id="originman-experiment-guide" class="small-note" role="status">先选择已完成训练并复制参数，再一次只改训练步数或侧推上限；其余控制与评测配置保持冻结。</p>
-                  <section id="originman-handoff" hidden="" aria-label="原训练与本次调参">
-                    <h3>原训练与本次调参</h3><p id="originman-handoff-note" class="small-note" role="status"></p>
-                    <div class="beginner-contract-table" tabindex="0" role="region" aria-label="训练参数对比表格，可左右滚动"><table><thead><tr><th scope="col">参数</th><th scope="col">原训练</th><th scope="col">本次配置</th></tr></thead><tbody id="originman-parameter-diff"></tbody></table></div>
-                    <label id="originman-confirm-label"><input id="originman-confirm-parameters" type="checkbox"><span>已核对参数差异，将在新分组从零训练并保留原实验</span></label>
-                    <div class="model-actions"><button id="originman-copy-parameters" type="button" class="button button-ghost">复制参数，开始调优</button><button id="originman-close-handoff" type="button" class="button button-ghost">关闭来源，返回普通配置</button></div>
-                  </section>
-                  <label class="field-label" for="originman-group">小组编号（同账号的实验分组，不是权限隔离）</label><input id="originman-group" form="originman-workshop-form" type="text" value="group-01" pattern="[a-zA-Z0-9][a-zA-Z0-9_-]{0,23}" maxlength="24" required=""><form id="originman-workshop-form">
-                <div class="training-grid">
-                  <div class="training-field-group">
-                    <label class="field-label" for="originman-engine">策略结构</label>
-                    <select id="originman-engine">
-                      <option value="originman-recovery-reflect" selected="">对称约束 SAC（新版）</option>
-                      <option value="originman-recovery">标准 MLP SAC（原版对照）</option>
-                    </select>
-                    <label class="field-label" for="originman-steps">训练控制步数</label>
-                    <input id="originman-steps" type="number" min="4096" max="1000000" step="1" value="500000" required="">
-                    <label class="field-label" for="originman-seed">随机种子</label>
-                    <input id="originman-seed" type="number" min="0" max="1000000" step="1" value="7" required="">
-                    <label class="field-label" for="originman-force">训练侧推上限（N）</label>
-                    <input id="originman-force" type="number" min="6.4" max="9" step="0.1" value="8.1" required="">
-                  </div>
-                  <div class="training-field-group">
-                    <strong>冻结的控制与评测</strong>
-                    <p class="small-note">SAC · 4 环境 · 14 维观测 → 2 维修正。实际训练设备见 Run，物理仿真为 CPU MuJoCo；GPU 网络训练不等于 GPU 并行仿真。基础 PD、奖励、控制周期与动作映射固定。</p>
-                    <p class="small-note" id="originman-evaluation-scope">先用 50 万步主实验；短训练仅检查流程。评测范围由实际执行资源提供，公开条件不是真机成功率。</p>
-                    <label class="field-label" for="originman-resource">执行资源</label>
-                    <select id="originman-resource"><option value="">服务端配置的课程 Worker</option></select>
-                    <label class="field-label" for="originman-device">策略训练设备</label>
-                    <select id="originman-device"><option value="">沿用执行资源配置</option><option value="cuda">GPU · CUDA</option><option value="cpu">CPU</option></select>
-                    <p class="small-note">物理仿真由 CPU 执行；明确选择 GPU 时，GPU 不可用会报错。</p>
-                  </div>
-                </div>
-                <div class="model-actions">
-                  <button class="button button-primary" id="originman-train" type="submit">1. 创建本组训练</button>
-                  <button class="button button-ghost" id="originman-refresh" type="button">刷新记录</button>
-                </div>
-              </form></section>
-
-              <section id="originman-source-section"><label class="field-label" for="originman-run">本组训练记录</label><select id="originman-run"><option value="">尚无训练</option></select><p class="small-note" id="originman-provenance">训练与评测分别保存为平台 Run；无法确认提交结果时保留幂等键供重试。</p><button id="originman-preview-selected" type="button" disabled="" class="button button-primary">将所选权重放进交互仿真 →</button><button id="originman-tune-selected" type="button" disabled="" class="button button-ghost">复制所选训练参数，开始调优</button></section>
-
-
-              <div class="model-actions" id="originman-assessment-actions"><button class="button button-primary" id="originman-evaluate" type="button" disabled="">2. 评测所选权重</button></div>
-
-              <details id="originman-fallback">
-                <summary>课堂兜底与课前结果</summary>
-                <section id="originman-prepared-reference" hidden=""><h3>已验证的课前参考</h3><p class="small-note" id="originman-prepared-reference-note"></p><video id="originman-reference-video" class="originman-comparison-video" controls="" preload="metadata" aria-label="已验证课前参考，非本组训练"></video></section>
-                <p class="small-note">到时、排队或本组未达标时，保留本组日志和真实成绩。可切换查看同账号下完整训练且两组评测均达标的课前记录，不创建新任务，也不记作本组成绩。课前需先完成准备和验收。</p>
-                <label class="field-label" for="originman-reference">课前已验收记录</label>
-                <select id="originman-reference"><option value="">尚无合格课前记录</option></select>
-                <div class="model-actions"><button class="button button-ghost" id="originman-use-reference" type="button" disabled="">查看课前结果</button><button class="button button-ghost" id="originman-return-student" type="button" hidden="">返回本组实验</button></div>
-                <p id="originman-reference-note" class="small-note" role="status"></p>
-              </details>
-              <section id="originman-progress-section"><div class="run-progress-live-chart" id="originman-progress" hidden="">
-                <strong>本组训练奖励与开发检查</strong>
-                <canvas id="originman-progress-chart" width="900" height="240" role="img" aria-label="本组真实训练奖励曲线"></canvas>
-                <p class="small-note">横轴为累计控制步；曲线为引擎日志中的奖励。开发集恢复数每 5 万步检查一次，最终效果看独立评测。</p>
-              </div></section>
-
-              <section id="originman-assessment-section"><label class="field-label" for="originman-evaluation">本组评测记录</label><select id="originman-evaluation"><option value="">尚无评测</option></select><details id="originman-results-details" class="advanced-settings"><summary>指标、曲线与全部评测条件</summary>              <section id="originman-comparison" aria-labelledby="originman-comparison-title" hidden="">
-                <h3 id="originman-comparison-title">3. 相同扰动下的 RL 前后对照</h3>
-
-                <label class="field-label" for="originman-suite">评测条件集</label>
-                <select id="originman-suite"><option value="historical">原公开 31 条件</option><option value="additional">补充固定 31 条件</option></select>
-                <p id="originman-comparison-note" class="small-note"></p>
-                <div class="run-comparison-chart"><canvas id="originman-tilt-chart" width="900" height="260" role="img" aria-label="同一条件下各控制器的身体倾角"></canvas></div>
-                <div class="run-comparison-chart"><canvas id="originman-correction-chart" width="900" height="240" role="img" aria-label="RL 实际额外踝和髋目标随时间变化"></canvas></div>
-
-                <div class="originman-case-table" tabindex="0" role="region" aria-label="评测结果表格，可左右滚动"><table><thead><tr><th>条件</th><th>推力 / 开始</th><th>原 PD</th><th>调参反馈</th><th>训练后</th><th>冻结输出</th><th id="originman-baseline-column">相对调参反馈</th></tr></thead><tbody id="originman-cases"></tbody></table></div>
-                <div class="model-actions"><button class="button button-ghost" id="originman-download" type="button">下载本次评测记录</button><button class="button button-ghost" id="originman-offline" type="button">导出离线图文与回放</button></div>
-              </section></details><div id="originman-evaluation-media"></div></section>
-
-              <section id="originman-round-comparison" class="originman-round-comparison" hidden="" aria-labelledby="originman-round-title">
-                <h3 id="originman-round-title">两轮训练 · 同条件复评对照</h3>
-                <p class="small-note">先复制原训练参数，在新分组只改一个变量并训练；完成后对本轮权重评测。明确选择两轮各自的评测，再核对改善与退化。原实验保留，不接续原权重。</p>
-                <p id="originman-round-source" class="small-note"></p><a class="button button-ghost" id="originman-round-source-link">打开原训练，查看或重新评测</a>
-                <label class="field-label" for="originman-round-source-evaluation">原训练的明确评测</label><select id="originman-round-source-evaluation"><option value="">请选择明确的评测记录</option></select>
-                <p id="originman-round-current" class="small-note"></p><a class="button button-ghost" id="originman-round-current-link">打开本轮训练，查看或评测</a>
-                <label class="field-label" for="originman-round-current-evaluation">本轮训练的明确评测</label><select id="originman-round-current-evaluation"><option value="">请选择明确的评测记录</option></select>
-                <button id="originman-round-refresh" type="button" class="button button-ghost">重新核对两轮记录</button>
-                <p id="originman-round-status" class="small-note" role="status"></p>
-                <details class="advanced-settings"><summary>按两套固定条件逐项比较两轮结果（31+31，共62项）</summary><div class="originman-case-table" tabindex="0" role="region" aria-label="评测结果表格，可左右滚动"><table><thead><tr><th>条件集</th><th>条件</th><th>推力 / 开始 / 持续</th><th>原训练 RL</th><th>本轮 RL</th><th>变化</th></tr></thead><tbody id="originman-round-rows"></tbody></table></div></details><details class="advanced-settings"><summary>核对完整模型契约与评测协议摘要</summary><pre id="originman-round-proof" class="run-progress-logs-body"></pre></details>
-              </section>
-              <details id="originman-logs-fold"><summary>本组引擎日志与失败原因</summary><pre id="originman-logs" class="run-progress-logs-body">尚无日志</pre></details>
-            </details></div></section>
         </main>
         <aside class="usage-manual" id="usage-manual" aria-labelledby="usage-manual-title" hidden>
           <header class="usage-manual-header">
@@ -2638,14 +2416,8 @@
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=3"></script>
-    <script defer src="./training-plans.js?v=5"></script>
-    <script defer src="./originman-webgl.js?v=1"></script>
-    <script defer src="./originman-teleop-link.js?v=1"></script>
-    <script defer src="./originman-experience.js?v=1"></script>
-    <script defer src="./originman-simulator.js?v=2"></script>
-    <script defer src="./originman-round-comparison.js?v=1"></script>
-    <script defer src="./originman-workshop.js?v=1"></script>
-    <script defer src="./app.js?v=duck-lab-87"></script>
+    <script defer src="./training-plans.js?v=8"></script>
+    <script defer src="./app.js?v=duck-lab-91"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-20"></script>

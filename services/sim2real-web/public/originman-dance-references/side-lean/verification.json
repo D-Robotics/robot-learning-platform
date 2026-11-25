@@ -1,0 +1,105 @@
+{
+  "action": "side-lean",
+  "simulationOnly": true,
+  "method": "optimization in MuJoCo followed by phase-table ONNX export",
+  "contractId": "custom-policy-originman-dance-v2",
+  "config": {
+    "schemaVersion": 1,
+    "title": "side-lean",
+    "bpm": 100.0,
+    "seed": 7,
+    "trainingSteps": 8192,
+    "sections": [
+      {
+        "type": "side-lean",
+        "beats": 4,
+        "intensity": 0.6
+      }
+    ]
+  },
+  "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+  "policySha256": "e76fa09df93931658a4097869d4c3be2a4f998dcba0ffc78c184fd9875b021c0",
+  "replaySha256": "947e970016dde7a75b76aa45c7f368f67ec4e4550f97d265fb751c7eb1780a08",
+  "evaluations": [
+    {
+      "bpm": 95.0,
+      "completed": true,
+      "failed": false,
+      "reward": 512.2324341592197,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "side-lean",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.7107920920811283
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 10.947408445948017,
+      "fallContacts": [],
+      "steps": 127
+    },
+    {
+      "bpm": 100.0,
+      "completed": true,
+      "failed": false,
+      "reward": 479.43507992711716,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "side-lean",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.6964600386173778
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 11.001298076131313,
+      "fallContacts": [],
+      "steps": 120
+    },
+    {
+      "bpm": 105.0,
+      "completed": true,
+      "failed": false,
+      "reward": 455.35341987165566,
+      "sectionResults": [
+        {
+          "index": 0,
+          "type": "side-lean",
+          "beats": 4,
+          "clean": true,
+          "stylePassed": true,
+          "passed": true,
+          "activePoseTracking": 0.6785077242102909
+        }
+      ],
+      "allSectionsPassed": true,
+      "maxTiltDeg": 11.014538645380652,
+      "fallContacts": [],
+      "steps": 115
+    }
+  ],
+  "videoReceipt": {
+    "source": "recorded-simulation-qpos",
+    "physicalRobot": false,
+    "sceneSha256": "eac60475eb622c2731b36d9957a0c0445f8b00d4d588de7b1b4f25d518a56ad4",
+    "replaySha256": "947e970016dde7a75b76aa45c7f368f67ec4e4550f97d265fb751c7eb1780a08",
+    "videoSha256": "b3035d3253be97b960fa388b22f855de7470ca94091b1c3ac521d29989955e28",
+    "frames": 121,
+    "fps": 50,
+    "durationSeconds": 2.42,
+    "renderSettings": {
+      "cameraAzimuth": 135,
+      "cameraElevation": -12,
+      "cameraDistance": 1.25,
+      "headlightAmbient": 0.4,
+      "headlightDiffuse": 0.8
+    }
+  }
+}

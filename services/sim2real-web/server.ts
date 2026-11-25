@@ -860,7 +860,35 @@ export function createSim2RealWebApp(): Express {
   // error boundary below converts parser failures into stable JSON responses.
   const normalJson = express.json({ limit: '2mb' });
   const imageChatJson = express.json({ limit: '6mb' });
+  const referenceJson = express.json({ limit: '16mb' });
   app.use((request, response, next) => {
+    const referenceRoute =
+      /^\/api\/(?:sim2real|v1\/duck)\/(originman-reference\/(?:validate|screen)|runs)\/?$/.exec(
+        request.path,
+      );
+    const referenceUpload =
+      request.method === 'POST' &&
+      referenceRoute &&
+      (referenceRoute[1] !== 'runs' || request.get('X-RDK-Reference-Trajectory') === '1') &&
+      (!studioSsoAuth.isMultiUserDeployment() || Boolean(studioSsoAuth.resolvePrincipal(request)));
+    if (referenceUpload) {
+      referenceJson(request, response, (error?: unknown) => {
+        if (
+          !error &&
+          referenceRoute[1] === 'runs' &&
+          request.body?.taskId !== 'originman-reference-track'
+        ) {
+          response.status(400).json({
+            ok: false,
+            error: 'ORIGINMAN_REFERENCE_INVALID',
+            message: '该上传方式仅适用于 OriginMan 参考轨迹跟跳。',
+          });
+          return;
+        }
+        next(error);
+      });
+      return;
+    }
     const parser =
       request.method === 'POST' && /^\/api\/sim2real\/dsh\/chat\/?$/.test(request.path)
         ? imageChatJson
@@ -1787,6 +1815,33 @@ export function createSim2RealWebApp(): Express {
       .setHeader('Content-Disposition', 'attachment; filename="rdk-gpu-agent-install.sh"')
       .type('text/plain')
       .send(gpuAgentInstallScript(origin, agentUrl));
+  });
+
+  app.get('/workshop.html', (request, response, next) => {
+    const context = typeof request.query.context === 'string' ? request.query.context : '';
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(context)) {
+      response.setHeader('Cache-Control', 'no-store');
+      response.redirect(
+        302,
+        publicPath('/experiment.html') + '?context=' + encodeURIComponent(context),
+      );
+      return;
+    }
+    if (
+      request.query.course !== 'recovery' &&
+      request.query.setup === undefined &&
+      request.query.context === undefined
+    )
+      return next();
+    const query = new URLSearchParams({ course: 'dance', start: '1' });
+    const computeResourceId = request.query.computeResourceId;
+    if (
+      typeof computeResourceId === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(computeResourceId)
+    )
+      query.set('computeResourceId', computeResourceId);
+    response.setHeader('Cache-Control', 'no-store');
+    response.redirect(302, publicPath('/workshop.html') + '?' + query);
   });
 
   app.use('/help', createUsageManualRouter(path.resolve(SERVICE_ROOT, '../../docs'), publicPath));

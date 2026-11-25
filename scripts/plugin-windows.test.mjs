@@ -132,6 +132,7 @@ test(
     assert.ifError(installation.error);
     assert.equal(installation.status, 0, installation.stdout + installation.stderr);
     const archive = path.join(root, 'Qoder本机导入包.zip');
+    assert.ok(fs.existsSync(archive), installation.stdout + installation.stderr);
     const extracted = path.join(temp, '导入后');
     const unzip = spawnSync(
       'powershell.exe',
@@ -139,7 +140,7 @@ test(
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        'Expand-Archive -LiteralPath $env:RDK_TEST_ZIP -DestinationPath $env:RDK_TEST_EXTRACT',
+        "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::ExtractToDirectory($env:RDK_TEST_ZIP, $env:RDK_TEST_EXTRACT)",
       ],
       {
         env: { ...process.env, RDK_TEST_ZIP: archive, RDK_TEST_EXTRACT: extracted },
@@ -151,6 +152,13 @@ test(
     assert.ifError(unzip.error);
     assert.equal(unzip.status, 0, unzip.stderr);
     const importedRoot = path.join(extracted, 'rdk-robot-learning-platform');
+    assert.ok(
+      fs.existsSync(path.join(importedRoot, '.mcp.json')),
+      unzip.stdout +
+        unzip.stderr +
+        ' extracted entries: ' +
+        JSON.stringify(fs.readdirSync(extracted)),
+    );
     const config = JSON.parse(fs.readFileSync(path.join(importedRoot, '.mcp.json'), 'utf8'));
     const entry = config.mcpServers['rdk-robot-learning-platform'];
     assert.equal(entry.args[0], path.join(root, 'scripts/experience-mcp.mjs'));

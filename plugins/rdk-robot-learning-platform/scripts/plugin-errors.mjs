@@ -65,6 +65,24 @@ export function publicFailure(error) {
   };
 }
 
+const workshopEvidenceMessages = new Map([
+  ['binding-missing', '原训练缺少可用于恢复的 Worker 或策略绑定。请由课程管理员核对原训练的记录。'],
+  [
+    'worker-unavailable',
+    '暂时连不上原训练的 Worker。请恢复同一算力资源的连接，再继续原实验的评测。',
+  ],
+  ['job-missing', '原 Worker 查不到这条任务。请核对 Worker 的数据目录是否仍包含原训练记录。'],
+  ['receipt-missing', '原 Worker 尚未返回可用的评测回执。请核对是否保留了原训练的结果文件。'],
+  [
+    'receipt-mismatch',
+    '原 Worker 返回的任务、训练参数或策略校验值与原记录不一致。请核对原始结果文件。',
+  ],
+]);
+
+export function workshopEvidenceMessage(issue) {
+  return workshopEvidenceMessages.get(issue);
+}
+
 const specificRecovery = {
   SIM2REAL_API_NOT_FOUND: '确认当前平台版本已经提供这项接口，或在工作台打开相应页面。',
   SIM2REAL_INVALID_COMPUTE_RESOURCE_URL:

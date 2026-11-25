@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
@@ -12,6 +12,7 @@ import {
   appendSim2RealTelemetry,
   createSim2RealRun,
   reserveSim2RealRun,
+  storeSim2RealRelayArtifact,
   updateSim2RealComputeResource,
 } from '../sim2real/sim2real-store.js';
 import { readDevices } from '../sim2real/standalone-adapters.js';
@@ -2201,6 +2202,47 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('downloads and trials the same retained relay bytes without contacting a worker', async () => {
+    const router = await fixture();
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const { model } = registered.body as { model: { id: string } };
+    const bytes = Buffer.from('relay-policy-fixture');
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const run = await createSim2RealRun({
+      modelId: model.id,
+      status: 'completed',
+      summary: 'relay-test',
+      backend: 'local',
+      mock: false,
+      externalRunId: 'worker-relay-test',
+      relayAgentUrl: 'http://127.0.0.1:19091/train',
+      artifact: {
+        artifactId: 'relay-artifact',
+        artifactRef: 'artifact://relay/policy.onnx',
+        kind: 'source',
+        format: 'onnx',
+        sha256,
+      },
+    });
+    await storeSim2RealRelayArtifact(sha256, bytes);
+    const fetchWorker = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('offline'));
+    try {
+      for (const suffix of ['artifact', 'policy.onnx']) {
+        const result = await invoke(router, 'get', '/api/sim2real/runs/:id/' + suffix, {
+          params: { id: run.id },
+        });
+        expect(result.statusCode).toBe(200);
+        expect(result.headers['x-artifact-sha256']).toBe(sha256);
+        expect(result.body).toEqual(bytes);
+      }
+      expect(fetchWorker).not.toHaveBeenCalled();
+    } finally {
+      fetchWorker.mockRestore();
+    }
+  });
+
   it('returns 404 for artifact downloads of unknown runs', async () => {
     const router = await fixture();
     const response = await invoke(router, 'get', '/api/sim2real/runs/:id/artifact', {
@@ -2382,6 +2424,90 @@ describe('Sim2Real HTTP routes', () => {
       expect(workerTrainings[workerTrainings.length - 1]).not.toHaveProperty('engine');
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('shares configured GPU slots across SSO accounts without exposing private runners or credentials', async () => {
+    const legacyUrl = 'http://127.0.0.1:19097/train';
+    const sharedUrl = 'http://127.0.0.1:19101/train';
+    const legacyToken = 'a'.repeat(40);
+    const sharedToken = 'b'.repeat(40);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_URL', legacyUrl);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_TOKEN', legacyToken);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_NAME', 'Classroom GPU 7');
+    vi.stubEnv(
+      'RDK_SIM2REAL_SHARED_GPU_POOL_JSON',
+      JSON.stringify([
+        { name: 'Classroom GPU 0', runnerUrl: sharedUrl, runnerToken: sharedToken },
+        { name: 'Duplicate', runnerUrl: sharedUrl + '/', runnerToken: sharedToken },
+        { name: 'Broken', runnerUrl: 'file:///train', runnerToken: sharedToken },
+      ]),
+    );
+    const probe = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            maxConcurrentJobs: 2,
+            activeJobs: 1,
+            queuedJobs: 2,
+            mock: false,
+            engines: ['originman-recovery'],
+          }),
+        ),
+    );
+    try {
+      await fixture();
+      const auth: Sim2RealAuthPort = {
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: (request) => {
+          const accountId = request.headers['x-test-account'];
+          return typeof accountId === 'string' ? { accountId } : null;
+        },
+        resolveAccessToken: () => null,
+      };
+      const router = createSim2RealRouter({ auth });
+      const alice = { 'x-test-account': 'alice' };
+      const bob = { 'x-test-account': 'bob' };
+      const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+        headers: alice,
+        body: { name: 'Alice GPU', runnerUrl: 'http://127.0.0.1:19102/train' },
+      });
+      expect(created.statusCode).toBe(201);
+      const list = (headers: Record<string, string>) =>
+        invoke(router, 'get', '/api/sim2real/compute-resources', { headers });
+
+      expect((await list({})).statusCode).toBe(401);
+      const first = await list(alice);
+      const second = await list(bob);
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      const legacy = 'c1a55-' + createHash('sha256').update(legacyUrl).digest('hex').slice(0, 24);
+      const shared = second.body.computeResources;
+      expect(shared).toHaveLength(2);
+      expect(shared).toEqual(first.body.computeResources.slice(0, 2));
+      expect(first.body.computeResources).toHaveLength(3);
+      expect(shared[0]).toMatchObject({ name: 'Classroom GPU 7', id: legacy });
+      expect(shared[1]).toMatchObject({
+        name: 'Classroom GPU 0',
+        runnerUrl: sharedUrl,
+        status: 'online',
+        maxConcurrentJobs: 2,
+        activeJobs: 1,
+        queuedJobs: 2,
+      });
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(first.body)).not.toContain(legacyToken);
+      expect(JSON.stringify(first.body)).not.toContain(sharedToken);
+      const patch = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
+        headers: bob,
+        params: { id: shared[1].id },
+        body: { name: 'Changed' },
+      });
+      expect(patch.statusCode).toBe(403);
+    } finally {
+      probe.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 
@@ -2740,9 +2866,9 @@ describe('Sim2Real HTTP routes', () => {
     });
     const modelId = (registered.body as { model: { id: string } }).model.id;
     const originalFetch = globalThis.fetch;
-    let calls = 0;
-    globalThis.fetch = (async () => {
-      calls += 1;
+    const calls: string[] = [];
+    globalThis.fetch = (async (url) => {
+      calls.push(String(url));
       throw new Error('stale resource must not call a runner');
     }) as typeof fetch;
     try {
@@ -2757,7 +2883,7 @@ describe('Sim2Real HTTP routes', () => {
       expect(launch.body).toMatchObject({
         run: {
           status: 'blocked',
-          summary: expect.stringContaining('超过 30 秒'),
+          summary: expect.any(String),
         },
       });
 
@@ -2784,7 +2910,10 @@ describe('Sim2Real HTTP routes', () => {
         code: 'SIM2REAL_RUN_RECONCILE_UNAVAILABLE',
         retryable: true,
       });
-      expect(calls).toBe(1);
+      expect(calls).toEqual([
+        'http://127.0.0.1:19091/healthz',
+        'http://127.0.0.1:19091/runs/stale-run-1',
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

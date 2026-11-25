@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Workshop · RDK Robot Learning</title>
+    <link rel="stylesheet" href="./tokens.css" />
+    <link rel="stylesheet" href="./experiment.css" />
+    <link rel="stylesheet" href="./workshop.css" />
+    <script type="module" src="./workshop-entry-page.mjs"></script>
+  </head>
+  <body>
+    <a class="skip-link" id="workshop-skip" href="#dance-workshop-main">跳到 Workshop 内容</a>
+    <header class="experiment-header">
+      <a href="./">RDK Robot Learning</a>
+      <span id="recovery-workshop-label" hidden>OriginMan 受扰恢复课程 · 仅仿真</span>
+      <span id="connection-status" role="status" hidden>正在打开课程</span>
+    </header>
+    <main id="dance-workshop-main" class="workshop-shell">
+      <h1>OriginMan 舞蹈 Workshop</h1>
+      <p>第一次来？先看摆臂示意，再去配置快检。</p>
+      <section id="dance-reference" aria-labelledby="dance-reference-title">
+        <h2 id="dance-reference-title">看一段交替摆臂</h2>
+        <figure>
+          <canvas
+            id="dance-reference-canvas"
+            width="640"
+            height="260"
+            hidden
+            role="img"
+            aria-label="交替摆臂动作示意。左、右手轮流向前。"
+          ></canvas>
+          <figcaption>
+            动作示意 · 100 BPM · 8
+            拍。每拍左右手交换一次。此处展示编排目标，实际动作可在训练回放中查看。
+          </figcaption>
+        </figure>
+        <button id="dance-reference-play" type="button" hidden>播放动作示意</button>
+        <button id="dance-reference-stop" type="button" hidden>停止示意</button>
+        <p id="dance-reference-status" role="status"></p>
+      </section>
+      <section aria-labelledby="dance-budget-title">
+        <h2 id="dance-budget-title">选这轮训练多久</h2>
+        <div class="workshop-current">
+          <div>
+            <h3>快检 · 8,192 步</h3>
+            <p>第一次选这档。练习从提交训练到看回放、下载策略。</p>
+            <a
+              id="dance-budget-quick"
+              class="workshop-action-primary"
+              href="./?robot=originman&amp;danceBudget=quick#train/configure"
+              >配置快检</a
+            >
+          </div>
+          <div>
+            <h3>正式实验 · 50 万步</h3>
+            <p>想比较不同舞段或参数的效果时选这档。效果看本轮评测。</p>
+            <a
+              id="dance-budget-formal"
+              href="./?robot=originman&amp;danceBudget=formal#train/configure"
+              >配置正式实验</a
+            >
+          </div>
+        </div>
+        <p>
+          选择一档会打开训练配置页。两档默认同时运行 64 个仿真场景。到提交页确认后才会开始训练。
+        </p>
+        <div class="workshop-actions">
+          <a href="./?robot=originman#train/submit">查看训练记录</a>
+          <a href="./workshop.html?course=recovery">打开受扰恢复课程</a>
+          <a href="./originman-reference.html">打开参考轨迹跟跳</a>
+        </div>
+      </section>
+    </main>
+    <main id="workshop-main" class="workshop-shell" hidden>
+      <div class="section-heading workshop-title">
+        <h1>OriginMan 受扰恢复课程</h1>
+        <p><a href="./?robot=originman#train/configure">前往舞蹈编排与训练 →</a></p>
+      </div>
+      <nav class="workshop-progress" aria-label="课程进度">
+        <button id="workshop-step-reference" type="button" disabled>1 · 看参考</button>
+        <button id="workshop-step-budget" type="button" disabled>2 · 选预算</button>
+        <button id="workshop-step-execution" type="button" disabled>3 · 训练与评测</button>
+        <button id="workshop-step-result" type="button" disabled>4 · 看结果</button>
+      </nav>
+      <div class="workshop-current" role="region" aria-labelledby="workshop-current-title">
+        <div>
+          <p id="workshop-current-step" class="eyebrow">课程进度</p>
+          <h2 id="workshop-current-title">正在打开课程</h2>
+          <p id="workshop-status" role="status">正在准备页面。</p>
+        </div>
+        <button id="workshop-primary" type="button" hidden></button>
+        <a id="workshop-login" class="workshop-action-primary" href="./login" hidden
+          >登录学习平台</a
+        >
+      </div>
+      <details class="workshop-extras">
+        <summary>实验管理与自由探索</summary>
+        <div class="workshop-actions">
+          <button id="new-experiment" type="button" disabled>沿用本轮算力开新实验</button>
+          <button id="history-toggle" type="button" aria-expanded="false" aria-controls="history">
+            切换实验
+          </button>
+          <a href="./workshop.html?course=recovery&amp;start=1">换算力开新实验</a>
+          <a href="./#station/devices">连接设备</a>
+          <a id="open-interactive-simulation" href="./?robot=originman#simulate">打开交互仿真</a>
+        </div>
+        <p>可自由施力、跑 8 秒实验或慢放回看。浏览器后退可回到本轮课程。</p>
+      </details>
+      <div id="workshop-error" class="experiment-error" hidden>
+        <p id="workshop-error-message" role="alert"></p>
+        <div class="workshop-actions">
+          <button id="workshop-retry" type="button">重试读取本轮</button>
+        </div>
+      </div>
+      <section id="workshop-setup" hidden aria-labelledby="workshop-setup-title">
+        <h2 id="workshop-setup-title">选择用来训练的电脑</h2>
+        <p id="workshop-setup-status" role="status"></p>
+        <form id="workshop-setup-form" class="workshop-fields" hidden>
+          <label
+            >训练电脑（算力机）
+            <select id="workshop-compute" required></select>
+          </label>
+          <button id="workshop-setup-confirm" type="submit">检查这台算力机并继续</button>
+          <button id="workshop-compute-refresh" type="button">刷新占用</button>
+        </form>
+        <p id="workshop-compute-check" role="status"></p>
+      </section>
+      <section id="history" hidden aria-label="选择已有实验">
+        <h2>选择要继续的实验</h2>
+        <div id="history-list" class="workshop-actions"></div>
+        <p id="history-empty" hidden>还没有课程实验。点「开始实操」，选择本轮算力机。</p>
+      </section>
+      <section id="reference-section" aria-labelledby="reference-heading" hidden>
+        <div class="section-heading">
+          <h2 id="reference-heading">1 · 看参考</h2>
+          <span>讲师参考，非本组训练结果</span>
+        </div>
+        <p id="reference-instructions">
+          先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。
+        </p>
+        <div class="workshop-actions">
+          <button id="play-reference" type="button">播放讲师参考</button>
+          <button id="skip-reference" type="button">跳过参考，选择预算</button>
+        </div>
+        <video
+          id="reference-video"
+          controls
+          playsinline
+          preload="none"
+          aria-label="讲师参考回放"
+        ></video>
+        <p id="reference-status" role="status"></p>
+        <div class="workshop-actions">
+          <a id="open-simulation" href="./?robot=originman#simulate">自由探索参考仿真</a>
+        </div>
+      </section>
+      <section id="budget-section" hidden aria-labelledby="budget-heading">
+        <h2 id="budget-heading">2 · 选择一次预算</h2>
+        <p id="budget-readiness" hidden></p>
+        <div id="budget-presets">
+          <p>第一次用，选<strong>快速体验</strong>。两档训练完成后都会评测本轮策略。</p>
+          <div class="workshop-actions">
+            <button id="start-quick" type="button">开始快检训练 · 8,192 步</button>
+            <button id="start-formal" type="button">选择正式效果实验 · 50 万步</button>
+          </div>
+          <p>
+            点「开始快检训练」会提交一次训练，完成后自动评测。正式训练和自定义训练会先让你确认方案。
+          </p>
+        </div>
+        <p id="comparison-recipe-help" hidden>
+          已带入上一轮参数。只改一项，再比较两轮在相同条件下的恢复次数。
+          <a id="comparison-base-link" target="_blank" rel="noopener">打开上一轮结果</a>
+        </p>
+        <div class="workshop-actions" id="comparison-presets" hidden>
+          <button id="compare-double-steps" type="button">只把训练步数翻倍</button>
+          <button id="compare-formal-budget" type="button">只把步数改为正式预算</button>
+        </div>
+        <details id="custom-recipe">
+          <summary>自定义训练参数</summary>
+          <p>
+            新实验保留旧结果。其余配方固定为 SAC、4
+            环境、CUDA；更多引擎和平台功能仍可在聊天或主工作台使用。
+          </p>
+          <p>
+            想看训练更久有没有帮助，就只改训练步数。想看不同扰动力度是否影响恢复，就只改侧推上限。想检查结果能否复现，就只改随机种子。
+          </p>
+          <div class="workshop-fields">
+            <label
+              >训练步数
+              <input
+                id="custom-timesteps"
+                type="number"
+                min="4096"
+                max="1000000"
+                value="8192"
+                required /></label
+            ><label
+              >随机种子
+              <input
+                id="custom-seed"
+                type="number"
+                min="0"
+                max="1000000"
+                value="7"
+                required /></label
+            ><label
+              >训练侧推上限（N）
+              <input
+                id="custom-push"
+                type="number"
+                min="6.4"
+                max="9"
+                step="0.1"
+                value="8.1"
+                required
+            /></label>
+          </div>
+          <button id="review-custom" type="button">检查并选择此配方</button>
+        </details>
+        <div id="recipe-confirm" hidden>
+          <p id="recipe-confirm-text"></p>
+          <button id="confirm-recipe" type="button">按此预算开始训练与评测</button
+          ><button id="cancel-recipe" type="button">返回选择</button>
+        </div>
+      </section>
+      <section id="execution-section" hidden aria-labelledby="execution-heading">
+        <h2 id="execution-heading">3 · 训练与评测</h2>
+        <p id="execution-status" aria-live="polite"></p>
+        <p id="active-recipe" class="workshop-recipe"></p>
+        <div id="workshop-recovery" hidden>
+          <p id="workshop-recovery-status" role="status"></p>
+          <div class="workshop-actions">
+            <button id="refresh-original-workshop" type="button">刷新原实验</button>
+            <a
+              id="workshop-recovery-records"
+              href="./?robot=originman#train/runs"
+              target="_blank"
+              rel="noopener"
+              >查看运行记录</a
+            >
+            <a id="workshop-recovery-new" href="./workshop.html?course=recovery&amp;start=1" hidden
+              >另开实验并选算力</a
+            >
+          </div>
+        </div>
+        <div class="workshop-actions">
+          <button id="recover-workshop-request" type="button" hidden>接续原请求</button>
+          <button id="continue-evaluation" type="button" hidden>继续同源评测</button>
+          <button id="go-results" type="button">查看曲线与结果 ↓</button>
+        </div>
+        <details id="workshop-execution-more">
+          <summary>更多操作</summary>
+          <div class="workshop-actions">
+            <button id="refresh-workshop" type="button">刷新原实验</button>
+            <button id="pause-workshop" type="button">暂停后续自动步骤</button>
+            <a
+              id="open-run-details"
+              href="./?robot=originman#train/runs"
+              target="_blank"
+              rel="noopener"
+              >在新标签查看运行记录</a
+            >
+          </div>
+        </details>
+        <p>
+          关掉页面后，已提交的任务会继续。回到本页可查看原进度，未提交的自动评测会在接续时继续。
+        </p>
+      </section>
+      <section id="result-section" hidden aria-labelledby="result-heading">
+        <h2 id="result-heading">4 · 看本次结果与回放</h2>
+        <p id="result-guide">先看两组条件各恢复了几次，再看一次实际动作。</p>
+        <div class="workshop-actions">
+          <a id="go-recovery-counts" hidden>看恢复次数 ↓</a>
+          <a id="go-replay" hidden>去看回放 ↓</a>
+          <button id="compare-parameters" type="button" hidden>改一个参数再试</button>
+          <a id="open-result" target="_blank" rel="noopener">单独打开本次实验</a>
+        </div>
+        <details id="round-comparison">
+          <summary>跨轮对比 · 参数和恢复次数</summary>
+          <p>从本轮选最多两轮历史实验。由「改一个参数再试」创建的实验会自动带入来源轮次。</p>
+          <p id="round-comparison-status" role="status"></p>
+          <p id="round-comparison-summary" hidden></p>
+          <div class="comparison-scroll">
+            <table id="round-comparison-table" hidden>
+              <caption>
+                恢复成功次数与相对上一行的变化
+              </caption>
+              <thead>
+                <tr>
+                  <th scope="col">实验</th>
+                  <th scope="col">训练步数 / 种子 / 侧推上限</th>
+                  <th scope="col">相比上一轮</th>
+                  <th scope="col">公开组</th>
+                  <th scope="col">补充组</th>
+                  <th scope="col">收益判据</th>
+                </tr>
+              </thead>
+              <tbody id="round-comparison-rows"></tbody>
+            </table>
+          </div>
+          <button id="choose-rounds" type="button">选择历史轮次</button>
+          <div id="round-comparison-picker" class="workshop-actions" hidden>
+            <label
+              >历史实验一
+              <select id="round-one"></select
+            ></label>
+            <label
+              >历史实验二
+              <select id="round-two"></select
+            ></label>
+            <button id="apply-rounds" type="button">对比所选实验</button>
+          </div>
+        </details>
+        <iframe
+          id="result-frame"
+          title="本次实验曲线、对比与回放"
+          loading="lazy"
+          allow="fullscreen"
+        ></iframe>
+      </section>
+      <details class="experiment-details">
+        <summary>技术详情</summary>
+        <pre id="workshop-diagnostics">尚未取得课程实验。</pre>
+      </details>
+      <p>随时回到聊天提问、解释结果或提出自定义实验；不会因为打开此页锁住其他工具。</p>
+    </main>
+  </body>
+</html>

@@ -6,32 +6,84 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-7"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
     <header class="experiment-header">
-      <a href="./">RDK Robot Learning</a>
-      <a href="./workshop.html">OriginMan Workshop</a>
+      <a href="./workshop.html">返回 OriginMan 工作坊</a>
     </header>
     <main id="reference-main" class="experiment-layout">
       <aside aria-label="任务说明">
         <p class="eyebrow">OriginMan · 仿真</p>
         <h1>参考轨迹跟跳</h1>
-        <p>导入每帧的关节目标，训练策略在仿真中完整跟随。两个头部通道固定为零。</p>
+        <p>选择预置舞蹈、从动作库编排，或导入自己的轨迹。预览后可提交仿真训练。</p>
         <ol class="experiment-steps">
-          <li>导入并校验轨迹</li>
+          <li>选择并校验轨迹</li>
           <li>选择算力并提交训练</li>
           <li>查看评测、回放和 ONNX</li>
         </ol>
       </aside>
       <section class="experiment-content" aria-label="任务表单">
-        <section aria-labelledby="reference-import-heading">
+        <section aria-labelledby="reference-mode-heading">
+          <h2 id="reference-mode-heading">选择参考来源</h2>
+          <label>编排方式
+            <select id="reference-mode">
+              <option value="preset">预置舞蹈</option>
+              <option value="blocks">动作组自由编排</option>
+              <option value="upload">导入自己的轨迹</option>
+            </select>
+          </label>
+          <div id="reference-motion-panel" hidden>
+            <p id="reference-motion-source" role="status"></p>
+            <button id="reference-motion-retry" type="button" hidden>重新加载动作库</button>
+            <p id="reference-motion-presets">
+              <label>预置舞蹈 <select id="reference-motion-preset" disabled></select></label>
+            </p>
+            <div id="reference-motion-blocks" hidden>
+              <p><label>搜索动作 <input id="reference-motion-search" type="search" disabled /></label>
+              <label>分类 <select id="reference-motion-category" disabled><option value="">全部分类</option></select></label></p>
+              <p id="reference-motion-matches" role="status" hidden></p>
+              <p><label>动作 <select id="reference-motion-action" disabled></select></label>
+              <button id="reference-motion-add" type="button" disabled>添加到编排</button></p>
+              <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
+              <details id="reference-motion-unavailable" class="experiment-details" hidden>
+                <summary id="reference-motion-unavailable-summary">暂不可训练的素材</summary>
+                <ul id="reference-motion-unavailable-list"></ul>
+              </details>
+              <p><label>估算拍数用 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
+              <label>最短过渡秒数 <input id="reference-motion-transition" type="number" min="0" max="2" step="0.02" value="0.4" /></label></p>
+            </div>
+            <p id="reference-motion-estimate"></p>
+            <button id="reference-motion-prepare" type="button" disabled>预览参考轨迹</button>
+            <p id="reference-motion-status" role="status" aria-live="polite"></p>
+            <div id="reference-motion-result" hidden>
+              <label>预览关节 <select id="reference-motion-joint"></select></label>
+              <svg id="reference-motion-curve" viewBox="0 0 400 110" role="img" aria-label="参考关节角随时间变化"><path fill="none" stroke="currentColor" stroke-width="2"></path></svg>
+              <p id="reference-motion-range"></p>
+            </div>
+          </div>
+        </section>
+        <section id="reference-import-section" aria-labelledby="reference-import-heading">
           <h2 id="reference-import-heading">导入参考轨迹</h2>
           <p id="reference-format">支持 50 Hz 的 NPZ 或 JSON。关节位置使用相对站姿的弧度，速度使用弧度/秒。</p>
-          <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" /></p>
+          <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" disabled /></p>
           <p><button id="reference-example" type="button" disabled>加载示例摆臂</button>
           <button id="reference-example-download" type="button" disabled>下载示例 JSON</button></p>
+          <details class="experiment-details">
+            <summary>拼接片段与慢放</summary>
+            <p>按加入顺序拼接，片段之间加入 0.4 秒平滑过渡。慢放后仍以 50 Hz 保存，并重新计算关节速度。</p>
+            <p><label for="reference-append">追加轨迹片段</label>
+              <input id="reference-append" type="file" accept=".npz,.json" disabled /></p>
+            <ol id="reference-clips" aria-label="片段顺序"></ol>
+            <p><label for="reference-speed">轨迹速度</label>
+              <select id="reference-speed" disabled>
+                <option value="1">原速</option>
+                <option value="0.75">0.75 倍速</option>
+                <option value="0.5">0.5 倍速</option>
+              </select>
+              <button id="reference-export" type="button" disabled>下载当前轨迹 JSON</button></p>
+          </details>
           <p id="reference-status" role="status" aria-live="polite">正在读取任务配置。</p>
           <p id="reference-error" class="experiment-error" role="alert" hidden></p>
         </section>
@@ -39,7 +91,8 @@
           <h2 id="reference-training-heading">训练与评测</h2>
           <form id="reference-form">
             <p><label for="reference-worker">训练 Worker</label>
-              <select id="reference-worker" required><option value="">请选择</option></select></p>
+              <select id="reference-worker" required aria-describedby="reference-worker-hint"><option value="">请选择</option></select>
+              <button id="reference-worker-check" type="button" disabled>检查连接</button></p>
             <p><label for="reference-steps">预算</label>
               <select id="reference-steps">
                 <option value="8192">快检 · 8,192 步</option>
@@ -51,7 +104,20 @@
                 <option>1</option><option>2</option><option>4</option><option>8</option>
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
-            <p id="reference-worker-hint"></p>
+            <p id="reference-worker-hint" role="status"></p>
+            <details id="reference-screen-details" class="experiment-details" open>
+              <summary>训练前物理筛查</summary>
+              <p>用所选 Worker 检查关节限位和仿真稳定性。筛查与本次配方及所选 Worker 绑定。</p>
+              <p><button id="reference-screen-current" type="button" disabled>筛查当前轨迹</button></p>
+              <p id="reference-screen-file-control"><label for="reference-screen-files">批量筛查轨迹（最多 8 个文件）</label>
+                <input id="reference-screen-files" type="file" accept=".npz,.json" multiple disabled /></p>
+              <p><button id="reference-screen-cancel" type="button" hidden>取消筛查</button></p>
+              <p id="reference-screen-status" role="status" aria-live="polite"></p>
+              <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
+            </details>
+            <p>标准与长训每 32,768 步评测一次。预置和自由编排跑完所选预算。上传轨迹可在完整度、倾角和偏航达标后提前结束。</p>
+            <p id="reference-screen-blocker" role="status" hidden>当前轨迹未通过所选 Worker 的物理筛查。请调整轨迹或重新筛查后再提交。</p>
+            <p id="reference-training-error" class="experiment-error" role="alert" hidden></p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>
         </section>

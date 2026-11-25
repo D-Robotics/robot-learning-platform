@@ -216,3 +216,15 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python
 `scripts/gpu-deploy.mjs` 的第 1 步会失败并给出排查清单——这是预期行为。机器就绪后重跑同一条命令即可；本机其他功能（`npm run demo:starter` CPU 真实训练、可视化、评测、只读板端预检）完全不依赖 GPU 机器。
 
 大规模训练（万级并行、域随机化）请继续参考 `engines/mjlab-rsl-rl-adapter/README.md`，在同一 worker 协议下替换引擎可执行文件即可。
+
+## 多账号共用 GPU
+
+每张卡运行一个 Worker，用 GPU UUID 固定 `CUDA_VISIBLE_DEVICES`，并为每个 Worker 指定独立端口、数据目录和 Runner 密钥。设置 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS=2` 和 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT=1` 后，每张卡可同时训练两个账号。同一账号在同一张卡上的后续任务进入队列。空出的名额由最早提交且当前有资格运行的任务使用。
+
+在平台服务的受保护环境文件配置 `RDK_SIM2REAL_SHARED_GPU_POOL_JSON`，每项包含 `name`、`runnerUrl`（以 `/train` 结尾）和 `runnerToken`（至少 32 字符）。原有 `RDK_SIM2REAL_SHARED_GPU_URL` 和 `RDK_SIM2REAL_SHARED_GPU_TOKEN` 可以继续保留，已关联的训练记录仍使用原资源 ID。通过 `RDK_SIM2REAL_SHARED_GPU_NAME` 可以设置原资源的显示名称。
+
+学员登录后可以查看每张卡的运行和排队数量，也可以手动选择 GPU。平台对共享卡的健康快照每 5 秒最多刷新一次。提交后任务留在所选卡的队列。运行记录、日志、策略、回放和取消操作由平台和 Worker 按账号授权。
+
+在多槽位 Worker 上，受扰恢复环境检查可以使用一个空闲槽位。卡在运行或排队时，Worker 在运行配置未变的情况下最多复用同进程一小时内的成功检查。Worker 重启会恢复确定尚未尝试启动的任务，其他中断保留原记录与配方供手动重试。
+
+恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。独立组包时须保留同级 `engines/microduck-football/train_football.py`，训练回执会归档该源码。

@@ -123,12 +123,9 @@
 }
 
 #dance-reference figure { margin-inline: 0; }
-#dance-reference canvas {
+#dance-reference video {
   display: block;
-  max-width: 100%;
+  width: min(100%, 520px);
   height: auto;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 12px;
 }
-#dance-reference canvas[hidden] { display: none; }
+#dance-reference figcaption { margin-top: 8px; }

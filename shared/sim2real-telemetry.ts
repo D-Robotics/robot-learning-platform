@@ -104,14 +104,31 @@ export interface Sim2RealRunMetrics {
     }[];
   };
   originmanReference?: SimulationReplayEvidence & {
+    checkpointEvaluations?: number;
     framesExpected: number;
     framesEvaluated: number;
     trackingMaeRad: number;
+    trackingRmseRad?: number;
+    zeroResidualRmseRad?: number;
+    zeroResidualFramesEvaluated?: number;
+    trajectorySha256?: string;
+    onnxMaxAbsError?: number;
+    sections?: {
+      id: string;
+      framesExpected: number;
+      framesEvaluated: number;
+      completed: boolean;
+      trackingRmseRad?: number;
+      maxTiltDeg?: number;
+      squatDescentM?: number;
+    }[];
     maxTiltDeg: number;
     finalYawDeg: number;
     qualityGatePassed: boolean;
     referenceSha256: string;
     sceneSha256: string;
+    stanceProfile?: 'source-neutral-v1';
+    calibrationSha256?: string;
   };
   /**
    * True only when the training backend actually ran on CUDA. A requested but
@@ -144,6 +161,7 @@ export interface Sim2RealRunProgressPoint {
   totalIterations: number;
   meanReward: number;
   recentSuccess: number;
+  episodeSamples?: number;
   elapsedSeconds?: number;
   at?: string;
 }

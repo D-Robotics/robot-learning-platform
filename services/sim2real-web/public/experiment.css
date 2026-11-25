@@ -39,6 +39,7 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 .experiment-error { color: var(--red-text); background: var(--red-soft); padding: 16px; margin-bottom: 24px; border-radius: 8px; }
 .experiment-details { border-top: 1px solid var(--line); padding-top: 16px; }
 .experiment-details pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--fs-meta)/1.6 var(--font-label); }
+#reference-screen-results small { overflow-wrap: anywhere; }
 #login-platform { display: block; margin-top: 16px; }
 #download-video { display: inline-block; margin: 12px 16px 0 0; }
 @media (max-width: 720px) {
@@ -58,3 +59,16 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 .workshop-embedded > .skip-link,
 .workshop-embedded .experiment-layout > aside { display: none; }
 .workshop-embedded .experiment-layout { display: block; padding: 8px 0; }
+
+#reference-motion-result svg,
+#completion-chart { display: block; width: 100%; max-width: 720px; }
+#completion-chart[hidden] { display: none; }
+#reference-motion-panel :is(input, select) { max-width: 100%; }
+#reference-motion-sequence li { margin-block: 8px; overflow-wrap: anywhere; }
+#reference-motion-sequence :is(input, button) { margin-inline-end: 4px; }
+#reference-motion-sequence input { width: 4rem; }
+#run-config-body td { overflow-wrap: anywhere; }
+
+#replay-segment-controls { margin-top: 12px; }
+#replay-segment-controls select { max-width: 100%; }
+#run-trajectory-sha, #run-reference-file-sha, #run-policy-sha { overflow-wrap: anywhere; }

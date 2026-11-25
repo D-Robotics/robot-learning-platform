@@ -15,7 +15,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { accessSync, constants, createReadStream, realpathSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -34,6 +34,9 @@ const DATA_DIR = path.resolve(
   ),
 );
 const MAX_BODY = 2 * 1024 * 1024;
+const MAX_REFERENCE_BODY = 16 * 1024 * 1024;
+const REFERENCE_ENGINE = 'originman-reference-ppo';
+const REFERENCE_TASK = 'originman-reference-track';
 const MAX_RESULT = 1 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 10_000_000_000;
 const MAX_DANCE_VIDEO_BYTES = 50 * 1024 * 1024;
@@ -54,7 +57,7 @@ const MAX_PROGRESS_POINTS = 512;
 // the mjx adapter), so one pattern keeps the worker engine-agnostic:
 //   [starter-ppo] iter 12/400 meanReward=0.041 recentSuccess=0.38 goalRange=[0.80,1.20] elapsed=107.6s
 const PROGRESS_LINE_RE =
-  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?/g;
+  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?(?: episodeSamples=(\d+))?/g;
 
 function parseProgressLine(chunk, job) {
   for (const match of String(chunk).matchAll(PROGRESS_LINE_RE)) {
@@ -73,11 +76,15 @@ function parseProgressLine(chunk, job) {
       continue;
     }
     const elapsed = Number(match[6]);
+    const samples = Number(match[7]);
     const point = {
       iteration,
       totalIterations: total,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
+        ? { episodeSamples: samples }
+        : {}),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       at: new Date().toISOString(),
     };
@@ -114,27 +121,61 @@ function safeProgress(job) {
     }
     lastIteration = iteration;
     const elapsed = Number(raw.elapsedSeconds);
+    const samples = raw.episodeSamples;
     points.push({
       iteration,
       totalIterations: total,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
+        ? { episodeSamples: samples }
+        : {}),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       ...(typeof raw.at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw.at) ? { at: raw.at } : {}),
     });
   }
   return points.length ? points : undefined;
 }
-const MAX_JOBS = 1000;
+const MAX_OUTSTANDING_JOBS = 1000;
 const MAX_CONCURRENT_JOBS_LIMIT = 32;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
 const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
+const archivedJobs = new Map();
+const archivedJobKeys = new Map();
+const pendingJobWrites = new WeakMap();
 const queuedJobs = [];
 const activeJobs = new Set();
+let screening = null;
+let workerShuttingDown = false;
+const jobChildren = new Map();
+const cancellationBarriers = new Map();
 const activeChildren = new Set();
 const finalizingJobs = new Set();
 let jobsLoadPromise;
+const terminalJobStatuses = new Set(['cancelled', 'completed', 'failed']);
+
+function archivedJobKey(owner, key) {
+  return JSON.stringify([owner, key]);
+}
+
+function archiveJob(job) {
+  archivedJobs.set(job.runId, job.accountId);
+  if (job.idempotencyKey) {
+    archivedJobKeys.set(archivedJobKey(job.accountId, job.idempotencyKey), job.runId);
+  }
+  jobs.delete(job.runId);
+}
+
+async function readWorkerJob(runId, owner) {
+  const current = jobs.get(runId);
+  if (current) return current.accountId === owner ? current : null;
+  if (archivedJobs.get(runId) !== owner) return null;
+  const dir = path.join(DATA_DIR, runId);
+  const job = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8'));
+  if (job.accountId !== owner || !terminalJobStatuses.has(job.status)) return null;
+  return { ...job, dir, runId };
+}
 
 function loopbackHost(host) {
   const value = String(host || '')
@@ -262,12 +303,12 @@ function fail(message, status = 400, code = 'invalid_training_request') {
   return error;
 }
 
-async function bodyJson(request) {
+async function bodyJson(request, maxBody = MAX_BODY) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += Buffer.byteLength(chunk);
-    if (size > MAX_BODY) throw fail('training request is too large', 413, 'request_too_large');
+    if (size > maxBody) throw fail('training request is too large', 413, 'request_too_large');
     chunks.push(chunk);
   }
   if (!size) return {};
@@ -314,6 +355,8 @@ function canonicalJson(value) {
 function requestFingerprint(source, owner) {
   const {
     idempotencyKey: _idempotencyKey,
+    recoverableQueue: _recoverableQueue,
+    launchAttemptedAt: _launchAttemptedAt,
     accountId: _accountId,
     ...requestWithoutIdentity
   } = source;
@@ -533,7 +576,22 @@ function workerEngines() {
         'worker_configuration_invalid',
       );
     }
-    entries.set(id, { id, executable, args });
+    const preflightArgs = value.preflightArgs;
+    if (
+      preflightArgs !== undefined &&
+      (!Array.isArray(preflightArgs) ||
+        !preflightArgs.length ||
+        preflightArgs.length > 128 ||
+        preflightArgs.some(
+          (arg) => typeof arg !== 'string' || arg.length > 500 || arg.includes('\0'),
+        ))
+    )
+      throw fail(
+        'engine preflightArgs must be a bounded array of strings',
+        500,
+        'worker_configuration_invalid',
+      );
+    entries.set(id, { id, executable, args, ...(preflightArgs ? { preflightArgs } : {}) });
   }
   return entries;
 }
@@ -572,22 +630,29 @@ function engineFor(request) {
   return { engineId: selected.id, executable: selected.executable, args: selected.args };
 }
 
-function maxConcurrentJobs() {
-  const raw = String(process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS || '1').trim();
+function concurrencyLimit(name, fallback, upperBound) {
+  const raw = String(process.env[name] ?? fallback).trim();
   const value = Number(raw);
-  if (
-    !/^\d+$/.test(raw) ||
-    !Number.isSafeInteger(value) ||
-    value < 1 ||
-    value > MAX_CONCURRENT_JOBS_LIMIT
-  ) {
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > upperBound) {
     throw fail(
-      `RDK_SIM2REAL_MAX_CONCURRENT_JOBS must be an integer from 1 to ${MAX_CONCURRENT_JOBS_LIMIT}`,
+      `${name} must be an integer from 1 to ${upperBound}`,
       500,
       'worker_configuration_invalid',
     );
   }
   return value;
+}
+
+function concurrencyLimits() {
+  const total = concurrencyLimit('RDK_SIM2REAL_MAX_CONCURRENT_JOBS', 1, MAX_CONCURRENT_JOBS_LIMIT);
+  const perAccount = concurrencyLimit('RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT', total, total);
+  return { total, perAccount };
+}
+
+function activeAccountJobs(owner) {
+  let count = 0;
+  for (const job of activeJobs) if (job.accountId === owner) count++;
+  return count;
 }
 
 function publicJob(job) {
@@ -628,6 +693,7 @@ function childEnvironment(job) {
   // model-registry credential should inject it through its own wrapper.
   for (const key of Object.keys(environment)) {
     if (
+      key === 'RDK_SIM2REAL_SHARED_GPU_POOL_JSON' ||
       /^(?:RDK_SIM2REAL|RDK_STUDIO|SSO)_.*(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/i.test(key) ||
       /^(?:RDK_SIM2REAL|RDK_STUDIO)_.*(?:COOKIE|DATABASE_URL)$/i.test(key)
     ) {
@@ -653,8 +719,9 @@ async function restorePersistedJobs() {
   } catch {
     return;
   }
+  const recovered = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name) || jobs.size >= MAX_JOBS) continue;
+    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name)) continue;
     const dir = path.join(DATA_DIR, entry.name);
     try {
       const parsed = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8'));
@@ -663,36 +730,61 @@ async function restorePersistedJobs() {
       if (
         !SAFE_RUN_ID.test(candidate.runId) ||
         !text(candidate.accountId, 160) ||
-        !['queued', 'running', 'completed', 'failed'].includes(candidate.status) ||
+        !['queued', 'running', 'cancelling', 'cancelled', 'completed', 'failed'].includes(
+          candidate.status,
+        ) ||
         typeof candidate.fingerprint !== 'string'
       )
         continue;
       candidate.accountId = text(candidate.accountId, 160);
       if (!candidate.accountId || /[\u0000-\u001f\u007f/]/.test(candidate.accountId)) continue;
-      // A process restart terminates children through systemd's cgroup. Keep
-      // the record visible, but close the stale reservation explicitly rather
-      // than relaunching user work or reporting a false running state.
-      if (candidate.status === 'queued' || candidate.status === 'running') {
+      // Older snapshots could say queued even after spawning. Only recover jobs
+      // written with the durable launch reservation protocol.
+      if (
+        candidate.status === 'queued' &&
+        candidate.recoverableQueue === true &&
+        typeof candidate.createdAt === 'string' &&
+        !candidate.launchAttemptedAt &&
+        !candidate.startedAt &&
+        !candidate.cancelRequestedAt &&
+        !candidate.finishedAt
+      ) {
+        validate(candidate.request);
+        if (candidate.fingerprint !== requestFingerprint(candidate.request, candidate.accountId))
+          continue;
+        recovered.push(candidate);
+      } else if (['queued', 'running', 'cancelling'].includes(candidate.status)) {
         candidate.status = 'failed';
         candidate.finishedAt = new Date().toISOString();
         candidate.errorCode = 'worker_restarted';
         candidate.message =
-          '本地 worker 重启后任务状态未知；未自动重启训练，请检查任务目录中的结果。';
+          'Worker 重启前任务已尝试启动，或启动状态未知。可以保留原配置并手动重试。';
       }
       delete candidate.pid;
       delete candidate.timeout;
-      jobs.set(candidate.runId, candidate);
-      if (candidate.errorCode === 'worker_restarted')
-        await persist(candidate).catch(() => undefined);
+      if (['queued', 'running', 'cancelling'].includes(parsed.status)) {
+        jobs.set(candidate.runId, candidate);
+        if (candidate.errorCode === 'worker_restarted')
+          await persist(candidate).catch(() => undefined);
+      } else {
+        archiveJob(candidate);
+      }
     } catch {
       // A partial/corrupt job must not make the worker unavailable. It is
       // intentionally left on disk for operator inspection.
     }
   }
+  recovered.sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.runId.localeCompare(b.runId),
+  );
+  queuedJobs.push(...recovered);
 }
 
 function ensureJobsLoaded() {
-  if (!jobsLoadPromise) jobsLoadPromise = restorePersistedJobs();
+  if (!jobsLoadPromise)
+    jobsLoadPromise = restorePersistedJobs().then(() => {
+      void pumpQueue();
+    });
   return jobsLoadPromise;
 }
 
@@ -901,13 +993,19 @@ async function launch(job, config) {
   await writeFile(path.join(job.dir, 'request.json'), JSON.stringify(job.request, null, 2), {
     mode: 0o600,
   });
+  if (job.status !== 'queued' || workerShuttingDown) return;
+  job.launchAttemptedAt = new Date().toISOString();
+  await persist(job);
+  if (job.status !== 'queued' || workerShuttingDown) return;
   const child = spawn(config.executable, config.args, {
     cwd: job.dir,
+    detached: process.platform !== 'win32',
     shell: false,
     stdio: ['ignore', 'pipe', 'pipe'],
     env: childEnvironment(job),
   });
   activeChildren.add(child);
+  jobChildren.set(job, child);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.pid = child.pid;
@@ -928,11 +1026,16 @@ async function launch(job, config) {
     stderr = (stderr + String(chunk)).slice(-MAX_LOG);
     feedLogStream(job, 'stderr', chunk);
   });
-  const timeoutMs = Math.min(
-    Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
-    7 * 86_400_000,
-  );
-  job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  const requestedTimeout = Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000);
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.min(Math.max(requestedTimeout, 1000), 7 * 86_400_000)
+    : 86_400_000;
+  job.timeout = setTimeout(() => {
+    if (job.cancelRequestedAt || finalizingJobs.has(job)) return;
+    job.timedOutAt = new Date().toISOString();
+    job.message = '训练已超时，正在等待训练进程退出。';
+    stopTrainingChild(job, child);
+  }, timeoutMs);
   child.once('error', (error) => {
     feedLogStream(job, 'stderr', error.message + '\n');
     return finish(job, 1, stdout, `${stderr}\n${error.message}`);
@@ -945,6 +1048,18 @@ async function launch(job, config) {
 async function finish(job, code, stdout, stderr) {
   if (job.finishedAt || finalizingJobs.has(job)) return;
   finalizingJobs.add(job);
+  if (job.timeout) clearTimeout(job.timeout);
+  const cancellation = cancellationBarriers.get(job);
+  if (cancellation && !(await cancellation)) {
+    finalizingJobs.delete(job);
+    job.message = '尚未确认训练进程组已退出，请检查 Worker。训练资源仍保留。';
+    await persist(job).catch(() => undefined);
+    return;
+  }
+  const child = jobChildren.get(job);
+  if (child) activeChildren.delete(child);
+  jobChildren.delete(job);
+  cancellationBarriers.delete(job);
   // The process is done, so no chunk can complete a partial line anymore:
   // flush what remains as the final line of each stream.
   for (const stream of Object.keys(job.logPartials || {})) {
@@ -952,16 +1067,24 @@ async function finish(job, code, stdout, stderr) {
     if (partial) appendLogLine(job, stream, partial);
   }
   job.logPartials = undefined;
-  if (job.timeout) clearTimeout(job.timeout);
-  const childPid = job.pid;
-  for (const child of activeChildren) {
-    if (childPid != null && child.pid === childPid) activeChildren.delete(child);
-  }
   activeJobs.delete(job);
   job.timeout = undefined;
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
   try {
+    if (job.cancelRequestedAt || job.timedOutAt) {
+      job.status = job.timedOutAt ? 'failed' : 'cancelled';
+      job.deployable = false;
+      if (job.timedOutAt) job.errorCode = 'training_timeout';
+      job.message = job.timedOutAt
+        ? '训练超过时限，执行进程已停止。'
+        : '训练已取消，执行进程已停止；未发布训练制品。';
+      job.exitCode = code;
+      if (stdout) job.stdoutTail = scrubLog(stdout);
+      if (stderr) job.stderrTail = scrubLog(stderr);
+      await persist(job);
+      return;
+    }
     const result = await readResult(job);
     const artifact = code === 0 && result ? resultArtifact(result) : null;
     if (artifact) {
@@ -1038,17 +1161,28 @@ async function finish(job, code, stdout, stderr) {
 }
 
 async function pumpQueue() {
-  let limit;
+  let limits;
   try {
-    limit = maxConcurrentJobs();
+    limits = concurrencyLimits();
   } catch {
     // /healthz reports invalid configuration. Keep queued work visible rather
     // than launching it with an implicit fallback or dropping it.
     return;
   }
-  while (activeJobs.size < limit && queuedJobs.length) {
-    const job = queuedJobs.shift();
-    if (!job || job.status !== 'queued') continue;
+  while (
+    !workerShuttingDown &&
+    activeJobs.size + Number(Boolean(screening)) + Number(Boolean(preflightInFlight)) <
+      limits.total &&
+    queuedJobs.length
+  ) {
+    // A second job from a running account must not block the next eligible account.
+    const index = queuedJobs.findIndex(
+      (job) =>
+        job.status === 'queued' &&
+        activeAccountJobs(job.accountId) + Number(screening === job.accountId) < limits.perAccount,
+    );
+    if (index < 0) return;
+    const [job] = queuedJobs.splice(index, 1);
     let config;
     try {
       // Engine routing is resolved at launch time from the persisted request
@@ -1086,19 +1220,44 @@ async function pumpQueue() {
 }
 
 async function persist(job) {
-  // Timeout handles are process-local and circular; never serialize runtime
-  // state into the durable job snapshot exposed to status readers.
   const { timeout: _timeout, ...snapshot } = job;
-  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), {
-    mode: 0o600,
-  });
+  const data = JSON.stringify(snapshot, null, 2);
+  const destination = path.join(job.dir, 'job.json');
+  const temporary = path.join(job.dir, 'job.json.tmp');
+  const pending = (pendingJobWrites.get(job) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        await writeFile(temporary, data, { mode: 0o600 });
+        await rename(temporary, destination);
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    });
+  pendingJobWrites.set(job, pending);
+  try {
+    await pending;
+    if (terminalJobStatuses.has(snapshot.status) && jobs.get(job.runId) === job) {
+      archiveJob(job);
+    }
+  } finally {
+    if (pendingJobWrites.get(job) === pending) pendingJobWrites.delete(job);
+  }
 }
 
 async function handleTrain(request, response) {
   await ensureJobsLoaded();
-  const source = await bodyJson(request);
+  const referenceUpload = request.headers['x-rdk-reference-trajectory'] === '1';
+  const source = await bodyJson(request, referenceUpload ? MAX_REFERENCE_BODY : MAX_BODY);
+  if (
+    referenceUpload &&
+    (source.taskId !== REFERENCE_TASK || source.training?.engine !== REFERENCE_ENGINE)
+  ) {
+    throw fail('the reference upload transport requires OriginMan reference tracking');
+  }
   const engines = workerEngines();
-  maxConcurrentJobs();
+  concurrencyLimits();
   if (!engines.size) {
     json(response, 503, {
       ok: false,
@@ -1114,27 +1273,34 @@ async function handleTrain(request, response) {
   const owner = accountId(request, source);
   const key = requestKey(request, source);
   const fingerprint = requestFingerprint(source, owner);
-  for (const job of jobs.values()) {
-    if (key && job.accountId === owner && job.idempotencyKey === key) {
-      if (job.fingerprint !== fingerprint)
+  if (key) {
+    const archivedId = archivedJobKeys.get(archivedJobKey(owner, key));
+    const previous = archivedId
+      ? await readWorkerJob(archivedId, owner)
+      : [...jobs.values()].find((job) => job.accountId === owner && job.idempotencyKey === key);
+    if (archivedId && !previous)
+      throw fail('无法读取已归档的任务。', 503, 'worker_job_archive_unavailable');
+    if (previous) {
+      if (previous.fingerprint !== fingerprint)
         throw fail(
           'Idempotency-Key was reused for a different request',
           409,
           'idempotency_conflict',
         );
-      json(response, 200, { ...publicJob(job), idempotentReplay: true });
+      json(response, 200, { ...publicJob(previous), idempotentReplay: true });
       return;
     }
   }
   if (!engine || !engineExecutableReady(engine.executable))
     throw fail('所选训练引擎的解释器或可执行文件不可用。', 503, 'engine_executable_unavailable');
-  if (jobs.size >= MAX_JOBS)
-    throw fail('worker job retention limit reached', 429, 'worker_queue_full');
+  if (jobs.size >= MAX_OUTSTANDING_JOBS)
+    throw fail('worker queue limit reached', 429, 'worker_queue_full');
   const runId = `local-${normalized.modelId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48)}-${randomUUID()}`;
   const dir = path.join(DATA_DIR, runId);
   const job = {
     runId,
     status: 'queued',
+    recoverableQueue: true,
     mock: false,
     cuda: null,
     deployable: false,
@@ -1162,18 +1328,81 @@ async function handleTrain(request, response) {
     jobs.delete(runId);
     throw error;
   }
-  queuedJobs.push(job);
+  if (job.status === 'queued') queuedJobs.push(job);
   void pumpQueue();
   json(response, 202, publicJob(job));
 }
 
+async function handleReferenceScreen(request, response) {
+  const owner = accountId(request, {});
+  await ensureJobsLoaded();
+  const engine = engineFor({ training: { engine: REFERENCE_ENGINE } });
+  if (!engineExecutableReady(engine.executable)) {
+    throw fail('reference engine executable is unavailable', 503, 'engine_executable_unavailable');
+  }
+  const limits = concurrencyLimits();
+  if (
+    preflightInFlight ||
+    screening ||
+    queuedJobs.length ||
+    activeJobs.size >= limits.total ||
+    activeAccountJobs(owner) >= limits.perAccount
+  ) {
+    throw fail('reference worker is busy', 409, 'reference_screen_busy');
+  }
+  screening = owner;
+  try {
+    const trajectory = await bodyJson(request, MAX_REFERENCE_BODY);
+    const input = JSON.stringify(trajectory);
+    const report = await new Promise((resolve, reject) => {
+      const child = spawn(engine.executable, [...engine.args, '--screen-reference'], {
+        detached: process.platform !== 'win32',
+        cwd: DATA_DIR,
+        stdio: ['pipe', 'pipe', 'ignore'],
+        env: childEnvironment({
+          dir: DATA_DIR,
+          runId: 'reference-screen',
+          contractId: 'reference-screen',
+          profile: 'smoke',
+        }),
+      });
+      activeChildren.add(child);
+      let stdout = '';
+      const timeout = setTimeout(() => child.kill('SIGKILL'), 45_000);
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+      child.stdout.on('data', (chunk) => {
+        if (stdout.length + chunk.length > MAX_LOG) child.kill('SIGKILL');
+        else stdout += String(chunk);
+      });
+      child.once('error', reject);
+      child.once('close', (code) => {
+        clearTimeout(timeout);
+        activeChildren.delete(child);
+        if (code !== 0) {
+          reject(fail('reference screen did not finish', 503, 'reference_screen_failed'));
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout));
+        } catch {
+          reject(fail('reference screen returned invalid results', 503, 'reference_screen_failed'));
+        }
+      });
+    });
+    json(response, 200, {
+      ...report,
+      ok: true,
+      referenceSha256: createHash('sha256').update(input).digest('hex'),
+    });
+  } finally {
+    screening = null;
+    void pumpQueue();
+  }
+}
+
 async function handleStatus(request, response, runId) {
   await ensureJobsLoaded();
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1181,11 +1410,396 @@ async function handleStatus(request, response, runId) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
   json(response, 200, publicJob(job));
+}
+
+const preflightCache = new Map();
+const PREFLIGHT_REFRESH_MS = 15_000;
+const SHARED_PREFLIGHT_MAX_AGE_MS = 60 * 60 * 1_000;
+
+function preflightFileStamp(filename) {
+  try {
+    const info = statSync(filename);
+    return [info.dev, info.ino, info.mtimeMs, info.size];
+  } catch {
+    return null;
+  }
+}
+
+let preflightInFlight = null;
+let originmanPreflightFlight = null;
+async function handleEnginePreflight(request, response, engineId) {
+  try {
+    accountId(request, {});
+  } catch {
+    throw fail('account is required', 401, 'account_required');
+  }
+  if (!ENGINE_ID_RE.test(engineId)) throw fail('invalid engine id');
+  const input = await bodyJson(request);
+  const originman = ['originman-recovery', 'originman-recovery-reflect'].includes(engineId);
+  if (
+    originman &&
+    (Object.keys(input).some((k) => k !== 'device') || !['cpu', 'cuda'].includes(input.device))
+  )
+    throw fail('invalid OriginMan preflight request', 400, 'invalid_preflight_request');
+  const taskId = originman ? 'originman-recovery' : input.taskId || 'walk';
+  if (typeof taskId !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(taskId))
+    throw fail('invalid task id');
+  const config = workerEngines().get(engineId);
+  if (!config) throw fail('engine is not registered', 404, 'engine_not_registered');
+  if (!config.preflightArgs)
+    throw fail(
+      'Declare preflightArgs for this engine on the worker; no training command was executed.',
+      409,
+      'engine_preflight_not_configured',
+    );
+  await ensureJobsLoaded();
+  const limits = concurrencyLimits();
+  const sharedOriginman = originman && limits.total > 1;
+  const hasWork = activeJobs.size > 0 || queuedJobs.length > 0 || Boolean(screening);
+  const key = JSON.stringify([
+    engineId,
+    taskId,
+    config,
+    process.env.RDK_MICRODUCK_RL_DIR,
+    process.env.RDK_MICRODUCK_RL_ROOT,
+    ...(originman
+      ? [
+          input.device,
+          process.env.CUDA_VISIBLE_DEVICES,
+          process.env.ORIGINMAN_SCENE,
+          [config.executable, process.env.ORIGINMAN_SCENE, ...config.args, ...config.preflightArgs]
+            .filter((filename) => filename && path.isAbsolute(filename))
+            .map(preflightFileStamp),
+        ]
+      : []),
+  ]);
+  const cached = preflightCache.get(key);
+  if (
+    cached &&
+    Date.now() - cached.storedAt <
+      (sharedOriginman && hasWork ? SHARED_PREFLIGHT_MAX_AGE_MS : PREFLIGHT_REFRESH_MS)
+  ) {
+    json(response, 200, { ok: true, report: cached.report, cached: true });
+    return;
+  }
+  if (originmanPreflightFlight?.key === key && originmanPreflightFlight.waiters < 32) {
+    const flight = originmanPreflightFlight;
+    flight.waiters++;
+    try {
+      const report = await flight.promise;
+      json(response, 200, { ok: true, report, cached: false, shared: true });
+    } finally {
+      flight.waiters--;
+    }
+    return;
+  }
+  // A live probe uses a slot while allocating CUDA; a cached report does not.
+  const canProbe = sharedOriginman ? activeJobs.size < limits.total : !hasWork;
+  if (preflightInFlight || screening || !canProbe)
+    throw fail(
+      'training or another environment check is using this worker',
+      429,
+      'engine_preflight_busy',
+    );
+  preflightInFlight = key;
+  let flight;
+  if (originman) {
+    let resolveFlight, rejectFlight;
+    const promise = new Promise((resolve, reject) => {
+      resolveFlight = resolve;
+      rejectFlight = reject;
+    });
+    // A lone request has no waiter to consume a failed flight.
+    promise.catch(() => {});
+    flight = { key, promise, resolve: resolveFlight, reject: rejectFlight, waiters: 0 };
+    originmanPreflightFlight = flight;
+  }
+  try {
+    await mkdir(DATA_DIR, { recursive: true, mode: 0o700 });
+    if (workerShuttingDown) throw fail('worker is stopping', 503, 'worker_stopping');
+    const env = childEnvironment({ runId: '', dir: DATA_DIR, contractId: '', profile: '' });
+    for (const name of [
+      'RDK_SIM2REAL_JOB_ID',
+      'RDK_SIM2REAL_JOB_DIR',
+      'RDK_SIM2REAL_REQUEST_FILE',
+      'RDK_SIM2REAL_RESULT_FILE',
+      'RDK_SIM2REAL_CONTRACT_ID',
+      'RDK_SIM2REAL_TRAIN_PROFILE',
+    ])
+      delete env[name];
+    env.RDK_PREFLIGHT_TASK_ID = taskId;
+    if (originman) {
+      env.RDK_ORIGINMAN_PREFLIGHT_DEVICE = input.device;
+      env.RDK_ORIGINMAN_PREFLIGHT_ENGINE = engineId;
+    }
+    env.PYTHONDONTWRITEBYTECODE = '1';
+    const report = await new Promise((resolve, reject) => {
+      const child = spawn(config.executable, config.preflightArgs, {
+        cwd: DATA_DIR,
+        env,
+        shell: false,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      activeChildren.add(child);
+      child.once('close', () => activeChildren.delete(child));
+      const output = [];
+      let bytes = 0,
+        failure;
+      const stop = (code) => {
+        failure ||= code;
+        try {
+          if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+          else child.kill('SIGKILL');
+        } catch {
+          /* already exited */
+        }
+      };
+      const timer = setTimeout(() => stop('engine_preflight_timeout'), 45000);
+      child.stdout.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes > MAX_LOG) stop('engine_preflight_output_limit');
+        else output.push(chunk);
+      });
+      child.stderr.resume();
+      child.once('error', () => {
+        clearTimeout(timer);
+        reject(fail('Environment probe could not start.', 503, 'engine_preflight_failed'));
+      });
+      child.once('close', (code) => {
+        clearTimeout(timer);
+        if (failure || code !== 0) {
+          reject(
+            fail(
+              'Environment probe did not finish; no training was started.',
+              503,
+              failure || 'engine_preflight_failed',
+            ),
+          );
+          return;
+        }
+        try {
+          const parsed = JSON.parse(Buffer.concat(output).toString('utf8'));
+          if (
+            parsed.schemaVersion !== 1 ||
+            parsed.engine !== engineId ||
+            !Array.isArray(parsed.checks) ||
+            !parsed.checks.length ||
+            parsed.checks.length > 32 ||
+            parsed.trainingPerformed !== false ||
+            parsed.checks.some(
+              (check) =>
+                !check ||
+                typeof check.id !== 'string' ||
+                !['passed', 'blocked', 'unverified'].includes(check.status),
+            )
+          )
+            throw new Error('invalid probe report');
+          if (originman) {
+            const expected = [
+              'dependency-numpy',
+              'dependency-mujoco',
+              'dependency-torch',
+              'dependency-stable_baselines3',
+              'dependency-gymnasium',
+              'training-entrypoint',
+              'training-config',
+              'scene-contract',
+              'training-device',
+            ];
+            if (
+              parsed.taskId !== taskId ||
+              parsed.device !== input.device ||
+              parsed.checks.length !== expected.length ||
+              new Set(parsed.checks.map((check) => check.id)).size !== expected.length ||
+              parsed.checks.some((check) => !expected.includes(check.id)) ||
+              !Number.isFinite(Date.parse(parsed.checkedAt)) ||
+              Math.abs(Date.now() - Date.parse(parsed.checkedAt)) > 120000
+            )
+              throw new Error('invalid OriginMan report');
+            parsed.checks = parsed.checks.map((check) => ({ id: check.id, status: check.status }));
+          }
+          parsed.readyForSmokeTraining =
+            parsed.checks.every((check) => check.status === 'passed') &&
+            (originman || parsed.readyForSmokeTraining === true);
+          resolve(parsed);
+        } catch {
+          reject(
+            fail(
+              'Environment probe returned an invalid report.',
+              503,
+              'engine_preflight_invalid_report',
+            ),
+          );
+        }
+      });
+    });
+    preflightCache.delete(key);
+    if (!originman || (sharedOriginman && report.readyForSmokeTraining)) {
+      if (preflightCache.size >= 8) preflightCache.delete(preflightCache.keys().next().value);
+      preflightCache.set(key, { report, storedAt: Date.now() });
+    }
+    if (flight) flight.resolve(report);
+    json(response, 200, { ok: true, report, cached: false });
+  } catch (error) {
+    if (flight) flight.reject(error);
+    throw error;
+  } finally {
+    if (flight && originmanPreflightFlight === flight) originmanPreflightFlight = null;
+    preflightInFlight = null;
+    void pumpQueue();
+  }
+}
+
+/** Cancel only a job owned by the authenticated account. */
+
+/** kill(0) includes Linux zombies. They have exited and cannot execute work. */
+async function hasLiveProcessGroup(
+  group,
+  {
+    platform = process.platform,
+    kill = process.kill.bind(process),
+    list = () => readdir('/proc'),
+    read = (pid) => readFile(`/proc/${pid}/stat`, 'utf8'),
+  } = {},
+) {
+  try {
+    kill(-group, 0);
+  } catch (error) {
+    if (error.code === 'ESRCH') return false;
+    return true;
+  }
+  if (platform !== 'linux') return true;
+  let seen = 0;
+  try {
+    for (const pid of await list()) {
+      if (!/^\d+$/.test(pid)) continue;
+      let stat;
+      try {
+        stat = await read(pid);
+      } catch (error) {
+        if (['ENOENT', 'ESRCH'].includes(error.code)) continue;
+        throw error;
+      }
+      const boundary = stat.lastIndexOf(')');
+      const fields = stat
+        .slice(boundary + 2)
+        .trim()
+        .split(/\s+/);
+      if (boundary < 0 || fields.length < 3 || !/^[0-9]+$/.test(fields[2])) return true;
+      if (Number(fields[2]) !== group) continue;
+      seen++;
+      if (!['Z', 'X'].includes(fields[0])) return true;
+    }
+    // No visible members while kill(0) succeeds is ambiguous (namespaces,
+    // permissions or a fork race). Only positive all-exited evidence passes.
+    return seen === 0;
+  } catch {
+    return true;
+  }
+}
+// Running jobs own a POSIX process group, including subprocesses launched
+// by the training engine. Keep the slot until the group has shut down.
+function stopTrainingChild(job, child) {
+  const group = process.platform !== 'win32' && child.pid;
+  const signal = (name) => {
+    try {
+      if (group) process.kill(-group, name);
+      else child.kill(name);
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  };
+  cancellationBarriers.set(
+    job,
+    (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        signal('SIGKILL');
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const running = group
+            ? await hasLiveProcessGroup(group)
+            : child.exitCode === null && child.signalCode === null;
+          if (!running) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      } catch {
+        // An uncertain shutdown retains its reservation for operator review.
+      }
+      return false;
+    })(),
+  );
+  try {
+    signal('SIGTERM');
+  } catch {
+    // The bounded forced-stop path still attempts to reclaim the process.
+  }
+}
+
+async function handleCancel(request, response, runId) {
+  await ensureJobsLoaded();
+  let owner;
+  try {
+    owner = accountId(request, {});
+  } catch {
+    json(response, 401, { ok: false, error: 'account_required' });
+    return;
+  }
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
+    json(response, 404, { ok: false, error: 'run_not_found' });
+    return;
+  }
+  if (['cancelled', 'completed', 'failed'].includes(job.status)) {
+    json(response, 200, publicJob(job));
+    return;
+  }
+  if (job.status === 'cancelling' || job.timedOutAt) {
+    json(response, 202, publicJob(job));
+    return;
+  }
+  if (finalizingJobs.has(job) || job.finishedAt) {
+    json(response, 409, {
+      ok: false,
+      error: 'run_finalizing',
+      message: '任务正在结束，请查询最终状态。',
+    });
+    return;
+  }
+  const child = jobChildren.get(job);
+  if (child && process.platform === 'win32') {
+    json(response, 501, {
+      ok: false,
+      error: 'process_tree_cancel_unsupported',
+      message: '此 worker 尚不支持 Windows 训练进程树取消。',
+    });
+    return;
+  }
+  job.cancelRequestedAt = new Date().toISOString();
+  if (!child) {
+    job.status = 'cancelled';
+    job.finishedAt = new Date().toISOString();
+    job.message = '排队训练已取消，未启动执行进程。';
+    const position = queuedJobs.indexOf(job);
+    if (position >= 0) queuedJobs.splice(position, 1);
+    activeJobs.delete(job);
+    await persist(job);
+    void pumpQueue();
+    json(response, 200, publicJob(job));
+    return;
+  }
+  job.status = 'cancelling';
+  job.message = '已请求取消，正在等待训练进程退出。';
+  if (job.timeout) clearTimeout(job.timeout);
+  stopTrainingChild(job, child);
+  await persist(job);
+  json(response, 202, publicJob(job));
 }
 
 /**
@@ -1201,11 +1815,6 @@ async function handleStatus(request, response, runId) {
 async function handleArtifact(request, response) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent((request.url || '').slice('/runs/'.length, -'/artifact'.length));
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1213,7 +1822,8 @@ async function handleArtifact(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1296,8 +1906,8 @@ async function handleArtifact(request, response) {
 async function handleRunVideo(request, response, kind) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent(request.url.slice('/runs/'.length, -(kind.length + 1)));
-  const job = jobs.get(runId);
-  if (!job || job.accountId !== accountId(request, {})) {
+  const job = await readWorkerJob(runId, accountId(request, {}));
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1385,11 +1995,6 @@ async function handleTelemetry(request, response) {
   const runId = decodeURIComponent(
     (request.url || '').slice('/runs/'.length, -'/telemetry'.length),
   );
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1397,7 +2002,8 @@ async function handleTelemetry(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1468,11 +2074,6 @@ async function handleLogs(request, response) {
     return;
   }
   const runId = decodeURIComponent(url.pathname.slice('/runs/'.length, -'/logs'.length));
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1480,7 +2081,8 @@ async function handleLogs(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1509,11 +2111,12 @@ async function handleLogs(request, response) {
 }
 
 export function createLocalTrainingWorkerServer() {
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
         let configured = false;
         let engineIds = [];
+        let limits;
         try {
           const engines = workerEngines();
           configured = engines.size > 0;
@@ -1521,7 +2124,8 @@ export function createLocalTrainingWorkerServer() {
             .filter((engine) => engineExecutableReady(engine.executable))
             .map((engine) => engine.id)
             .sort();
-          maxConcurrentJobs();
+          limits = concurrencyLimits();
+          await ensureJobsLoaded();
         } catch (error) {
           json(response, 503, {
             ok: false,
@@ -1554,7 +2158,8 @@ export function createLocalTrainingWorkerServer() {
             : configured && !engineIds.length
               ? { error: 'engine_executable_unavailable' }
               : {}),
-          maxConcurrentJobs: maxConcurrentJobs(),
+          maxConcurrentJobs: limits.total,
+          maxConcurrentJobsPerAccount: limits.perAccount,
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,
           cuda: null,
@@ -1566,8 +2171,27 @@ export function createLocalTrainingWorkerServer() {
         json(response, 401, { ok: false, error: 'local_worker_unauthorized' });
         return;
       }
+      const preflightRoute = /^\/engines\/([a-z][a-z0-9-]{1,31})\/preflight$/.exec(
+        request.url || '',
+      );
+      if (request.method === 'POST' && preflightRoute) {
+        await handleEnginePreflight(request, response, preflightRoute[1]);
+        return;
+      }
+      if (request.method === 'POST' && /^\/runs\/[^/]+\/cancel$/.test(request.url || '')) {
+        await handleCancel(
+          request,
+          response,
+          decodeURIComponent(request.url.slice('/runs/'.length, -'/cancel'.length)),
+        );
+        return;
+      }
       if (request.method === 'POST' && request.url === '/train') {
         await handleTrain(request, response);
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/originman-reference/screen') {
+        await handleReferenceScreen(request, response);
         return;
       }
       const videoRoute = /^\/runs\/[^/]+\/(dance-video|workshop-video)$/.exec(request.url ?? '');
@@ -1617,6 +2241,12 @@ export function createLocalTrainingWorkerServer() {
       });
     }
   });
+  server.once('listening', () => {
+    void ensureJobsLoaded().catch(() =>
+      console.error('[sim2real-local] could not restore job records'),
+    );
+  });
+  return server;
 }
 
 function isDirectEntry() {
@@ -1636,16 +2266,46 @@ if (isDirectEntry()) {
   server.listen(PORT, HOST, () =>
     console.log(`[sim2real-local] listening on http://${HOST}:${PORT}`),
   );
-  const close = () => {
-    for (const child of activeChildren) child.kill('SIGTERM');
+  const close = async () => {
+    if (workerShuttingDown) return;
+    workerShuttingDown = true;
+    // An unconfirmed cancellation intentionally keeps its reservation, but
+    // its day-long job timer must not keep an already-closed Worker alive.
+    for (const job of jobs.values()) {
+      if (job.timeout) clearTimeout(job.timeout);
+      job.timeout = undefined;
+    }
+    const owned = [...activeChildren];
+    const exited = owned.map(
+      (child) =>
+        new Promise((resolve) => {
+          if (child.exitCode !== null || child.signalCode !== null) resolve();
+          else child.once('close', resolve);
+        }),
+    );
+    const signalOwned = (signal) => {
+      for (const child of owned) {
+        try {
+          if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, signal);
+          else child.kill(signal);
+        } catch {
+          /* this owned process group has already exited */
+        }
+      }
+    };
+    const forceExit = setTimeout(() => process.exit(1), 5000);
+    forceExit.unref();
     server.closeIdleConnections?.();
     server.closeAllConnections?.();
-    const forceExit = setTimeout(() => process.exit(1), 5_000);
-    forceExit.unref();
-    server.close(() => {
-      clearTimeout(forceExit);
-      process.exit(0);
-    });
+    const serverClosed = new Promise((resolve) => server.close(resolve));
+    signalOwned('SIGTERM');
+    // Even if a launcher exits first, its process group may still contain
+    // multiprocessing or probe children that must not survive the worker.
+    await new Promise((resolve) => setTimeout(resolve, owned.length ? 1500 : 0));
+    signalOwned('SIGKILL');
+    await Promise.all([serverClosed, ...exited]);
+    clearTimeout(forceExit);
+    process.exitCode = 0;
   };
   process.once('SIGTERM', close);
   process.once('SIGINT', close);

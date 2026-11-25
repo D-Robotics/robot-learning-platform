@@ -553,6 +553,81 @@ export async function connectAuthenticatedCore({
       );
       return { datasets, studentReply };
     },
+    async listOriginmanMotion({ signal } = {}) {
+      return readWorkspaceJson(
+        '/originman-motion/catalog',
+        signal,
+        await verifiedWorkspaceAccount(),
+      );
+    },
+    async previewOriginmanMotion(composition, { signal } = {}) {
+      return readWorkspaceJson(
+        '/originman-motion/preview',
+        signal,
+        await verifiedWorkspaceAccount(),
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(composition),
+        },
+      );
+    },
+    async submitOriginmanMotion(args, { signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      const {
+        contextId,
+        computeResourceId,
+        numEnvs,
+        composition,
+        trainingSteps,
+        expectedTrajectorySha256,
+        expectedStanceProfile,
+      } = args;
+      const post = (route, body, headers) =>
+        readWorkspaceJson(route, signal, accountId, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify(body),
+        });
+      const { modelId } = await post('/originman-reference/model', { computeResourceId });
+      const taskId = 'originman-reference-track';
+      const result = await post(
+        '/runs',
+        {
+          modelId,
+          computeResourceId,
+          requestedVia: 'agent',
+          taskId,
+          backend: 'local',
+          label: 'OriginMan · 参考舞蹈',
+          training: {
+            profile: trainingSteps === 8192 ? 'smoke' : 'standard',
+            algorithm: 'ppo',
+            engine: 'originman-reference-ppo',
+            video: true,
+            maxIterations: trainingSteps / 4096,
+            numEnvs,
+            originmanReference: {
+              composition,
+              expectedTrajectorySha256,
+              ...(expectedStanceProfile && { expectedStanceProfile }),
+              trainingSteps,
+              seed: 7,
+            },
+          },
+        },
+        { 'Idempotency-Key': 'originman-motion-' + contextId },
+      );
+      if (!result.run?.id || result.run.taskId !== taskId)
+        throw new PluginRequestError(
+          'WORKSPACE_EVIDENCE_MISMATCH',
+          '平台未确认新建的参考舞蹈 Run。',
+          {
+            httpStatus: 502,
+          },
+        );
+      return { ...result, taskId };
+    },
     async rehearseOriginmanDanceCpu({ runId, deviceId }, { signal } = {}) {
       const accountId = await verifiedWorkspaceAccount();
       const requestSignal = AbortSignal.any([
@@ -776,7 +851,12 @@ export async function connectAuthenticatedCore({
         !(allowPrefix ? matchesRunIdentifier(runId, value.run?.id) : value.run?.id === runId)
       )
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
-      return value.run;
+      return {
+        ...value.run,
+        ...(typeof value.workshopEvidenceIssue === 'string' && {
+          workshopEvidenceIssue: value.workshopEvidenceIssue,
+        }),
+      };
     },
     async readDanceTrajectoryVerification(runId, expectedSha256, { signal } = {}) {
       const accountId = await verifiedWorkspaceAccount();
@@ -1312,7 +1392,7 @@ export async function connectAuthenticatedCore({
           } catch {}
         }
         if (
-          value?.status === 'failed' &&
+          ['failed', 'completed'].includes(value?.status) &&
           Array.isArray(value.lines) &&
           value.lines.length === 0 &&
           !value.diagnostic
@@ -1343,6 +1423,18 @@ export async function connectAuthenticatedCore({
               body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
             } catch {
               throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '平台未返回有效启动诊断。');
+            }
+            if (body.runId === id && body.source === 'retained-tail') {
+              return apiResult({
+                ...value,
+                source: body.source,
+                ...(typeof body.stdoutTail === 'string' && {
+                  stdoutTail: body.stdoutTail.slice(-2000),
+                }),
+                ...(typeof body.stderrTail === 'string' && {
+                  stderrTail: body.stderrTail.slice(-2000),
+                }),
+              });
             }
             const d = body.diagnostic;
             if (

@@ -1,6 +1,6 @@
 # MCP 工具目录（由仓库契约生成）
 
-当前同源目录共 57 个工具；JSON 全量 descriptor（含 schema/annotation）见 [tool-catalog.json](tool-catalog.json)。
+当前同源目录共 60 个工具；JSON 全量 descriptor（含 schema/annotation）见 [tool-catalog.json](tool-catalog.json)。
 
 生成真源：目标仓库 `server/agent-runtime/dsh-capability-tools.ts`、`dsh-capability-handlers.ts`、`services/duck-lab-mcp/server.ts`。在 `RDK_ROBOT_LEARNING_PLATFORM_ROOT` 执行：
 
@@ -36,6 +36,9 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_evaluations_list` | 列出训练和真机评测记录。只读操作。 | true | false | `runId: string`, `artifactId: string`, `status: string`, `limit: number` |
 | `rdk_lineage_get` | 读取运行、制品、评测或项目的血缘关系。只读操作。 | true | false | `runId: string`, `artifactId: string`, `evaluationId: string`, `projectId: string` |
 | `rdk_compute_resources_list` | 列出本地、远程和云端训练资源。只读操作。 | true | false | — |
+| `rdk_compute_resource_update` | 更新当前账号已登记的训练资源地址或凭据。需要平台安全门控。 | false | false | `computeResourceId*: string`, `name: string`, `runnerUrl: string`, `runnerToken: string` |
+| `rdk_training_preflight` | 检查指定资源的训练环境。只读操作。 | true | false | `computeResourceId*: string`, `engine: string`, `taskId: string`, `device: string` |
+| `rdk_training_cancel` | 取消当前账号的排队或运行中训练。需要平台安全门控。 | false | true | `runId*: string` |
 | `rdk_compute_resource_test` | 测试指定训练资源的健康状态。只读操作。 | true | false | `computeResourceId*: string` |
 | `rdk_device_discover` | 发现可连接的 RDK 设备。只读操作。 | true | false | — |
 | `rdk_device_connect` | 连接指定 RDK 设备并探测 BoardAgent。需要平台安全门控。 | false | false | `connectionId: string` |
@@ -46,7 +49,7 @@ node --import tsx/esm scripts/update-platform-plugin-catalog.mjs --check
 | `rdk_board_station_command` | 执行白名单内的只读板端命令。只读操作。 | true | false | `id*: string` |
 | `rdk_board_policy_status` | 读取板端策略运行时与延迟证据状态。只读操作。 | true | false | — |
 | `rdk_board_policy_files` | 列出板端已暂存的 ONNX 策略制品。只读操作。 | true | false | — |
-| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `originmanDance: object`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean` |
+| `rdk_training_submit` | 提交受控 GPU 强化学习训练任务。需要平台安全门控。 | false | false | `modelId: string`, `backend: string`, `profile: string`, `engine: string`, `demonstrationRunId: string`, `syntheticSmoke: boolean`, `originmanWorkshop: object`, `idempotencyKey: string`, `originmanDance: object`, `algorithm: string`, `numEnvs: number`, `maxIterations: number`, `runName: string`, `taskId: string`, `projectId: string`, `experimentId: string`, `label: string`, `datasetIds: array<string>`, `computeResourceId: string`, `video: boolean` |
 | `rdk_training_status` | 读取训练任务状态和指标。只读操作。 | true | false | `runId: string` |
 | `rdk_runs_replay` | 读取运行的遥测回放和聚合评测证据。只读操作。 | true | false | `runId*: string` |
 | `rdk_telemetry_list` | 读取运行的遥测分片和样本数量。只读操作。 | true | false | `runId*: string`, `limit: number` |

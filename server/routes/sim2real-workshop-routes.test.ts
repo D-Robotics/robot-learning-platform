@@ -10,6 +10,7 @@ import {
   invalidateSim2RealStoreCacheForTest,
 } from '../sim2real/sim2real-store.js';
 it('workshop routes use normal authentication, viewer mutation denial and isolated account state', async () => {
+  const previousDeployment = process.env.RDK_SIM2REAL_DEPLOYMENT;
   const previous = process.env.RDK_SIM2REAL_STORAGE_DIR,
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'workshop-rbac-'));
   process.env.RDK_SIM2REAL_STORAGE_DIR = root;
@@ -129,10 +130,46 @@ it('workshop routes use normal authentication, viewer mutation denial and isolat
     expect(next.session.contextId).not.toBe(draft.session.contextId);
     const foreign = await fetch(base + '/ws-00000000000000000000', { headers: { 'x-owner': 'B' } });
     expect(foreign.status).toBe(404);
+
+    process.env.RDK_SIM2REAL_DEPLOYMENT = 'web-cloud';
+    expect((await fetch(setup, { headers })).status).toBe(410);
+    expect((await select('A', 'A')).status).toBe(410);
+    const retiredRun = await fetch(base.replace('/workshop-sessions', '/runs'), {
+      method: 'POST',
+      headers: { ...headers, 'idempotency-key': 'retired-recovery' },
+      body: JSON.stringify({
+        modelId: draft.session.modelId,
+        backend: 'local',
+        taskId: 'originman-recovery',
+        computeResourceId: gpu.id,
+        training: {
+          profile: 'standard',
+          engine: 'originman-recovery',
+          algorithm: 'sac',
+          numEnvs: 4,
+          maxIterations: 32,
+          originmanWorkshop: { phase: 'train', timesteps: 8192, seed: 7, pushMaxForce: 8 },
+        },
+      }),
+    });
+    expect(retiredRun.status).toBe(410);
+
+    const old = await fetch(base + '/' + draft.session.contextId, { headers });
+    expect(old.status).toBe(200);
+    expect(await old.json()).toMatchObject({ session: { contextId: draft.session.contextId } });
+    const templates = await fetch(
+      base.replace('/workshop-sessions', '/model-templates/originman'),
+      { headers },
+    );
+    expect(
+      (await templates.json()).templates.map((template: { id: string }) => template.id),
+    ).toEqual(['dance']);
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     invalidateSim2RealStoreCacheForTest();
+    if (previousDeployment === undefined) delete process.env.RDK_SIM2REAL_DEPLOYMENT;
+    else process.env.RDK_SIM2REAL_DEPLOYMENT = previousDeployment;
     if (previous === undefined) delete process.env.RDK_SIM2REAL_STORAGE_DIR;
     else process.env.RDK_SIM2REAL_STORAGE_DIR = previous;
     await fs.rm(root, { recursive: true, force: true });
