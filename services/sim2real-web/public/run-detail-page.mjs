@@ -318,12 +318,18 @@ function referenceDigestMismatch(run) {
   return run.taskId === REFERENCE_TASK && expected && reported && expected !== reported;
 }
 
+function referenceStanceMismatch(run) {
+  const expected = run.training?.originmanReferenceComposition?.stanceProfile;
+  return run.taskId === REFERENCE_TASK && run.status === 'completed' && expected &&
+    run.metrics?.originmanReference?.stanceProfile !== expected;
+}
+
 function verifiedDanceVideo(run) {
   const evidence = replayEvidenceFor(run);
   const video = evidence?.video;
   const policySha = run.artifact?.sha256;
   const replaySha = evidence?.replay?.sha256;
-  return !referenceDigestMismatch(run) && run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
+  return !referenceDigestMismatch(run) && !referenceStanceMismatch(run) && run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
     SHA256_PATTERN.test(video.sha256 ?? '') && SHA256_PATTERN.test(policySha ?? '') &&
     video.policySha256 === policySha && SHA256_PATTERN.test(replaySha ?? '') &&
     video.sourceReplaySha256 === replaySha;
@@ -439,6 +445,11 @@ function renderVideo(document, location, run, runId) {
     text(document, 'replay-empty', 'Worker 与平台记录的训练轨迹摘要不同，当前回放未通过核验。');
     return;
   }
+  if (referenceStanceMismatch(run)) {
+    text(document, 'replay-status', '训练站姿未通过核验');
+    text(document, 'replay-empty', 'Worker 回执的站姿与本次训练配置不一致。请使用支持该配置的 Worker 重新运行。');
+    return;
+  }
   if (!evidence?.video && run.status === 'completed' && run.training?.video === false) {
     text(document, 'replay-status', '提交时关闭了视频生成');
     text(document, 'replay-empty', '本次 Run 未生成视频。仍可查看训练曲线和分段评测。');
@@ -480,6 +491,7 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   text(document, 'run-policy-sha', run.artifact?.sha256 ?? '尚未生成策略摘要');
   const download = document.getElementById('run-policy-download');
   const canDownload = run.status === 'completed' && run.backend === 'local' && !run.mock &&
+    !referenceStanceMismatch(run) &&
     run.externalRunId && run.artifact?.format?.toLowerCase() === 'onnx' &&
     SHA256_PATTERN.test(run.artifact.sha256 ?? '');
   if (canDownload) {

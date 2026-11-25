@@ -176,6 +176,7 @@ import {
   isSim2RealRunnerOutcomeUnknown,
   requestRobogoTraining,
   requestRobogoTrainingStatus,
+  screenOriginmanReferenceWithWorker,
   normalizeComputeRunnerUrl,
   resolvedTaskPack,
 } from '../sim2real/robogo-runner.js';
@@ -5131,6 +5132,36 @@ export function createSim2RealRouter(
             '所选 Worker 不支持参考轨迹跟跳引擎。',
           );
           return;
+        }
+        const stanceProfile = training?.originmanReferenceComposition?.stanceProfile;
+        const trajectory = training?.originmanReference?.trajectory;
+        if (stanceProfile && trajectory) {
+          const credentials = await getSim2RealComputeResourceSecret(computeResourceId!, owner);
+          const report = await screenOriginmanReferenceWithWorker({
+            runnerUrl: resource.runnerUrl,
+            token: credentials?.runnerToken,
+            accountId: owner ?? 'local-dev',
+            trajectory,
+            stanceProfile,
+          }).catch(() => null);
+          if (!report || !('passed' in report) || !report.passed) {
+            const unsupported = report?.unsupportedStance;
+            const busy = report?.busy;
+            sendApiError(
+              response,
+              !report ? 503 : 409,
+              unsupported
+                ? 'ORIGINMAN_REFERENCE_STANCE_UNAVAILABLE'
+                : 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED',
+              unsupported
+                ? '所选 Worker 还不支持原版站姿标定，请使用云端仿真 Worker 或更新本地 Worker。'
+                : busy
+                  ? 'Worker 正在处理任务，请稍后提交。'
+                  : '所选 Worker 未能确认原版轨迹通过物理筛查。请检查连接并重新筛查。',
+              { retryable: !report || busy === true },
+            );
+            return;
+          }
         }
       }
       // A project supplies its dataset snapshot by default.  An explicit
