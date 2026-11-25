@@ -6,6 +6,9 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   const preset = byId('motion-preset');
   const search = byId('motion-search');
   const action = byId('motion-action');
+  const unavailablePanel = byId('motion-unavailable');
+  const unavailableSummary = byId('motion-unavailable-summary');
+  const unavailableList = byId('motion-unavailable-list');
   const category = byId('motion-category');
   const add = byId('motion-add');
   const sequence = byId('motion-sequence');
@@ -126,6 +129,15 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
           : referenceMode === 'timing-preserved'
             ? displayName + ' · 原节奏 ' + seconds.toFixed(2) + ' 秒'
             : displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
+      const unavailable = catalog.unavailableMotions ?? [];
+      unavailablePanel.hidden = unavailable.length === 0;
+      unavailableSummary.textContent = '暂不可训练的素材（' + unavailable.length + '）';
+      unavailableList.replaceChildren(...unavailable.map(({ displayName, reason }) => {
+        const row = document.createElement('li');
+        row.textContent = displayName + ' · ' +
+          (reason === 'joint-limit' ? '超过关节限位' : '仿真稳定性未通过');
+        return row;
+      }));
       const categories = [...new Set(catalog.motions.map((item) => item.category))];
       category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';

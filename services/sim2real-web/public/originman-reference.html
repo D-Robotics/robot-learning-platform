@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-4"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-5"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -45,6 +45,10 @@
               <p><label>动作 <select id="reference-motion-action"></select></label>
               <button id="reference-motion-add" type="button">添加到编排</button></p>
               <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
+              <details id="reference-motion-unavailable" class="experiment-details" hidden>
+                <summary id="reference-motion-unavailable-summary">暂不可训练的素材</summary>
+                <ul id="reference-motion-unavailable-list"></ul>
+              </details>
               <p><label>估算拍数用 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
               <label>最短过渡秒数 <input id="reference-motion-transition" type="number" min="0" max="2" step="0.02" value="0.4" /></label></p>
             </div>

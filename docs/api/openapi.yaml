@@ -263,7 +263,7 @@ paths:
       operationId: listOriginManMotion
       summary: Read the configured OriginMan preset and motion IDs without submitting a run
       responses:
-        "200": { description: Presets, motions with optional poseOnly flag, source, and composition limits }
+        "200": { description: Presets, selectable motions, optional unavailableMotions with joint-limit or stability reasons, source, and composition limits }
         "401": { $ref: "#/components/responses/AuthRequired" }
         "503": { description: The configured catalog is unavailable }
   /api/v1/duck/originman-motion/preview:

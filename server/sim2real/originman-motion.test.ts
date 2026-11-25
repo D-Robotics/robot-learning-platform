@@ -242,6 +242,63 @@ describe('OriginMan reference choreography', () => {
     await expect(prepareOriginmanMotion(selection)).rejects.toMatchObject({ status: 422 });
   });
 
+  it('lists unavailable motions without including them in custom or preset choreography', async () => {
+    const directory = await library();
+    const catalogPath = path.join(directory, 'catalog.json');
+    const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+    const saveCatalog = async () => writeFile(catalogPath, JSON.stringify(catalog));
+    expect(await listOriginmanMotion()).not.toHaveProperty('unavailableMotions');
+    catalog.unavailableMotions = [
+      { id: 'floor', displayName: '  下地 ', reason: 'joint-limit', sha256: 'private-field' },
+      { id: 'shoot', displayName: '侧身', reason: 'stability' },
+    ];
+    await saveCatalog();
+
+    const result = await listOriginmanMotion();
+    expect(result.motions.map(({ id }) => id)).toEqual(['arms']);
+    expect(result.unavailableMotions).toEqual([
+      { id: 'floor', displayName: '下地', reason: 'joint-limit' },
+      { id: 'shoot', displayName: '侧身', reason: 'stability' },
+    ]);
+    await expect(prepareOriginmanMotion({ blocks: [{ id: 'floor' }] })).rejects.toMatchObject({
+      status: 400,
+    });
+
+    catalog.presets[0].blocks = [{ id: 'floor' }];
+    await saveCatalog();
+    await expect(prepareOriginmanMotion({ presetId: 'full-dance' })).rejects.toMatchObject({
+      status: 503,
+    });
+  });
+
+  it.each([
+    ['an unknown reason', [{ id: 'floor', displayName: '下地', reason: 'unknown' }]],
+    ['an invalid label', [{ id: 'floor', displayName: ' ', reason: 'joint-limit' }]],
+    ['an invalid ID', [{ id: '../floor', displayName: '下地', reason: 'joint-limit' }]],
+    ['an active-motion collision', [{ id: 'arms', displayName: '摆臂', reason: 'joint-limit' }]],
+    [
+      'an unavailable-motion duplicate',
+      [
+        { id: 'floor', displayName: '下地', reason: 'joint-limit' },
+        { id: 'floor', displayName: '下地', reason: 'stability' },
+      ],
+    ],
+    [
+      'too many entries',
+      Array.from({ length: 513 }, (_, i) => ({
+        id: `blocked-${i}`,
+        displayName: '未通过',
+        reason: 'stability',
+      })),
+    ],
+  ])('rejects an unavailable list with %s', async (_reason, unavailableMotions) => {
+    const directory = await library();
+    const catalogPath = path.join(directory, 'catalog.json');
+    const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+    await writeFile(catalogPath, JSON.stringify({ ...catalog, unavailableMotions }));
+    await expect(listOriginmanMotion()).rejects.toMatchObject({ status: 503 });
+  });
+
   it('rejects mutually exclusive inputs, unknown IDs, excessive duration and altered files', async () => {
     const directory = await library();
     await expect(

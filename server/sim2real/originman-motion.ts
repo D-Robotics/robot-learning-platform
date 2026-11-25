@@ -17,6 +17,7 @@ import {
 const FPS = 50;
 const MAX_FRAMES = FPS * 90;
 const MAX_BLOCKS = 128;
+const MAX_MOTIONS = 512;
 const SPEED_LIMIT = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
@@ -42,6 +43,11 @@ type Motion = {
   clipped: boolean;
   poseOnly?: true;
 };
+type UnavailableMotion = {
+  id: string;
+  displayName: string;
+  reason: 'joint-limit' | 'stability';
+};
 type Block = { id: string; repeats: number };
 type PresetReference = {
   file: string;
@@ -60,7 +66,12 @@ type Preset = {
   | { reference: PresetReference; transitionSeconds?: never }
   | { reference?: never; transitionSeconds: number }
 );
-type Catalog = { motions: Motion[]; presets: Preset[]; directory?: string };
+type Catalog = {
+  motions: Motion[];
+  presets: Preset[];
+  unavailableMotions?: UnavailableMotion[];
+  directory?: string;
+};
 
 const builtIn: Catalog = {
   motions: [
@@ -162,13 +173,20 @@ async function loadCatalog(): Promise<Catalog> {
   if (!directory) return builtIn;
   try {
     if (!path.isAbsolute(directory)) throw Error('Motion directory must be absolute');
-    const { schemaVersion, motions, presets } = record(
+    const {
+      schemaVersion,
+      motions,
+      presets,
+      unavailableMotions = [],
+    } = record(
       JSON.parse((await readBounded(path.join(directory, 'catalog.json'), 256 * 1024)).toString()),
     );
     if (
       schemaVersion !== 1 ||
       !Array.isArray(motions) ||
-      motions.length > 512 ||
+      motions.length > MAX_MOTIONS ||
+      !Array.isArray(unavailableMotions) ||
+      unavailableMotions.length > MAX_MOTIONS ||
       !Array.isArray(presets) ||
       presets.length > 128
     )
@@ -208,6 +226,17 @@ async function loadCatalog(): Promise<Catalog> {
         ...(poseOnly === true && { poseOnly }),
       };
     });
+    const safeUnavailable = unavailableMotions.map((entry): UnavailableMotion => {
+      const { id, displayName, reason } = record(entry);
+      if (
+        typeof id !== 'string' ||
+        !ID.test(id) ||
+        !label(displayName) ||
+        (reason !== 'joint-limit' && reason !== 'stability')
+      )
+        throw Error('Invalid unavailable motion metadata');
+      return { id, displayName: displayName.trim(), reason };
+    });
     const safePresets = presets.map((entry): Preset => {
       const {
         id,
@@ -246,11 +275,17 @@ async function loadCatalog(): Promise<Catalog> {
       };
     });
     if (
-      new Set(safeMotions.map(({ id }) => id)).size !== safeMotions.length ||
+      new Set([...safeMotions, ...safeUnavailable].map(({ id }) => id)).size !==
+        safeMotions.length + safeUnavailable.length ||
       new Set(safePresets.map(({ id }) => id)).size !== safePresets.length
     )
       throw Error('Duplicate catalog identifier');
-    return { motions: safeMotions, presets: safePresets, directory };
+    return {
+      motions: safeMotions,
+      presets: safePresets,
+      unavailableMotions: safeUnavailable,
+      directory,
+    };
   } catch {
     throw new OriginmanMotionError('动作库配置不可用，请联系管理员检查素材目录。', 503);
   }
@@ -283,6 +318,7 @@ export async function listOriginmanMotion() {
       ...(preset.reference && { referenceMode: preset.reference.mode }),
       ...(preset.reference?.stanceProfile && { stanceProfile: preset.reference.stanceProfile }),
     })),
+    ...(catalog.unavailableMotions?.length && { unavailableMotions: catalog.unavailableMotions }),
     limits: { maxBlocks: MAX_BLOCKS, maxSeconds: MAX_FRAMES / FPS, maxRepeats: 8 },
   };
 }
