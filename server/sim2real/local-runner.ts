@@ -789,9 +789,12 @@ export async function requestOriginmanEnginePreflight(input: {
     return { id: item.id, status: String(item.status) };
   });
   const checkedAt = typeof report.checkedAt === 'string' ? report.checkedAt : '';
+  const reportAge = Date.now() - Date.parse(checkedAt);
+  const cached = body.cached === true;
   if (
-    !Number.isFinite(Date.parse(checkedAt)) ||
-    Math.abs(Date.now() - Date.parse(checkedAt)) > 120000
+    !Number.isFinite(reportAge) ||
+    reportAge < -120_000 ||
+    reportAge > (cached ? 60 * 60 * 1_000 + 120_000 : 120_000)
   )
     throw new Error('OriginMan preflight report is stale.');
   return {
@@ -800,6 +803,7 @@ export async function requestOriginmanEnginePreflight(input: {
     taskId: 'originman-recovery',
     device: input.device,
     checkedAt,
+    ...(cached ? { cached: true } : {}),
     trainingPerformed: false,
     readyForSmokeTraining: checks.every((c) => c.status === 'passed'),
     checks,

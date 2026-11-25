@@ -800,12 +800,29 @@ for (const outcome of [
           return ok({
             accountId: 'learner',
             resources: [
+              ...(outcome === 'ready'
+                ? [
+                    {
+                      id: 'busy-worker',
+                      name: 'Busy GPU',
+                      status: 'online',
+                      mock: false,
+                      engines: ['originman-recovery'],
+                      activeJobs: 2,
+                      queuedJobs: 0,
+                      maxConcurrentJobs: 2,
+                    },
+                  ]
+                : []),
               {
                 id: 'worker',
                 name: 'Course GPU',
                 status: 'online',
                 ...(outcome === 'ready' && {
                   cuda: true,
+                  activeJobs: 1,
+                  maxConcurrentJobs: 2,
+                  queuedJobs: 1,
                   mock: false,
                   engines: ['originman-recovery-reflect'],
                 }),
@@ -890,8 +907,10 @@ for (const outcome of [
     assert.equal($('workshop-setup').hidden, false);
     assert.deepEqual(
       [...$('workshop-compute').options].map((option) => option.value),
-      ['', 'worker'],
+      outcome === 'ready' ? ['', 'busy-worker', 'worker'] : ['', 'worker'],
     );
+    if (outcome === 'ready')
+      assert.match($('workshop-compute').selectedOptions[0].textContent, /推荐.*运行 1\/2.*排队 1/);
     assert.equal($('workshop-compute').value, outcome === 'ready' ? 'worker' : '');
     assert.equal($('workshop-setup-confirm').disabled, outcome !== 'ready');
     assert.deepEqual(

@@ -214,6 +214,7 @@ export async function startWorkshop({
       ? '先看看机器人被推后如何站稳。也可以直接点「开始实操」。'
       : '先看看机器人被推了一下后，怎样重新站稳。播完会自动进入下一步。';
     $('workshop-setup').hidden = !preview || !setupReady || halted;
+    $('workshop-compute-refresh').disabled = busy || selecting;
     $('workshop-compute').disabled = busy || selecting;
     $('workshop-setup-confirm').disabled = busy || selecting || !$('workshop-compute').value;
     $('skip-reference').hidden = !ready || Boolean(reference);
@@ -824,9 +825,10 @@ export async function startWorkshop({
     try {
       const data = await json('workshop-sessions/setup');
       if (!Array.isArray(data.resources)) throw Error('暂时读不到算力机列表。');
+      const select = $('workshop-compute');
+      const previous = setupAccount === data.accountId ? select.value : '';
       setupAccount = data.accountId;
       resetComputeCheck();
-      const select = $('workshop-compute');
       const placeholder = new document.defaultView.Option('请选择一台训练电脑', '', true, true);
       placeholder.disabled = true;
       select.replaceChildren(placeholder);
@@ -834,21 +836,30 @@ export async function startWorkshop({
         validId(resource?.id) && typeof resource.name === 'string' && resource.name.trim() &&
         resource.mock !== true && resource.status !== 'offline' &&
         (!Array.isArray(resource.engines) || courseEngine(resource.engines)));
-      const recommended = resources.filter((resource) =>
-        resource.cuda === true && resource.mock === false && Array.isArray(resource.engines) && courseEngine(resource.engines));
+      const verified = resources.filter((resource) =>
+        resource.status === 'online' && resource.cuda !== false && resource.mock === false && courseEngine(resource.engines));
+      const measured = verified.filter((resource) =>
+        Number.isInteger(resource.activeJobs) && Number.isInteger(resource.maxConcurrentJobs));
+      measured.sort((left, right) =>
+        (right.maxConcurrentJobs - right.activeJobs) - (left.maxConcurrentJobs - left.activeJobs) ||
+        (left.queuedJobs ?? Infinity) - (right.queuedJobs ?? Infinity) ||
+        left.name.localeCompare(right.name, 'zh-CN', { numeric: true }));
+      const recommended = measured[0] ?? verified.find((resource) => verified.length === 1 && resource.cuda === true);
       for (const resource of resources) {
-        const status = resource.status === 'online' ? '上次检查可用' : '待检查';
-        const kind = recommended.includes(resource) ? ' · 支持本课程' : ' · 课程兼容性待检查';
-        select.add(new document.defaultView.Option(resource.name + ' · ' + status + kind, resource.id));
+        const load = Number.isInteger(resource.activeJobs) && Number.isInteger(resource.maxConcurrentJobs)
+          ? `运行 ${resource.activeJobs}/${resource.maxConcurrentJobs}`
+          : (resource.status === 'online' ? '在线' : '待检查');
+        const queue = Number.isInteger(resource.queuedJobs) ? ` · 排队 ${resource.queuedJobs}` : '';
+        const title = resource === recommended ? `${resource.name}（推荐）` : resource.name;
+        select.add(new document.defaultView.Option(`${title} · ${load}${queue}`, resource.id));
       }
-      if (recommended.length === 1) select.value = recommended[0].id;
+      if (resources.some((resource) => resource.id === previous)) select.value = previous;
+      else if (recommended) select.value = recommended.id;
       const available = resources.length > 0;
       $('workshop-setup-form').hidden = !available;
       $('workshop-setup-status').textContent = !available
         ? '当前账号没有兼容本课程的训练电脑。请联系课程管理员分配，再刷新列表。'
-        : recommended.length === 1
-          ? '已选一台支持本课程的电脑。点「检查这台算力机并继续」后选择训练时长。'
-          : '先选一台训练电脑，再检查连接和课程环境。';
+        : '提交时有空位就开始，名额满了会在所选卡上排队。';
       $('workshop-error').hidden = true;
       setupReady = true;
       halted = false;
@@ -858,6 +869,7 @@ export async function startWorkshop({
     }
     reveal('workshop-setup');
   };
+  listen('workshop-compute-refresh', 'click', () => run(loadSetup));
   listen('workshop-compute', 'change', () => {
     resetComputeCheck();
     show();
@@ -890,7 +902,7 @@ export async function startWorkshop({
             checkStatus.textContent = {
               invalid: '平台返回的检查结果无法与本次选机对应。请重新检查，或联系课程管理员。',
               engine: '这台算力机缺少本课程的训练引擎。请选择另一台。',
-              busy: '课程环境检查正忙。稍后重新检查，或另选一台。',
+              busy: '这台卡正在运行任务，暂时无法完成首次环境检查。可以刷新占用或选择其他卡。',
               blocked: '连接正常，但课程运行环境未通过检查。请选择另一台，或联系课程管理员。',
               cuda: '这台机器的 CUDA 检查未通过。请选择另一台支持本课程的算力机。',
               unverified: '连接正常，当前平台无法核对课程环境。可换一台，或确认继续选预算。',

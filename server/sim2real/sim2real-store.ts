@@ -36,6 +36,7 @@ import {
 import { redactInternalError } from './http-helpers.js';
 import { validateRunForDeployment } from './release-evidence.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
+import { computeWorkerHealthPatch, probeComputeWorker } from './compute-worker-health.js';
 import { normalizeComputeRunnerUrl } from './robogo-runner.js';
 import { acquireStorageLease } from './storage-lease.js';
 
@@ -2448,10 +2449,43 @@ function configuredSharedGpus(): ReadonlyMap<string, SharedGpu> {
   return sharedGpus;
 }
 
+const sharedGpuHealthChecks = new WeakMap<SharedGpu, Promise<void>>();
+const SHARED_GPU_HEALTH_TTL_MS = 5_000;
+
+async function refreshSharedGpuHealth() {
+  await Promise.all(
+    [...configuredSharedGpus().values()].map((shared) => {
+      const pending = sharedGpuHealthChecks.get(shared);
+      if (pending) return pending;
+      const resource = shared.resource;
+      const lastChecked = Date.parse(resource.lastCheckedAt ?? '');
+      if (Date.now() - lastChecked < SHARED_GPU_HEALTH_TTL_MS) return;
+      const checkedAt = new Date().toISOString();
+      const result = probeComputeWorker(resource.runnerUrl, shared.runnerToken)
+        .then((checked) => {
+          // A user may have actively tested this resource since this probe started.
+          if (shared.resource.lastCheckedAt !== resource.lastCheckedAt) return;
+          shared.resource = {
+            ...shared.resource,
+            ...computeWorkerHealthPatch(checked, checkedAt),
+            updatedAt: new Date().toISOString(),
+          };
+        })
+        .finally(() => sharedGpuHealthChecks.delete(shared));
+      sharedGpuHealthChecks.set(shared, result);
+      return result;
+    }),
+  );
+}
+
 export async function listSim2RealComputeResources(
   owner?: string,
+  options: { refreshShared?: boolean } = {},
 ): Promise<Sim2RealComputeResource[]> {
-  const ledger = await readLedger();
+  const [ledger] = await Promise.all([
+    readLedger(),
+    options.refreshShared ? refreshSharedGpuHealth() : undefined,
+  ]);
   const shared = [...configuredSharedGpus().values()].map(({ resource }) => copy(resource));
   const resources = (ledger.computeResources ?? [])
     .filter((item) => ownerMatches(item, owner))
@@ -2531,6 +2565,8 @@ export async function updateSim2RealComputeResource(
       | 'cuda'
       | 'vramMb'
       | 'maxConcurrentJobs'
+      | 'activeJobs'
+      | 'queuedJobs'
       | 'message'
       | 'lastCheckedAt'
     >

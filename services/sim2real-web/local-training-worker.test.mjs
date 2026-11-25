@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -660,6 +660,30 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
 
   // A fresh worker process must recover terminal records so polling and
   // idempotency do not silently forget a completed run after a restart.
+  const historical = JSON.parse(
+    await readFile(path.join(fixtureDir, launched.runId, 'job.json'), 'utf8'),
+  );
+  const queuedFixture = {
+    accountId: historical.accountId,
+    schemaVersion: historical.schemaVersion,
+    status: 'queued',
+    modelId: historical.modelId,
+    contractId: historical.contractId,
+    profile: historical.profile,
+    fingerprint: historical.fingerprint,
+    request: historical.request,
+    recoverableQueue: true,
+    createdAt: new Date().toISOString(),
+  };
+  for (const [id, snapshot] of [
+    ['local-queue-resume', queuedFixture],
+    ['local-queue-attempted', { ...queuedFixture, launchAttemptedAt: new Date().toISOString() }],
+    ['local-queue-legacy', { ...queuedFixture, recoverableQueue: undefined }],
+  ]) {
+    const dir = path.join(fixtureDir, id);
+    await mkdir(dir);
+    await writeFile(path.join(dir, 'job.json'), JSON.stringify(snapshot));
+  }
   server.closeIdleConnections?.();
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
@@ -705,6 +729,16 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
     throw new Error(`run ${runId} did not settle`);
   };
 
+  const restoredQueue = await awaitTerminal('local-queue-resume');
+  assert.equal(restoredQueue.status, 'completed');
+  for (const id of ['local-queue-attempted', 'local-queue-legacy']) {
+    const stopped = await awaitTerminal(id);
+    assert.equal(stopped.status, 'failed');
+    assert.equal(stopped.errorCode, 'worker_restarted');
+    assert.equal(stopped.artifact, undefined);
+  }
+  console.log('[local-training-worker] PASS — restart restores only confirmed unstarted jobs');
+
   process.env.RDK_SIM2REAL_TEST_MANIFEST = 'good';
   const verifiedRun = await awaitTerminal(await submit('manifest-good', 'manifest-good'));
   assert.equal(verifiedRun.status, 'completed');
@@ -731,9 +765,54 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '2';
   process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT = '1';
   process.env.RDK_SIM2REAL_TEST_ENGINE_DELAY_MS = '1800';
+  const originmanChecks = [
+    'dependency-numpy',
+    'dependency-mujoco',
+    'dependency-torch',
+    'dependency-stable_baselines3',
+    'dependency-gymnasium',
+    'training-entrypoint',
+    'training-config',
+    'scene-contract',
+    'training-device',
+  ];
+  process.env.RDK_SIM2REAL_TRAIN_ENGINES_JSON = JSON.stringify({
+    'originman-recovery': {
+      executable: process.execPath,
+      args: [fixture],
+      preflightArgs: [
+        '-e',
+        `console.log(JSON.stringify({
+        schemaVersion: 1, engine: 'originman-recovery', taskId: 'originman-recovery',
+        device: 'cuda', trainingPerformed: false, checkedAt: new Date().toISOString(),
+        checks: ${JSON.stringify(originmanChecks)}.map(id=>({id,status:'passed'}))
+      }))`,
+      ],
+    },
+  });
+  const recoveryPreflight = async (owner) => {
+    const response = await fetch(workerBase + '/engines/originman-recovery/preflight', {
+      method: 'POST',
+      headers: {
+        'x-sim2real-account': owner,
+        authorization: 'Bearer worker-test-token',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ device: 'cuda' }),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
   const aliceFirst = await submit('pool-fixture', 'pool-first');
+  // Probe on a cold worker while one of its two slots is occupied.
+  const liveProbe = await recoveryPreflight('bob');
+  assert.equal(liveProbe.cached, false);
+  assert.equal(liveProbe.report.readyForSmokeTraining, true);
   const aliceNext = await submit('pool-fixture', 'pool-next');
   const bobFirst = await submit('pool-fixture', 'pool-first', 'bob');
+  const reusedProbe = await recoveryPreflight('charlie');
+  assert.equal(reusedProbe.cached, true);
+  assert.equal(reusedProbe.report.checkedAt, liveProbe.report.checkedAt);
   const charlieFirst = await submit('pool-fixture', 'pool-first', 'charlie');
   const poolStatus = async (id, owner) => {
     const response = await fetch(`${workerBase}/runs/${id}`, {

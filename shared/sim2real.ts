@@ -788,6 +788,9 @@ export interface Sim2RealComputeResource {
   cuda?: boolean;
   vramMb?: number;
   maxConcurrentJobs?: number;
+  /** Aggregate counts from the last server-side health check. */
+  activeJobs?: number;
+  queuedJobs?: number;
   message?: string;
   lastCheckedAt?: string;
   createdAt: string;

@@ -15,7 +15,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { accessSync, constants, createReadStream, realpathSync, statSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import path from 'node:path';
@@ -133,6 +133,7 @@ const MAX_CONCURRENT_JOBS_LIMIT = 32;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
 const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
+const pendingJobWrites = new WeakMap();
 const queuedJobs = [];
 const activeJobs = new Set();
 let screening = null;
@@ -321,6 +322,8 @@ function canonicalJson(value) {
 function requestFingerprint(source, owner) {
   const {
     idempotencyKey: _idempotencyKey,
+    recoverableQueue: _recoverableQueue,
+    launchAttemptedAt: _launchAttemptedAt,
     accountId: _accountId,
     ...requestWithoutIdentity
   } = source;
@@ -683,6 +686,7 @@ async function restorePersistedJobs() {
   } catch {
     return;
   }
+  const recovered = [];
   for (const entry of entries) {
     if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name) || jobs.size >= MAX_JOBS) continue;
     const dir = path.join(DATA_DIR, entry.name);
@@ -701,15 +705,27 @@ async function restorePersistedJobs() {
         continue;
       candidate.accountId = text(candidate.accountId, 160);
       if (!candidate.accountId || /[\u0000-\u001f\u007f/]/.test(candidate.accountId)) continue;
-      // A process restart terminates children through systemd's cgroup. Keep
-      // the record visible, but close the stale reservation explicitly rather
-      // than relaunching user work or reporting a false running state.
-      if (['queued', 'running', 'cancelling'].includes(candidate.status)) {
+      // Older snapshots could say queued even after spawning. Only recover jobs
+      // written with the durable launch reservation protocol.
+      if (
+        candidate.status === 'queued' &&
+        candidate.recoverableQueue === true &&
+        typeof candidate.createdAt === 'string' &&
+        !candidate.launchAttemptedAt &&
+        !candidate.startedAt &&
+        !candidate.cancelRequestedAt &&
+        !candidate.finishedAt
+      ) {
+        validate(candidate.request);
+        if (candidate.fingerprint !== requestFingerprint(candidate.request, candidate.accountId))
+          continue;
+        recovered.push(candidate);
+      } else if (['queued', 'running', 'cancelling'].includes(candidate.status)) {
         candidate.status = 'failed';
         candidate.finishedAt = new Date().toISOString();
         candidate.errorCode = 'worker_restarted';
         candidate.message =
-          '本地 worker 重启后任务状态未知；未自动重启训练，请检查任务目录中的结果。';
+          'Worker 重启前任务已尝试启动，或启动状态未知。可以保留原配置并手动重试。';
       }
       delete candidate.pid;
       delete candidate.timeout;
@@ -721,10 +737,17 @@ async function restorePersistedJobs() {
       // intentionally left on disk for operator inspection.
     }
   }
+  recovered.sort(
+    (a, b) => a.createdAt.localeCompare(b.createdAt) || a.runId.localeCompare(b.runId),
+  );
+  queuedJobs.push(...recovered);
 }
 
 function ensureJobsLoaded() {
-  if (!jobsLoadPromise) jobsLoadPromise = restorePersistedJobs();
+  if (!jobsLoadPromise)
+    jobsLoadPromise = restorePersistedJobs().then(() => {
+      void pumpQueue();
+    });
   return jobsLoadPromise;
 }
 
@@ -934,6 +957,9 @@ async function launch(job, config) {
     mode: 0o600,
   });
   if (job.status !== 'queued' || workerShuttingDown) return;
+  job.launchAttemptedAt = new Date().toISOString();
+  await persist(job);
+  if (job.status !== 'queued' || workerShuttingDown) return;
   const child = spawn(config.executable, config.args, {
     cwd: job.dir,
     detached: process.platform !== 'win32',
@@ -1102,8 +1128,8 @@ async function pumpQueue() {
   }
   while (
     !workerShuttingDown &&
-    !preflightInFlight &&
-    activeJobs.size + Number(Boolean(screening)) < limits.total &&
+    activeJobs.size + Number(Boolean(screening)) + Number(Boolean(preflightInFlight)) <
+      limits.total &&
     queuedJobs.length
   ) {
     // A second job from a running account must not block the next eligible account.
@@ -1151,12 +1177,27 @@ async function pumpQueue() {
 }
 
 async function persist(job) {
-  // Timeout handles are process-local and circular; never serialize runtime
-  // state into the durable job snapshot exposed to status readers.
   const { timeout: _timeout, ...snapshot } = job;
-  await writeFile(path.join(job.dir, 'job.json'), JSON.stringify(snapshot, null, 2), {
-    mode: 0o600,
-  });
+  const data = JSON.stringify(snapshot, null, 2);
+  const destination = path.join(job.dir, 'job.json');
+  const temporary = path.join(job.dir, 'job.json.tmp');
+  const pending = (pendingJobWrites.get(job) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(async () => {
+      try {
+        await writeFile(temporary, data, { mode: 0o600 });
+        await rename(temporary, destination);
+      } catch (error) {
+        await rm(temporary, { force: true }).catch(() => undefined);
+        throw error;
+      }
+    });
+  pendingJobWrites.set(job, pending);
+  try {
+    await pending;
+  } finally {
+    if (pendingJobWrites.get(job) === pending) pendingJobWrites.delete(job);
+  }
 }
 
 async function handleTrain(request, response) {
@@ -1207,6 +1248,7 @@ async function handleTrain(request, response) {
   const job = {
     runId,
     status: 'queued',
+    recoverableQueue: true,
     mock: false,
     cuda: null,
     deployable: false,
@@ -1234,7 +1276,7 @@ async function handleTrain(request, response) {
     jobs.delete(runId);
     throw error;
   }
-  queuedJobs.push(job);
+  if (job.status === 'queued') queuedJobs.push(job);
   void pumpQueue();
   json(response, 202, publicJob(job));
 }
@@ -1329,6 +1371,18 @@ async function handleStatus(request, response, runId) {
 }
 
 const preflightCache = new Map();
+const PREFLIGHT_REFRESH_MS = 15_000;
+const SHARED_PREFLIGHT_MAX_AGE_MS = 60 * 60 * 1_000;
+
+function preflightFileStamp(filename) {
+  try {
+    const info = statSync(filename);
+    return [info.dev, info.ino, info.mtimeMs, info.size];
+  } catch {
+    return null;
+  }
+}
+
 let preflightInFlight = null;
 let originmanPreflightFlight = null;
 async function handleEnginePreflight(request, response, engineId) {
@@ -1356,26 +1410,37 @@ async function handleEnginePreflight(request, response, engineId) {
       409,
       'engine_preflight_not_configured',
     );
+  await ensureJobsLoaded();
+  const limits = concurrencyLimits();
+  const sharedOriginman = originman && limits.total > 1;
+  const hasWork = activeJobs.size > 0 || queuedJobs.length > 0 || Boolean(screening);
   const key = JSON.stringify([
     engineId,
     taskId,
     config,
     process.env.RDK_MICRODUCK_RL_DIR,
     process.env.RDK_MICRODUCK_RL_ROOT,
-    ...(originman ? [input.device, process.env.ORIGINMAN_SCENE] : []),
+    ...(originman
+      ? [
+          input.device,
+          process.env.CUDA_VISIBLE_DEVICES,
+          process.env.ORIGINMAN_SCENE,
+          [config.executable, process.env.ORIGINMAN_SCENE, ...config.args, ...config.preflightArgs]
+            .filter((filename) => filename && path.isAbsolute(filename))
+            .map(preflightFileStamp),
+        ]
+      : []),
   ]);
-  const cached = originman ? undefined : preflightCache.get(key);
-  if (cached && cached.expires > Date.now()) {
+  const cached = preflightCache.get(key);
+  if (
+    cached &&
+    Date.now() - cached.storedAt <
+      (sharedOriginman && hasWork ? SHARED_PREFLIGHT_MAX_AGE_MS : PREFLIGHT_REFRESH_MS)
+  ) {
     json(response, 200, { ok: true, report: cached.report, cached: true });
     return;
   }
-  if (
-    originman &&
-    originmanPreflightFlight?.key === key &&
-    !activeJobs.size &&
-    !queuedJobs.length &&
-    originmanPreflightFlight.waiters < 32
-  ) {
+  if (originmanPreflightFlight?.key === key && originmanPreflightFlight.waiters < 32) {
     const flight = originmanPreflightFlight;
     flight.waiters++;
     try {
@@ -1386,7 +1451,9 @@ async function handleEnginePreflight(request, response, engineId) {
     }
     return;
   }
-  if (preflightInFlight || screening || activeJobs.size || queuedJobs.length)
+  // A live probe uses a slot while allocating CUDA; a cached report does not.
+  const canProbe = sharedOriginman ? activeJobs.size < limits.total : !hasWork;
+  if (preflightInFlight || screening || !canProbe)
     throw fail(
       'training or another environment check is using this worker',
       429,
@@ -1525,8 +1592,11 @@ async function handleEnginePreflight(request, response, engineId) {
         }
       });
     });
-    if (preflightCache.size >= 8) preflightCache.delete(preflightCache.keys().next().value);
-    if (!originman) preflightCache.set(key, { report, expires: Date.now() + 15000 });
+    preflightCache.delete(key);
+    if (!originman || (sharedOriginman && report.readyForSmokeTraining)) {
+      if (preflightCache.size >= 8) preflightCache.delete(preflightCache.keys().next().value);
+      preflightCache.set(key, { report, storedAt: Date.now() });
+    }
     if (flight) flight.resolve(report);
     json(response, 200, { ok: true, report, cached: false });
   } catch (error) {
@@ -1995,7 +2065,7 @@ async function handleLogs(request, response) {
 }
 
 export function createLocalTrainingWorkerServer() {
-  return createServer(async (request, response) => {
+  const server = createServer(async (request, response) => {
     try {
       if (request.method === 'GET' && request.url === '/healthz') {
         let configured = false;
@@ -2009,6 +2079,7 @@ export function createLocalTrainingWorkerServer() {
             .map((engine) => engine.id)
             .sort();
           limits = concurrencyLimits();
+          await ensureJobsLoaded();
         } catch (error) {
           json(response, 503, {
             ok: false,
@@ -2124,6 +2195,12 @@ export function createLocalTrainingWorkerServer() {
       });
     }
   });
+  server.once('listening', () => {
+    void ensureJobsLoaded().catch(() =>
+      console.error('[sim2real-local] could not restore job records'),
+    );
+  });
+  return server;
 }
 
 function isDirectEntry() {

@@ -21,7 +21,11 @@ import {
 } from '../../shared/originman-reference-training.js';
 import { registerSim2RealDanceEvaluationRoutes } from './sim2real-dance-evaluation-routes.js';
 import { setupDanceGoals } from '../sim2real/dance-goals.mjs';
-import { probeComputeWorker, safeComputeHealthText } from '../sim2real/compute-worker-health.js';
+import {
+  computeWorkerHealthPatch,
+  probeComputeWorker,
+  safeComputeHealthText,
+} from '../sim2real/compute-worker-health.js';
 import { registerResimulatedDanceVideoRoute } from './resimulated-dance-video-routes.js';
 import { registerSim2RealTrainingPlanRoutes } from './sim2real-training-plan-routes.js';
 import { Router, type Request, type Response } from 'express';
@@ -646,19 +650,9 @@ async function checkRegisteredWorker(
         payload: null,
       }
     : await probeComputeWorker(runnerUrl, runnerToken);
-  const { diagnostic, payload } = checked;
-  const patch = {
-    status: payload ? 'online' : 'offline',
-    message: diagnostic.message,
-    lastCheckedAt: checkedAt,
-    engines: payload?.engines ?? [],
-    mock: payload?.mock,
-    ...(payload?.cuda == null ? {} : { cuda: payload.cuda }),
-    ...(payload?.gpuName ? { gpuName: payload.gpuName } : {}),
-    ...(payload?.vramMb == null ? {} : { vramMb: payload.vramMb }),
-    ...(payload?.maxConcurrentJobs == null ? {} : { maxConcurrentJobs: payload.maxConcurrentJobs }),
-  };
-  const updated = await updateSim2RealComputeResource(secret.resource.id, patch as never, owner, {
+  const { diagnostic } = checked;
+  const patch = computeWorkerHealthPatch(checked, checkedAt);
+  const updated = await updateSim2RealComputeResource(secret.resource.id, patch, owner, {
     runnerUrl,
     runnerToken,
     source: secret.resource.source,
@@ -2589,7 +2583,7 @@ export function createSim2RealRouter(
           { multiUser: auth.isMultiUserDeployment() },
         ),
         probeLocalTrainingWorker(simulator.local),
-        listSim2RealComputeResources(owner),
+        listSim2RealComputeResources(owner, { refreshShared: true }),
         listSim2RealArtifacts(owner),
         listSim2RealEvaluations(owner),
       ]);
@@ -2887,7 +2881,7 @@ export function createSim2RealRouter(
       try {
         const [runs, resources] = await Promise.all([
           listSim2RealRuns(owner),
-          listSim2RealComputeResources(owner),
+          listSim2RealComputeResources(owner, { refreshShared: true }),
         ]);
         const summary = computeResearchLoopMetrics({
           runs,
@@ -2948,7 +2942,10 @@ export function createSim2RealRouter(
       const owner = requestOwner(request, response, auth);
       if (owner === null) return;
       noStore(response);
-      response.json({ ok: true, computeResources: await listSim2RealComputeResources(owner) });
+      response.json({
+        ok: true,
+        computeResources: await listSim2RealComputeResources(owner, { refreshShared: true }),
+      });
     }),
   );
 

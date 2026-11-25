@@ -2401,6 +2401,19 @@ describe('Sim2Real HTTP routes', () => {
         { name: 'Broken', runnerUrl: 'file:///train', runnerToken: sharedToken },
       ]),
     );
+    const probe = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ok: true,
+            maxConcurrentJobs: 2,
+            activeJobs: 1,
+            queuedJobs: 2,
+            mock: false,
+            engines: ['originman-recovery'],
+          }),
+        ),
+    );
     try {
       await fixture();
       const auth: Sim2RealAuthPort = {
@@ -2433,7 +2446,15 @@ describe('Sim2Real HTTP routes', () => {
       expect(shared).toEqual(first.body.computeResources.slice(0, 2));
       expect(first.body.computeResources).toHaveLength(3);
       expect(shared[0]).toMatchObject({ name: 'Classroom GPU 7', id: legacy });
-      expect(shared[1]).toMatchObject({ name: 'Classroom GPU 0', runnerUrl: sharedUrl });
+      expect(shared[1]).toMatchObject({
+        name: 'Classroom GPU 0',
+        runnerUrl: sharedUrl,
+        status: 'online',
+        maxConcurrentJobs: 2,
+        activeJobs: 1,
+        queuedJobs: 2,
+      });
+      expect(probe).toHaveBeenCalledTimes(2);
       expect(JSON.stringify(first.body)).not.toContain(legacyToken);
       expect(JSON.stringify(first.body)).not.toContain(sharedToken);
       const patch = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
@@ -2443,6 +2464,7 @@ describe('Sim2Real HTTP routes', () => {
       });
       expect(patch.statusCode).toBe(403);
     } finally {
+      probe.mockRestore();
       vi.unstubAllEnvs();
     }
   });

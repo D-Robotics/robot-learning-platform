@@ -261,16 +261,31 @@ export function registerSim2RealWorkshopRoutes(
     api('/setup'),
     handle(async (_r, owner) => ({
       accountId: owner ?? null,
-      resources: (await listSim2RealComputeResources(owner))
+      resources: (await listSim2RealComputeResources(owner, { refreshShared: true }))
         .filter((resource) => resource.source !== 'local-agent')
-        .map(({ id, name, status, engines, cuda, mock }) => ({
-          id,
-          name,
-          status,
-          ...(Array.isArray(engines) ? { engines } : {}),
-          ...(typeof cuda === 'boolean' ? { cuda } : {}),
-          ...(typeof mock === 'boolean' ? { mock } : {}),
-        })),
+        .map(
+          ({
+            id,
+            name,
+            status,
+            engines,
+            cuda,
+            mock,
+            activeJobs,
+            queuedJobs,
+            maxConcurrentJobs,
+          }) => ({
+            id,
+            name,
+            status,
+            activeJobs,
+            queuedJobs,
+            maxConcurrentJobs,
+            ...(Array.isArray(engines) ? { engines } : {}),
+            ...(typeof cuda === 'boolean' ? { cuda } : {}),
+            ...(typeof mock === 'boolean' ? { mock } : {}),
+          }),
+        ),
     })),
   );
   router.post(

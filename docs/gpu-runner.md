@@ -223,6 +223,8 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python
 
 在平台服务的受保护环境文件配置 `RDK_SIM2REAL_SHARED_GPU_POOL_JSON`，每项包含 `name`、`runnerUrl`（以 `/train` 结尾）和 `runnerToken`（至少 32 字符）。原有 `RDK_SIM2REAL_SHARED_GPU_URL` 和 `RDK_SIM2REAL_SHARED_GPU_TOKEN` 可以继续保留，已关联的训练记录仍使用原资源 ID。通过 `RDK_SIM2REAL_SHARED_GPU_NAME` 可以设置原资源的显示名称。
 
-学员登录后在算力下拉框选择所需 GPU。提交后任务留在所选卡的队列，运行记录、日志、策略、回放和取消操作由平台和 Worker 按账号授权。
+学员登录后可以查看每张卡的运行和排队数量，也可以手动选择 GPU。平台对共享卡的健康快照每 5 秒最多刷新一次。提交后任务留在所选卡的队列。运行记录、日志、策略、回放和取消操作由平台和 Worker 按账号授权。
+
+在多槽位 Worker 上，受扰恢复环境检查可以使用一个空闲槽位。卡在运行或排队时，Worker 在运行配置未变的情况下最多复用同进程一小时内的成功检查。Worker 重启会恢复确定尚未尝试启动的任务，其他中断保留原记录与配方供手动重试。
 
 恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。

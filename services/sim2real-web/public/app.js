@@ -2889,6 +2889,24 @@ function statusLabel(status) {
   return SimTelemetryCore.statusLabel(status);
 }
 
+function computeResourceLoad(resource) {
+  if (resource.status === 'offline') return '离线';
+  if (resource.status !== 'online') return '未测试';
+  if (!Number.isInteger(resource.activeJobs) || !Number.isInteger(resource.maxConcurrentJobs)) return '在线';
+  const queue = Number.isInteger(resource.queuedJobs) ? ` · 排队 ${resource.queuedJobs}` : '';
+  return `运行 ${resource.activeJobs}/${resource.maxConcurrentJobs}${queue}`;
+}
+
+function pickLeastBusyResource(resources) {
+  return resources
+    .filter((resource) => resource.status === 'online' && Number.isInteger(resource.activeJobs) &&
+      Number.isInteger(resource.maxConcurrentJobs))
+    .sort((left, right) =>
+      (right.maxConcurrentJobs - right.activeJobs) - (left.maxConcurrentJobs - left.activeJobs) ||
+      (left.queuedJobs ?? Infinity) - (right.queuedJobs ?? Infinity) ||
+      left.name.localeCompare(right.name, 'zh-CN', { numeric: true }))[0];
+}
+
 function renderSelects() {
   const allModels = state.overview?.models || [];
   const linkedModelIds = projectModelIds();
@@ -2981,13 +2999,15 @@ function renderSelects() {
     if (!resources.some((resource) => resource.id === state.selectedComputeResourceId)) state.selectedComputeResourceId = '';
     const danceGoal = state.productId === 'originman' && trainingPlans?.hasDance();
     const visibleResources = danceGoal ? resources.filter(canCheckOriginmanDance) : resources;
+    const recommended = danceGoal && pickLeastBusyResource(visibleResources.filter(supportsOriginmanDance));
+    if (recommended && !state.selectedComputeResourceId) state.selectedComputeResourceId = recommended.id;
     syncSelect(
       computeSelect,
       [
         { value: '', textContent: danceGoal ? (visibleResources.length ? '请选择舞蹈训练资源' : '暂无支持舞蹈的资源') : '使用已配置的本地 Worker' },
         ...visibleResources.map((resource) => ({
           value: resource.id,
-          textContent: `${resource.name} · ${resource.status === 'online' ? '在线' : resource.status === 'offline' ? '离线' : '未测试'}`,
+          textContent: `${resource.name}${resource === recommended ? '（推荐）' : ''} · ${computeResourceLoad(resource)}`,
         })),
       ],
       visibleResources.some((resource) => resource.id === state.selectedComputeResourceId) ? state.selectedComputeResourceId : '',
@@ -3015,6 +3035,7 @@ function renderComputeResources() {
     card.querySelector('small').textContent = resource.tokenConfigured ? '已配置访问令牌' : '未配置访问令牌';
     const sourceLabel = resource.source === 'local-agent' ? '用户本地 Agent' : resource.source === 'robogo' ? 'RoboGo 云端' : '服务器 Runner';
     card.querySelector('.compute-resource-card-meta').textContent = [sourceLabel, resource.gpuName, resource.cuda ? 'CUDA' : '', resource.runnerUrl,
+      Number.isInteger(resource.activeJobs) ? computeResourceLoad(resource) : '',
       ['online', 'offline'].includes(resource.status) && resource.message].filter(Boolean).join(' · ');
     card.querySelectorAll('[data-resource-action]').forEach((button) => button.addEventListener('click', () => handleComputeResourceAction(button.dataset.resourceAction, resource)));
     list.append(card);
@@ -9664,19 +9685,20 @@ async function runModel(backend) {
       idempotencyKey: requestKey,
       ...(state.projectId ? { projectId: state.projectId } : {}),
     };
+    const engine = $('training-engine')?.value;
     if (backend === 'local') {
-      // AI 模式会优先使用已测试在线且并发有余量的 GPU；没有可用资源时回退到服务端默认 Worker。
       if (state.selectedComputeResourceId) {
         body.computeResourceId = state.selectedComputeResourceId;
       } else {
-        const resources = state.overview?.computeResources || [];
-        const online = resources.find((resource) => resource.status === 'online' && (resource.activeJobs == null || resource.activeJobs < (resource.maxConcurrentJobs || 1)));
+        const resources = (state.overview?.computeResources || []).filter((resource) =>
+          engine ? (!resource.engines?.length || resource.engines.includes(engine))
+            : !resource.id.startsWith('c1a55-'));
+        const online = pickLeastBusyResource(resources) ?? resources.find((resource) => resource.status === 'online');
         if (online) body.computeResourceId = online.id;
       }
     }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
-    const engine = $('training-engine')?.value;
     if ((backend === 'robogo' || backend === 'local') && profile) {
       body.training = { profile, ...(algorithm ? { algorithm } : {}), ...(engine ? { engine } : {}) };
       if (engine === 'act' || engine === 'diffusion-policy') {

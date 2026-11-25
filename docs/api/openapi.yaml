@@ -3386,7 +3386,7 @@ paths:
       operationId: listWorkshopSetupResources
       responses:
         "200":
-          description: Current account and a list of resource IDs, names and last-known status.
+          description: Current account and selectable resources with IDs, names, last-known status, and aggregate job counts when reported by the worker.
         "401": { $ref: "#/components/responses/AuthRequired" }
     post:
       tags: [workspace]
@@ -3831,7 +3831,7 @@ components:
         maxConcurrentJobs: { type: integer, minimum: 1, maximum: 32, default: 1 }
     ComputeResource:
       type: object
-      description: Account-owned worker metadata. Runner tokens are deliberately never returned.
+      description: Account-owned or classroom-managed worker metadata. Runner tokens are deliberately never returned.
       required: [id, name, kind, runnerUrl, tokenConfigured, status, createdAt, updatedAt]
       properties:
         id: { type: string }
@@ -3845,6 +3845,8 @@ components:
         cuda: { type: boolean }
         vramMb: { type: integer, minimum: 0 }
         maxConcurrentJobs: { type: integer, minimum: 1 }
+        activeJobs: { type: integer, minimum: 0, maximum: 32, readOnly: true, description: Running jobs counted by the most recent worker health probe. }
+        queuedJobs: { type: integer, minimum: 0, maximum: 1000, readOnly: true, description: Pending jobs counted by the most recent worker health probe. }
         engines:
           type: array
           items: { type: string }
