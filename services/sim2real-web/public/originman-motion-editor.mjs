@@ -169,7 +169,9 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       preview = response.preview;
       submission = { composition: selected, expectedTrajectorySha256: preview.trajectorySha256 };
       joint.replaceChildren(...preview.joints.map(({ name }, index) => new Option(name, index)));
-      joint.value = '2';
+      const mostActive = preview.joints.reduce((best, track, index, tracks) =>
+        track.max - track.min > tracks[best].max - tracks[best].min ? index : best, 0);
+      joint.value = String(mostActive);
       status.textContent = preview.seconds.toFixed(2) + ' 秒 · ' + preview.frames + ' 帧 · 约 ' + preview.beats.toFixed(1) + ' 拍。';
       result.hidden = false;
       plot();

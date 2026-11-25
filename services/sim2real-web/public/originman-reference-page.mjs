@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=3';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=4';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
