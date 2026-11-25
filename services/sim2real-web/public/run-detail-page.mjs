@@ -488,6 +488,14 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   text(document, 'run-id-label', `Run ${runId}`);
   text(document, 'run-id-detail', runId);
   text(document, 'run-model-id', run.modelId);
+  const workshop = document.getElementById('run-workshop-home');
+  if (workshop) {
+    const href = new URL('./workshop.html', location.href);
+    if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(run.computeResourceId ?? '')) {
+      href.searchParams.set('computeResourceId', run.computeResourceId);
+    }
+    workshop.href = href.href;
+  }
   text(document, 'run-policy-sha', run.artifact?.sha256 ?? '尚未生成策略摘要');
   const download = document.getElementById('run-policy-download');
   const canDownload = run.status === 'completed' && run.backend === 'local' && !run.mock &&

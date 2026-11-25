@@ -16,7 +16,7 @@
     </header>
     <main id="dance-workshop-main" class="workshop-shell">
       <h1>OriginMan 舞蹈 Workshop</h1>
-      <p>先看一段机器人舞蹈回放，准备好后就可以配置快检。</p>
+      <p>先看一段机器人舞蹈回放，再选择参考轨迹开始练习。</p>
       <section id="dance-reference" aria-labelledby="dance-reference-title">
         <h2 id="dance-reference-title">交替摆臂 · OriginMan 仿真回放</h2>
         <figure>
@@ -37,8 +37,16 @@
         <p id="dance-reference-error" role="status" hidden>视频暂时无法播放。请刷新页面重试，或查看其他教学动作回放。</p>
         <a href="./originman-dance-references/index.html" data-workshop-resource>查看教学动作回放</a>
       </section>
+      <section aria-labelledby="dance-source-title">
+        <h2 id="dance-source-title">选择参考轨迹</h2>
+        <div class="workshop-actions">
+          <a href="./originman-reference.html?mode=preset" data-workshop-resource>选一支预置参考舞蹈</a>
+          <a href="./originman-reference.html?mode=blocks" data-workshop-resource>用参考动作组自由编排</a>
+          <a href="./originman-reference.html" data-workshop-resource>导入自己的参考轨迹</a>
+        </div>
+      </section>
       <section aria-labelledby="dance-budget-title">
-        <h2 id="dance-budget-title">选这轮训练多久</h2>
+        <h2 id="dance-budget-title">按节拍配置教学练习</h2>
         <div class="workshop-current">
           <div>
             <h3>快检 · 8,192 步</h3>
@@ -52,12 +60,7 @@
           </div>
         </div>
         <p>选择一档会打开训练配置页。两档默认同时运行 64 个仿真场景。到提交页确认后才会开始训练。</p>
-        <div class="workshop-actions">
-          <a href="./?robot=originman#train/submit">查看训练记录</a>
-          <a href="./originman-reference.html?mode=preset" data-workshop-resource>选一支预置参考舞蹈</a>
-          <a href="./originman-reference.html?mode=blocks" data-workshop-resource>用参考动作组自由编排</a>
-          <a href="./originman-reference.html" data-workshop-resource>导入自己的参考轨迹</a>
-        </div>
+        <p><a href="./?robot=originman#train/submit">查看训练记录</a></p>
       </section>
     </main>
   </body>

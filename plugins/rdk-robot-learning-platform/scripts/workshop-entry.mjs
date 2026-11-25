@@ -64,7 +64,8 @@ export function workshopPreview(base, stage = 'preview', resource) {
   url.searchParams.set('start', '1');
   if (resource) url.searchParams.set('computeResourceId', resource.id);
   const href = url.href;
-  const firstStep = '第一次来，先点「播放动作示意」。准备练习时，选 8,192 步快检。';
+  const firstStep =
+    '可以先播放「交替摆臂」仿真回放，再选一支预置参考舞蹈或用动作组自由编排。进入跟跳页面后，第一次练习可选 8,192 步快检。';
   const label = 'OriginMan 舞蹈 Workshop';
   return {
     contextId: null,
@@ -142,7 +143,7 @@ export async function workshopEntry(
         : login
           ? `[确认学习平台授权](${login})。确认后回来继续 Workshop。`
           : preview
-            ? 'OriginMan Workshop 可以先看动作示意，再配置预置舞蹈或自由编排。准备实操时，说“连接学习平台”。'
+            ? 'OriginMan Workshop 可以先看仿真回放，再选预置舞蹈或自由编排。准备实操时，说“连接学习平台”。'
             : '这一步需要学习平台账号。准备好后说“连接学习平台”。',
       delivery: '只展示 studentReply。等待用户明确要求连接或完成已有授权，不自动发起登录。',
     };

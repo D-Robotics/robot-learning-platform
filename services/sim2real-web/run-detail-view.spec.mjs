@@ -623,6 +623,7 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   const run = {
     id: 'run_ref',
     taskId: 'originman-reference-track',
+    computeResourceId: 'workshop-worker',
     status: 'completed',
     training: {
       originmanReferenceSummary: { trajectorySha256: digest('d') },
@@ -665,6 +666,9 @@ test('reference playback seeks only to evaluated sections and handles old and mi
       fetchImpl: async () => Response.json({ ok: true, run }),
     });
   const initial = await open();
+  const workshop = new URL(document.getElementById('run-workshop-home').href);
+  assert.equal(workshop.pathname, '/robotics-learning/workshop.html');
+  assert.equal(workshop.searchParams.get('computeResourceId'), 'workshop-worker');
   const control = document.getElementById('replay-segment-controls');
   const select = document.getElementById('replay-segment');
   assert.equal(control.hidden, false);

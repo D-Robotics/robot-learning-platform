@@ -1029,8 +1029,28 @@ test('public Workshop plays the catalog replay and keeps training available if p
   video.dispatchEvent(new dom.window.Event('error'));
   assert.equal(status.hidden, false);
   assert.equal(document.querySelector('#dance-budget-quick').hash, '#train/configure');
+  const source = document.getElementById('dance-source-title').parentElement;
+  const budget = document.getElementById('dance-budget-title').parentElement;
+  assert.equal(source.nextElementSibling, budget);
+  assert.equal(source.querySelectorAll('a[href*="originman-reference.html"]').length, 3);
 
   delete video.error;
   video.dispatchEvent(new dom.window.Event('loadedmetadata'));
   assert.equal(status.hidden, true);
+});
+
+test('reference choreography submit errors stay visible when trajectory import is hidden', async (t) => {
+  const page = new URL('./public/originman-reference.html', import.meta.url);
+  const dom = new JSDOM(await fs.readFile(page, 'utf8'));
+  t.after(() => dom.window.close());
+  const { document } = dom.window;
+  const importer = document.getElementById('reference-import-section');
+  importer.hidden = true;
+  const fileError = document.getElementById('reference-error');
+  const trainingError = document.getElementById('reference-training-error');
+  assert.ok(importer.contains(fileError));
+  assert.equal(trainingError.getAttribute('role'), 'alert');
+  assert.equal(trainingError.closest('form').id, 'reference-form');
+  trainingError.hidden = false;
+  assert.equal(trainingError.closest('[hidden]'), null);
 });

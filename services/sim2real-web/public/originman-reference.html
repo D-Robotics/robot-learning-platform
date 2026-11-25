@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-6"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-7"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -117,6 +117,7 @@
             </details>
             <p>标准与长训每 32,768 步评测一次。预置和自由编排跑完所选预算。上传轨迹可在完整度、倾角和偏航达标后提前结束。</p>
             <p id="reference-screen-blocker" role="status" hidden>当前轨迹未通过所选 Worker 的物理筛查。请调整轨迹或重新筛查后再提交。</p>
+            <p id="reference-training-error" class="experiment-error" role="alert" hidden></p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>
         </section>

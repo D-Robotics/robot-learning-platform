@@ -9,6 +9,7 @@ const worker = byId('reference-worker');
 const envs = byId('reference-envs');
 const status = byId('reference-status');
 const error = byId('reference-error');
+const trainingError = byId('reference-training-error');
 const submit = byId('reference-submit');
 const file = byId('reference-file');
 const appendFile = byId('reference-append');
@@ -58,9 +59,9 @@ async function api(path, body, idempotencyKey, signal) {
   return value;
 }
 
-function setError(message = '') {
-  error.textContent = message;
-  error.hidden = !message;
+function showError(target, message = '') {
+  target.textContent = message;
+  target.hidden = !message;
 }
 
 const query = new URLSearchParams(location.search);
@@ -90,6 +91,7 @@ function refresh() {
   const failed = passed === false;
   const needsScreen = !uploaded && ready && passed !== true;
   submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed || needsScreen;
+  submit.textContent = submitting ? '正在提交…' : '开始仿真训练';
   if (!screening && displayedScreenKey !== key) {
     screenResults.replaceChildren();
     screenStatus.textContent = passed === true ? '当前轨迹已在所选 Worker 通过筛查。'
@@ -171,7 +173,7 @@ function showCalibration(calibration) {
 async function selectTrajectory(load, nextSpeed) {
   if (preparing || submitting) return;
   preparing = true;
-  setError();
+  showError(error);
   status.textContent = '正在校验关节顺序、频率和角度范围。';
   refresh();
   try {
@@ -193,7 +195,7 @@ async function selectTrajectory(load, nextSpeed) {
     status.textContent = `${label} · ${speed} 倍速，通过格式校验，${receipt.frames} 帧，${receipt.durationSeconds} 秒，${receipt.fps} Hz。提交后先做物理仿真筛查。`;
   } catch (cause) {
     status.textContent = trajectory ? '已保留上次通过校验的轨迹。' : '请重新导入参考轨迹。';
-    setError(cause.message);
+    showError(error, cause.message);
   } finally {
     preparing = false;
     speedSelect.value = String(speed);
@@ -357,7 +359,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
       passed === false || (!motion.isUpload() && passed !== true)) return;
   submitting = true;
   refresh();
-  setError();
+  showError(trainingError);
   const computeResourceId = worker.value;
   const trainingSteps = Number(byId('reference-steps').value);
   const numEnvs = Number(envs.value);
@@ -381,7 +383,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
     url.searchParams.set('runId', runId);
     location.assign(url.href);
   } catch (cause) {
-    setError(cause.message);
+    showError(trainingError, cause.message);
   } finally {
     submitting = false;
     refresh();
@@ -401,7 +403,7 @@ try {
   }
 } catch (cause) {
   status.textContent = '任务配置读取失败。';
-  setError(cause.message);
+  showError(trainingError, cause.message);
 }
 refresh();
 
