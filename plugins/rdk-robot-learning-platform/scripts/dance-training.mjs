@@ -124,6 +124,7 @@ export const DANCE_TRAINING_TOOLS = [
           multipleOf: 4096,
         },
         expectedTrajectorySha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+        expectedStanceProfile: { type: 'string', enum: ['source-neutral-v1'] },
       },
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },

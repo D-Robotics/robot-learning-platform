@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-5"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-6"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -35,15 +35,17 @@
             </select>
           </label>
           <div id="reference-motion-panel" hidden>
-            <p id="reference-motion-source"></p>
+            <p id="reference-motion-source" role="status"></p>
+            <button id="reference-motion-retry" type="button" hidden>重新加载动作库</button>
             <p id="reference-motion-presets">
-              <label>预置舞蹈 <select id="reference-motion-preset"></select></label>
+              <label>预置舞蹈 <select id="reference-motion-preset" disabled></select></label>
             </p>
             <div id="reference-motion-blocks" hidden>
-              <p><label>搜索动作 <input id="reference-motion-search" type="search" /></label>
-              <label>分类 <select id="reference-motion-category"><option value="">全部分类</option></select></label></p>
-              <p><label>动作 <select id="reference-motion-action"></select></label>
-              <button id="reference-motion-add" type="button">添加到编排</button></p>
+              <p><label>搜索动作 <input id="reference-motion-search" type="search" disabled /></label>
+              <label>分类 <select id="reference-motion-category" disabled><option value="">全部分类</option></select></label></p>
+              <p id="reference-motion-matches" role="status" hidden></p>
+              <p><label>动作 <select id="reference-motion-action" disabled></select></label>
+              <button id="reference-motion-add" type="button" disabled>添加到编排</button></p>
               <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
               <details id="reference-motion-unavailable" class="experiment-details" hidden>
                 <summary id="reference-motion-unavailable-summary">暂不可训练的素材</summary>

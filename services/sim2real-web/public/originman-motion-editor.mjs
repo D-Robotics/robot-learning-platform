@@ -3,8 +3,10 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   const mode = byId('mode');
   const controls = byId('motion-panel');
   const catalogSource = byId('motion-source');
+  const retry = byId('motion-retry');
   const preset = byId('motion-preset');
   const search = byId('motion-search');
+  const matches = byId('motion-matches');
   const action = byId('motion-action');
   const unavailablePanel = byId('motion-unavailable');
   const unavailableSummary = byId('motion-unavailable-summary');
@@ -61,16 +63,44 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     changed();
   }
 
+  const searchable = (value) => value.normalize('NFKC').trim().toLowerCase();
+
+  function setCatalogControls() {
+    for (const input of [preset, search, category]) input.disabled = locked || !catalog;
+    action.disabled = locked || !action.value;
+    add.disabled = action.disabled || blocks.length >= 128;
+  }
+
   function populateActions() {
-    const query = search.value.trim().toLowerCase();
+    if (!catalog) return;
+    const query = searchable(search.value);
+    const filtered = Boolean(query || category.value);
+    const matchesQuery = ({ id, displayName, category: group = '' }) =>
+      [id, displayName, group].some((value) => searchable(value).includes(query));
     const selection = action.value;
-    const motions = catalog?.motions.filter(({ id, displayName, category: group }) =>
-      (!category.value || group === category.value) &&
-      [id, displayName, group].some((value) => value.toLowerCase().includes(query))) ?? [];
+    const motions = catalog.motions.filter((motion) =>
+      (!category.value || motion.category === category.value) && matchesQuery(motion));
+    const unavailable = (catalog.unavailableMotions ?? []).filter(matchesQuery);
     action.replaceChildren(...motions.map((motion) =>
       new Option(motion.displayName + ' · ' + motion.category + (motion.poseOnly ? ' · 定格' : '') + (motion.clipped ? ' · 已限幅' : ''), motion.id)));
+    if (!motions.length) action.add(new Option('没有可添加的动作', ''));
     if (motions.some(({ id }) => id === selection)) action.value = selection;
-    add.disabled = !action.value || locked || blocks.length >= 128;
+    matches.hidden = !filtered;
+    matches.textContent = query
+      ? motions.length || unavailable.length
+        ? '找到 ' + motions.length + ' 个可用动作，' + unavailable.length + ' 个暂不可训练的素材。'
+        : '没有匹配的动作。请缩短关键词或选择「全部分类」。'
+      : category.value ? '此分类有 ' + motions.length + ' 个可用动作。' : '';
+    unavailablePanel.hidden = unavailable.length === 0;
+    if (query && unavailable.length && !motions.length) unavailablePanel.open = true;
+    unavailableSummary.textContent = '暂不可训练的素材（' + unavailable.length + '）';
+    unavailableList.replaceChildren(...unavailable.map(({ displayName, reason }) => {
+      const row = document.createElement('li');
+      row.textContent = displayName + ' · ' +
+        (reason === 'joint-limit' ? '超过关节限位' : '仿真稳定性未通过');
+      return row;
+    }));
+    setCatalogControls();
   }
 
   function renderSequence() {
@@ -105,18 +135,23 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
         button('移除', false, () => blocks.splice(index, 1)));
       return row;
     }));
-    populateActions();
+    setCatalogControls();
   }
 
-  async function showMode() {
+  function showMode() {
     byId('import-section').hidden = !isUpload();
     byId('screen-file-control').hidden = !isUpload();
     controls.hidden = isUpload();
     byId('motion-presets').hidden = mode.value !== 'preset';
     byId('motion-blocks').hidden = mode.value !== 'blocks';
     invalidate();
-    if (isUpload() || catalog || loading) return;
+    if (!isUpload()) return loadCatalog();
+  }
+
+  async function loadCatalog(restoreFocus = false) {
+    if (loading || catalog) return;
     loading = true;
+    retry.hidden = true;
     catalogSource.textContent = '正在读取动作库…';
     try {
       catalog = await api('originman-motion/catalog');
@@ -129,22 +164,16 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
           : referenceMode === 'timing-preserved'
             ? displayName + ' · 原节奏 ' + seconds.toFixed(2) + ' 秒'
             : displayName + ' · 约 ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
-      const unavailable = catalog.unavailableMotions ?? [];
-      unavailablePanel.hidden = unavailable.length === 0;
-      unavailableSummary.textContent = '暂不可训练的素材（' + unavailable.length + '）';
-      unavailableList.replaceChildren(...unavailable.map(({ displayName, reason }) => {
-        const row = document.createElement('li');
-        row.textContent = displayName + ' · ' +
-          (reason === 'joint-limit' ? '超过关节限位' : '仿真稳定性未通过');
-        return row;
-      }));
       const categories = [...new Set(catalog.motions.map((item) => item.category))];
       category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
       populateActions();
       setPrepareState();
+      if (restoreFocus && !isUpload()) (mode.value === 'preset' ? preset : search).focus();
     } catch (error) {
-      catalogSource.textContent = error.message;
+      catalogSource.textContent = error instanceof TypeError ? '暂时无法读取动作库。' : error.message;
+      retry.hidden = false;
+      if (restoreFocus && !isUpload()) retry.focus();
     } finally {
       loading = false;
     }
@@ -160,6 +189,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   }
 
   mode.addEventListener('change', showMode);
+  retry.addEventListener('click', () => loadCatalog(true));
   for (const input of [preset, bpm, transition]) input.addEventListener('change', invalidate);
   search.addEventListener('input', populateActions);
   category.addEventListener('change', populateActions);
@@ -223,7 +253,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     setLocked(value) {
       if (locked === value) return;
       locked = value;
-      for (const input of [mode, preset, search, action, category, bpm, transition]) input.disabled = locked;
+      for (const input of [mode, bpm, transition]) input.disabled = locked;
       setPrepareState();
       renderSequence();
     },

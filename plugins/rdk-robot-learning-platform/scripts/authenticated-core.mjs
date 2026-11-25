@@ -581,6 +581,7 @@ export async function connectAuthenticatedCore({
         composition,
         trainingSteps,
         expectedTrajectorySha256,
+        expectedStanceProfile,
       } = args;
       const post = (route, body, headers) =>
         readWorkspaceJson(route, signal, accountId, {
@@ -606,7 +607,13 @@ export async function connectAuthenticatedCore({
             video: true,
             maxIterations: trainingSteps / 4096,
             numEnvs,
-            originmanReference: { composition, expectedTrajectorySha256, trainingSteps, seed: 7 },
+            originmanReference: {
+              composition,
+              expectedTrajectorySha256,
+              ...(expectedStanceProfile && { expectedStanceProfile }),
+              trainingSteps,
+              seed: 7,
+            },
           },
         },
         { 'Idempotency-Key': 'originman-motion-' + contextId },

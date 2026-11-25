@@ -158,7 +158,8 @@ test('the read-only dance preview fills an omitted schema version on its first M
 
 test('MCP lists and previews motion without writing, then submits the pinned recipe once', async () => {
   const digest = 'b'.repeat(64);
-  const recipe = { blocks: [{ id: 'example-arms', repeats: 3 }], transitionSeconds: 0.4 };
+  const recipe = { presetId: 'source-exact' };
+  let stanceProfile = 'source-neutral-v1';
   const calls = [];
   const dispatch = experienceProxy(
     {
@@ -172,7 +173,7 @@ test('MCP lists and previews motion without writing, then submits the pinned rec
       async previewOriginmanMotion(args) {
         assert.deepEqual(args, recipe);
         calls.push('preview');
-        return { ok: true, preview: { trajectorySha256: digest } };
+        return { ok: true, preview: { trajectorySha256: digest, stanceProfile } };
       },
       async submitOriginmanMotion(args) {
         calls.push('submit');
@@ -181,6 +182,7 @@ test('MCP lists and previews motion without writing, then submits the pinned rec
           computeResourceId: 'worker-1',
           contextId: 'motion-1',
           expectedTrajectorySha256: digest,
+          expectedStanceProfile: stanceProfile,
           numEnvs: 1,
           trainingSteps: 8192,
         });
@@ -213,12 +215,20 @@ test('MCP lists and previews motion without writing, then submits the pinned rec
     expectedTrajectorySha256: 'a'.repeat(64),
   });
   assert.equal(stale.isError, true);
+  stanceProfile = undefined;
+  const changedStance = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: digest,
+    expectedStanceProfile: 'source-neutral-v1',
+  });
+  assert.equal(changedStance.isError, true);
+  stanceProfile = 'source-neutral-v1';
   const result = await call('rdk_originman_dance_train', {
     ...input,
     expectedTrajectorySha256: digest,
   });
   assert.notEqual(result.isError, true, result.content?.[0]?.text);
-  assert.deepEqual(calls, ['list', 'preview', 'preview', 'preview', 'submit']);
+  assert.deepEqual(calls, ['list', 'preview', 'preview', 'preview', 'preview', 'submit']);
   assert.equal(result.structuredContent.run.id, 'reference-run-1');
   assert.equal(result.structuredContent.nextTool, 'rdk_training_wait');
   assert.match(

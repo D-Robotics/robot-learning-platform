@@ -614,10 +614,14 @@ const ORIGINMAN_REFERENCE_TOOL = {
   name: 'rdk_originman_reference_track',
   title: 'OriginMan · 参考轨迹跟跳',
   description:
-    '在 Studio 右侧打开独立跟跳任务。支持导入 50 Hz NPZ/JSON、校验、仿真训练、评测、回放和 ONNX 下载。查看已有结果时传完整 Run ID 或至少 8 位前缀，唯一匹配才打开。',
+    '在 Studio 右侧打开跟跳任务。mode 可直达预置舞蹈（preset）、动作组自由编排（blocks）或导入 50 Hz NPZ/JSON（upload，默认）。查看已有评测与回放时仅传完整 Run ID 或至少 8 位前缀。',
   inputSchema: {
     type: 'object',
-    properties: { runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' } },
+    properties: {
+      runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' },
+      mode: { type: 'string', enum: ['preset', 'blocks', 'upload'] },
+    },
+    not: { required: ['runId', 'mode'] },
     additionalProperties: false,
   },
   annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
@@ -1340,7 +1344,7 @@ export function experienceProxy(
           : {}),
         instructions:
           (result.instructions ?? '').replace(/[（(]Duck Lab[）)]/gi, '') +
-          '\n用户明确提到 OriginMan「参考轨迹跟跳」、导入 NPZ、跟跳的标定或原 Run 回放时调用 rdk_originman_reference_track。在 Studio 中先从当前工具目录用 load_tools query 查找，并调用实际返回的完整工具名。查结果传原 runId，按 studioNavigation 打开 Studio 右侧。查询只读。' +
+          '\n用户明确提到 OriginMan「参考轨迹跟跳」、导入 NPZ、跟跳的标定或原 Run 回放时调用 rdk_originman_reference_track。在 Studio 中先从当前工具目录用 load_tools query 查找，并调用实际返回的完整工具名。选整舞传 mode=preset，自由编排传 mode=blocks，导入传 mode=upload。查结果传原 runId，按 studioNavigation 打开 Studio 右侧。查询只读。' +
           '\n查询已知 Run 的留存、归档、ONNX/策略下载、制品可用性或已有回放时，第一步调用 rdk_training_status，传原 runId，展示 artifactRetention、links.policyDownload 和已核验的 links.replay。用户追问刚才那条 Run 时，在当前轮按需登记后重新查询，不用历史回执代替实时读取。只有用户明确要求等待正在运行的任务时才用 rdk_training_wait。已有结果查询不调用独立评测、验收、训练或渲染工具。\n' +
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
@@ -1562,12 +1566,17 @@ export function experienceProxy(
         const operationId = 'om-' + randomUUID().replaceAll('-', '').slice(0, 20);
         if (params.name === ORIGINMAN_REFERENCE_TOOL.name) {
           if (
-            Object.keys(input).some((name) => name !== 'runId') ||
+            Object.keys(input).some((name) => !['runId', 'mode'].includes(name)) ||
+            (input.mode !== undefined &&
+              (input.runId !== undefined ||
+                !['preset', 'blocks', 'upload'].includes(input.mode))) ||
             (input.runId !== undefined &&
               (typeof input.runId !== 'string' ||
                 !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(input.runId)))
           )
-            throw Error('请提供跟跳 Run 的完整 ID 或至少 8 位前缀，或省略以打开任务。');
+            throw Error(
+              '请单独提供跟跳 Run 的完整 ID 或至少 8 位前缀，打开新任务可选择预置、自由编排或导入。',
+            );
           const launch = new URL(baseUrl);
           if (
             !['http:', 'https:'].includes(launch.protocol) ||
@@ -1579,6 +1588,7 @@ export function experienceProxy(
             throw Error('平台网页入口无效。请重新连接学习平台。');
           const root = launch.pathname.replace(/\/+$/, '');
           launch.pathname = root + '/originman-reference.html';
+          if (input.mode) launch.searchParams.set('mode', input.mode);
           if (input.runId) {
             const run = upstream.readTrainingRun
               ? await upstream.readTrainingRun(input.runId, { signal, allowPrefix: true })
@@ -1601,7 +1611,13 @@ export function experienceProxy(
             studioNavigation: { tool: 'studio_open_url', arguments: { url } },
             studentReply: input.runId
               ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
-              : '在右侧导入 NPZ 或加载示例摆臂。轨迹校验通过后，选择 Worker 并提交仿真训练。',
+              : {
+                  preset: '在右侧选择预置舞蹈，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  blocks:
+                    '在右侧搜索动作并加入编排，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  upload:
+                    '在右侧导入自己的 NPZ 或 JSON 轨迹，也可先加载示例体验。校验后可选择 Worker 开始仿真训练。',
+                }[input.mode ?? 'upload'],
           };
         } else if (params.name === 'rdk_originman_motion_library') {
           if (Object.keys(input).length) throw Error('动作库查询不需要参数。');

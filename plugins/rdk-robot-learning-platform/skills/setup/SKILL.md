@@ -11,7 +11,7 @@ description: 连接当前机器人学习平台，确认正式身份与明确模�
 
 用户问 OriginMan 舞蹈“下一轮怎么调”时，用 `rdk_learning_guide` 的 `intent:results` 读取原 `runId`，指定第几段时传 `section`。展示对应节拍、实测指标、门槛和建议。只有回执提供 `recommendation.previewArguments` 且用户要求采用时，才用原参数生成改动预览。等待用户确认该预览并要求开始后，再提交新 Run。前后比较同一节拍、同一舞段，并复查其他舞段是否退步。
 
-OriginMan 舞蹈和参考轨迹跟跳使用各自的仿真任务。明确选择参考轨迹跟跳或导入 NPZ 时，使用 `rdk_originman_reference_track` 并按回执 `studioNavigation` 打开右侧。用户在页面校验轨迹、选择 Worker 和预算后开始训练。只给 Run ID 或其至少 8 位前缀时用 `rdk_training_status` 查原结果，唯一匹配才按 `studioNavigation` 打开右侧。无匹配或有多条匹配时展示 `studentReply` 并结束。 资料见 [跟跳标定与关节映射](../../references/originman-reference-calibration.json) 和 [跟跳策略契约](../../references/originman-reference-manifest.json)。打开 Workshop 后在舞蹈页面选择预算和共享 GPU，确认后提交。已有实验结果沿用原 Run。
+OriginMan 舞蹈和参考轨迹跟跳使用各自的仿真任务。用 `rdk_originman_reference_track` 打开右侧，预置舞蹈传 `mode=preset`，动作组自由编排传 `mode=blocks`，导入自有轨迹传 `mode=upload`。按回执 `studioNavigation` 打开。用户在页面校验轨迹、选择 Worker 和预算后开始训练。只给 Run ID 或其至少 8 位前缀时用 `rdk_training_status` 查原结果，唯一匹配才按 `studioNavigation` 打开右侧。无匹配或有多条匹配时展示 `studentReply` 并结束。 资料见 [跟跳标定与关节映射](../../references/originman-reference-calibration.json) 和 [跟跳策略契约](../../references/originman-reference-manifest.json)。打开 Workshop 后在舞蹈页面选择预算和共享 GPU，确认后提交。已有实验结果沿用原 Run。
 
 插件安装、自然语言入口、全部 Skill 与 MCP 工具的用户说明见[插件使用手册](../../references/user-guide.md)。
 

@@ -5133,36 +5133,6 @@ export function createSim2RealRouter(
           );
           return;
         }
-        const stanceProfile = training?.originmanReferenceComposition?.stanceProfile;
-        const trajectory = training?.originmanReference?.trajectory;
-        if (stanceProfile && trajectory) {
-          const credentials = await getSim2RealComputeResourceSecret(computeResourceId!, owner);
-          const report = await screenOriginmanReferenceWithWorker({
-            runnerUrl: resource.runnerUrl,
-            token: credentials?.runnerToken,
-            accountId: owner ?? 'local-dev',
-            trajectory,
-            stanceProfile,
-          }).catch(() => null);
-          if (!report || !('passed' in report) || !report.passed) {
-            const unsupported = report?.unsupportedStance;
-            const busy = report?.busy;
-            sendApiError(
-              response,
-              !report ? 503 : 409,
-              unsupported
-                ? 'ORIGINMAN_REFERENCE_STANCE_UNAVAILABLE'
-                : 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED',
-              unsupported
-                ? '所选 Worker 还不支持原版站姿标定，请使用云端仿真 Worker 或更新本地 Worker。'
-                : busy
-                  ? 'Worker 正在处理任务，请稍后提交。'
-                  : '所选 Worker 未能确认原版轨迹通过物理筛查。请检查连接并重新筛查。',
-              { retryable: !report || busy === true },
-            );
-            return;
-          }
-        }
       }
       // A project supplies its dataset snapshot by default.  An explicit
       // datasetIds array overrides that default, but every id must be visible
@@ -5264,6 +5234,45 @@ export function createSim2RealRouter(
           'sim2real-run-preflight',
         );
         return;
+      }
+      if (composition && training?.originmanReference) {
+        const credentials = await getSim2RealComputeResourceSecret(computeResourceId!, owner);
+        if (!credentials) {
+          sendApiError(
+            response,
+            409,
+            'ORIGINMAN_REFERENCE_WORKER_MISSING',
+            '所选 Worker 已不可用。请重新选择并检查连接。',
+          );
+          return;
+        }
+        const report = await screenOriginmanReferenceWithWorker({
+          runnerUrl: credentials.resource.runnerUrl,
+          token: credentials.runnerToken,
+          accountId: owner ?? 'local-dev',
+          trajectory: training.originmanReference.trajectory,
+          stanceProfile: composition.stanceProfile,
+        }).catch(() => null);
+        if (!report || !('passed' in report) || !report.passed) {
+          const unsupported = report?.unsupportedStance;
+          const busy = report?.busy;
+          sendApiError(
+            response,
+            !report ? 503 : 409,
+            unsupported
+              ? 'ORIGINMAN_REFERENCE_STANCE_UNAVAILABLE'
+              : 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED',
+            unsupported
+              ? '所选 Worker 还不支持原版站姿标定，请使用云端仿真 Worker 或更新本地 Worker。'
+              : busy
+                ? 'Worker 正在处理任务，请稍后提交。'
+                : !report
+                  ? 'Worker 未返回可核验的筛查结果。请检查连接后重试。'
+                  : '编排未通过物理筛查。请在跟跳页面筛查当前轨迹，定位失败帧后再提交。',
+            { retryable: !report || busy === true },
+          );
+          return;
+        }
       }
       const now = new Date().toISOString();
 

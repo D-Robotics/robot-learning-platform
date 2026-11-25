@@ -20,14 +20,14 @@ export const ORIGINMAN_MOTION_TOOLS = [
   {
     name: 'rdk_originman_motion_library',
     description:
-      '只读查询平台的 OriginMan 参考动作库和预置舞蹈，返回可用 ID、时长、分类与限幅状态。',
+      '只读查询平台的 OriginMan 参考动作库和预置舞蹈，返回可用 ID、时长、分类与限幅状态，也会列出暂不可训练的素材和原因。',
     inputSchema: { type: 'object', additionalProperties: false, properties: {} },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   },
   {
     name: 'rdk_originman_motion_preview',
     description:
-      '只读校验和预览预置舞蹈或自定义动作组，返回总时长、预计拍数、关节范围、曲线与轨迹 SHA。不会提交训练。',
+      '只读校验和预览预置舞蹈或自定义动作组，返回总时长、预计拍数、关节范围、曲线、轨迹 SHA 和适用的站姿标定。不会提交训练。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -109,6 +109,7 @@ export async function trainReferenceDance(args, upstream, signal) {
     numEnvs = 64,
     referenceTrainingSteps = 503808,
     expectedTrajectorySha256,
+    expectedStanceProfile,
     ...extra
   } = args;
   if (
@@ -131,6 +132,9 @@ export async function trainReferenceDance(args, upstream, signal) {
     throw Error('平台未返回可验证的参考轨迹摘要。');
   if (expectedTrajectorySha256 !== undefined && expectedTrajectorySha256 !== sha256)
     throw Error('编排内容已变更。请重新预览并确认后再提交。');
+  const stanceProfile = preview.stanceProfile;
+  if (expectedStanceProfile !== undefined && expectedStanceProfile !== stanceProfile)
+    throw Error('参考站姿已变更。请重新预览并确认后再提交。');
   return upstream.submitOriginmanMotion(
     {
       contextId,
@@ -139,6 +143,7 @@ export async function trainReferenceDance(args, upstream, signal) {
       composition,
       trainingSteps: referenceTrainingSteps,
       expectedTrajectorySha256: sha256,
+      ...(stanceProfile && { expectedStanceProfile: stanceProfile }),
     },
     { signal },
   );

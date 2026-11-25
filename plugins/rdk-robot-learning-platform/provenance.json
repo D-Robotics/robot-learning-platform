@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.6.99",
+  "version": "0.7.0",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan Workshop 提供预置舞蹈、动作组自由编排和舞蹈仿真回放。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -9,12 +9,12 @@
   "coreVersion": "0.1.0",
   "wrapperSources": {
     "scripts/workshop-course.mjs": "9a8819496f51497f3cf4c89b17f7821a73c9bf3f70ec9f97fb32a77c97a800a1",
-    "scripts/dance-training.mjs": "b81b73ba3f32e8daa9653451fd80434bc531e2a99383a9c46304def27d38f741",
+    "scripts/dance-training.mjs": "266af764869206325ca35cbf6d8943c0b6c79c402a9d8917f3c542ab88537872",
     "scripts/dance-coaching.mjs": "a15a35d0db45acf1247239504b2b1d6078ec16ec73f3d9228e02e44e65be2a46",
     "scripts/dance-evaluation.mjs": "d74e95aa3d0f51f2ca5d02102d16b21e012d673cc29d21862c4b5d488c1e2709",
     "scripts/dance-iteration.mjs": "6438e96b50f5c8dd6695805d7bc5aefc9b1fbaa902cde48dd682f29171ed380c",
     "scripts/originman-dance-config.mjs": "6566534557dc88e635cc378ada52d3426cfbbf1e762b52baf28155b05c8bb85c",
-    "scripts/originman-motion.mjs": "fda79972d2008d18b636546911656628ebbaec47c84a3597efb03b8f01a7de9c",
+    "scripts/originman-motion.mjs": "b39f2fc1b4706d32a7b4eddf5c8655abd51438bc92d465d077e97c91c2ff8462",
     "scripts/workshop-entry.mjs": "8d4c06055d28d93d9e683efad997cf25167f8b518c23767fd41b9cd5990968da",
     "scripts/development-targets.mjs": "c5e0aaa9aacc4eb00f38a4bac052b8af889f1285f1a0ebf9408b94d501d751cc",
     "scripts/compute-onboarding.mjs": "08886f5dce9323b93cfb09095148c0505e28f4f5c509abb1cf8ac3d5b93962d3",
@@ -25,13 +25,13 @@
     "scripts/robot-onboarding.mjs": "c8ac06adf47bed664194b513332226249c5c6a33d7646f94dff7af994c2c6421",
     "scripts/qoder-install.mjs": "76a8bc2e2383f31d81e32ff6e8c5ca0316d9baa14e02778bed551d2768d8ef07",
     "scripts/experience.mjs": "b8c9531415d202ce167e026020a7521bb941e2e4c192539ba5990fa195ad2d1e",
-    "scripts/experience-mcp.mjs": "9d279625ca7a0f75e3d8e22ddd572b157715d4e9cc237b920edb5a730738d8a8",
+    "scripts/experience-mcp.mjs": "af51a03d42eae3823f35f1287a2e3fec508a489cf4bf141a21828f313791ca15",
     "scripts/workflow-inspection.mjs": "fcc0ae25513cf3c71a2a6b29cc14e9d3aa246ae79aa206037c72e8cb2b6642a8",
     "scripts/workspace-evidence.mjs": "99d06f8020fa16636c9b15447b12bc0852853b1e71ac3fba70f2a474a8f84a0b",
     "scripts/experiment-context.mjs": "59bd3dc740d3229c6c8a1567f3275bc8bfa1a9af8b40a616a7fc1027bd25ce87",
     "scripts/short-training.mjs": "9c93eab6d2876c1435498895a5be4cb0e02cbc8fccbbf3e204051e42b5fed85e",
     "scripts/plugin-auth.mjs": "85f82a796cd443c691634052af27d230f0e46bff650f5c3861a82751e8b8ccd5",
-    "scripts/authenticated-core.mjs": "8486d2920a97b7ba5efae5b686ecda28b5ce322ab480d52b3f4ff1ba093ad0a3",
+    "scripts/authenticated-core.mjs": "b8c74ca527cd7715cb2f5cd67b976b6cd7c2436b96e00511f4ccd340718eca85",
     "scripts/plugin-errors.mjs": "9906d8028d48112e89a84675ac46ac464f775a45ce061997d22a0d1dc22cc311",
     "scripts/course-setup.mjs": "5b3606ed3d38c930213260a0103a3fd76db680af435fb96f735f3bee32014fb9",
     "scripts/submission-journal.mjs": "3a860e2075ced99dca2cf95a2bd7bcab17248b14ddf264b942cb8342fcbc044f",
@@ -50,7 +50,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "2cfd448cc9b583ae9a9e7f1ea89d8757bef7a14a561422e2570e3cf8f06f3d81",
+    "ui/experiment.html": "b774327faaeda8ba68b78535101c39ede2bd2f739c42d7faba844a229e4434b0",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5"
   },
   "uiBuild": {
@@ -63,10 +63,10 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "6ae4b713e6ede204eab364a04e8398b56085f6a953fb81472ef057a0af733796",
-      "plugins/rdk-robot-learning-platform/plugin.json": "73f0323b5b9a4a9f15161851074a73a81c85badf1407254031032c15304ee810",
+      "plugins/rdk-robot-learning-platform/plugin.json": "13097642d55752bbba93f895fdfd50e3cc4ee227193ec3f7581e81d8e09214c3",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
-      "services/sim2real-web/public/experiment.css": "a9cef58f4fb51235fbc099008f40b970e58bee9866e8b281925c751c1a5496df",
+      "services/sim2real-web/public/experiment.css": "6f865edb6bfea2ffbfa76c8443a525a6fcb6045a14416b3c94e2c545de5aee41",
       "services/sim2real-web/public/experiment.html": "b5bcde81cacfa66d9b51d3d358bcee86b0b9b5dd51b444cc3c8bfe7f0cb86d55"
     }
   },

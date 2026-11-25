@@ -631,6 +631,7 @@ paths:
       tags: [runs]
       summary: Start or register a browser, local, RoboGo or contract run
       operationId: createRun
+      description: New OriginMan choreography runs require a successful physical screen on the selected Worker. Idempotent replay returns the existing Run before screening again.
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
@@ -647,7 +648,9 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/RunResponse" } } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/AuthRequired" }
+        "409": { description: Screening did not pass, the Worker is busy or incompatible, or the idempotency key conflicts. }
         "429": { description: Per-account active-run quota reached. }
+        "503": { description: The Worker did not return a verifiable screening result, or the service is unavailable. }
   /api/v1/duck/runs/{runId}/dance-evaluation:
     parameters:
       - $ref: "#/components/parameters/RunId"
