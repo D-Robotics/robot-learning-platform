@@ -7,12 +7,31 @@ const STATUS_LABELS = Object.freeze({
   ready: '已准备',
   queued: '排队中',
   running: '运行中',
+  cancelling: '正在取消',
   completed: '已完成',
   blocked: '已阻断',
   failed: '失败',
   cancelled: '已取消',
   canceled: '已取消',
 });
+const workshopEvidenceMessages = new Map([
+  ['binding-missing', '原训练缺少可用于恢复的 Worker 或策略绑定。请由课程管理员核对原训练的记录。'],
+  [
+    'worker-unavailable',
+    '暂时连不上原训练的 Worker。请恢复同一算力资源的连接，再继续原实验的评测。',
+  ],
+  ['job-missing', '原 Worker 查不到这条任务。请核对 Worker 的数据目录是否仍包含原训练记录。'],
+  ['receipt-missing', '原 Worker 尚未返回可用的评测回执。请核对是否保留了原训练的结果文件。'],
+  [
+    'receipt-mismatch',
+    '原 Worker 返回的任务、训练参数或策略校验值与原记录不一致。请核对原始结果文件。',
+  ],
+]);
+
+export function workshopEvidenceMessage(issue) {
+  return workshopEvidenceMessages.get(issue);
+}
+
 const SECTION_LABELS = Object.freeze({
   'alternating-arms': '交替摆臂',
   'weight-shift': '左右换重心',
@@ -227,6 +246,21 @@ function renderQuality(document, run) {
         : run.status === 'completed'
           ? '运行已结束，但没有可核验的舞蹈质量门结果。'
           : '运行终态后再读取本次舞蹈质量门结果。');
+  const config = danceConfigFor(run);
+  const nominal = Array.isArray(evidence?.evaluations)
+    ? evidence.evaluations.find((row) => row?.bpm === config?.bpm)?.sections : null;
+  if (Number.isFinite(config?.bpm) && Array.isArray(config.sections) && Array.isArray(nominal) &&
+      nominal.length > 0 && nominal.length === config.sections.length &&
+      nominal.every((section, index) => section?.type === config.sections[index]?.type && typeof section.passed === 'boolean')) {
+    const missed = nominal.flatMap((section, index) =>
+      section.passed ? [] : [`第 ${index + 1} 段 ${SECTION_LABELS[section.type] || '舞段'}`]);
+    const summary = `${config.bpm} BPM 下，${nominal.length - missed.length}/${nominal.length} 段达标。`;
+    const next = missed.length
+      ? `先看${missed.slice(0, 2).join('、')}的分段指标，可带着本轮参数准备下一轮。`
+      : passed === false ? '此节拍各段通过，请在下方核对其他节拍及整套舞蹈指标。' : '';
+    const label = document.getElementById('quality-summary');
+    if (label) label.textContent += summary + next;
+  }
   const rows = tracking ? referenceQualityRows(reference) : metricRows(evidence);
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
@@ -333,11 +367,13 @@ function renderVideo(document, location, run, runId) {
       : '回放生成后会校验策略与轨迹摘要，再显示本次视频。');
 }
 
-function renderRun(document, location, run, runId) {
+function renderRun(document, location, run, runId, evidenceIssue) {
   const tracking = run.taskId === REFERENCE_TASK;
+  const recovery = run.taskId === 'originman-recovery';
+  const evidenceMessage = recovery && run.status === 'completed' ? workshopEvidenceMessage(evidenceIssue) : '';
   const isDance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
   const status = STATUS_LABELS[run.status] ?? '状态待核对';
-  text(document, 'run-title', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : '本次训练运行');
+  text(document, 'run-title', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : recovery ? 'OriginMan · 受扰恢复' : '本次训练运行');
   text(document, 'run-status', status);
   text(document, 'run-task', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 强化学习舞蹈' : run.taskId ?? run.productId ?? '—');
   text(document, 'run-engine', run.training?.engine ?? run.training?.algorithm ?? '—');
@@ -357,7 +393,7 @@ function renderRun(document, location, run, runId) {
   download.hidden = !canDownload;
   text(document, 'run-summary', run.summary ?? '平台未提供本次运行摘要。');
   const logs = document.getElementById('run-logs');
-  if (logs) logs.hidden = !tracking || run.backend !== 'local' || run.mock === true || !run.externalRunId;
+  if (logs) logs.hidden = !(tracking || recovery || isDance) || run.backend !== 'local' || run.mock === true || !run.externalRunId;
   const hardware = document.getElementById('run-hardware-readiness');
   if (hardware) {
     hardware.hidden = !(isDance || tracking) || run.status !== 'completed';
@@ -378,7 +414,7 @@ function renderRun(document, location, run, runId) {
   }
   const replayUrl = (isDance || tracking) ? danceVideoUrl(location, run, runId) : null;
   const replayVerified = (isDance || tracking) && verifiedDanceVideo(run);
-  text(document, 'run-next-action', run.status === 'queued'
+  text(document, 'run-next-action', evidenceMessage || (run.status === 'queued'
     ? '本次训练正在排队；页面会继续查询同一 Run。'
     : run.status === 'running'
       ? '本次训练正在运行；曲线只显示该 Run 实际上报的采样点。'
@@ -390,7 +426,9 @@ function renderRun(document, location, run, runId) {
           ? '本次舞蹈训练已结束；风格门结果已显示。当前平台没有提供可核验且可播放的本次回放，请查看下方说明。'
           : run.status === 'completed'
             ? '本次训练已结束；请查看本次运行结果。'
-            : '已打开本次 Run 的只读详情。');
+            : run.status === 'cancelling'
+              ? '正在等待 Worker 确认停止。'
+              : '已打开本次 Run 的只读详情。'));
   const config = run.training ?? {};
   const table = document.getElementById('run-config-table');
   const body = document.getElementById('run-config-body');
@@ -487,9 +525,11 @@ export async function startRunDetail({
       const response = await fetchImpl(url.href, { credentials: 'same-origin', cache: 'no-store' });
       const result = await response.json();
       if (!response.ok || result.runId !== runId || !Array.isArray(result.lines)) {
-        throw Error(result.error?.message || '暂时无法读取本轮日志。');
+        throw Error(result.message || '暂时无法读取本轮日志。');
       }
-      text(document, 'run-logs-output', result.lines.map((line) => line.text).join('\n') || '暂时没有可读取的日志。');
+      const lines = result.lines.map((line) => line.text).join('\n');
+      const retained = [result.stdoutTail, result.stderrTail].filter((item) => typeof item === 'string').join('\n');
+      text(document, 'run-logs-output', lines || retained || '暂时没有可读取的日志。');
     } catch (cause) {
       text(document, 'run-logs-output', cause.message || '暂时无法读取本轮日志。');
     } finally {
@@ -526,9 +566,9 @@ export async function startRunDetail({
       const run = payload?.run;
       if (!run || run.id !== runId) throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
       loaded = true;
-      active = ['queued', 'running', 'ready'].includes(run.status);
+      active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
-      renderRun(document, location, run, runId);
+      renderRun(document, location, run, runId, payload.workshopEvidenceIssue);
       void showResimulatedReplay(document, location, fetchImpl, run);
       schedule();
     } catch (cause) {

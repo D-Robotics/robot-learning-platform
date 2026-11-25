@@ -14,7 +14,7 @@ export const WORKSHOP_TOOLS = [
   {
     name: 'rdk_workshop',
     description:
-      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整页面。“继续”和“看看效果”使用当前账号原实验并返回已核对的效果结论。学员在页面选择算力和预算。本工具不提交训练。' +
+      '用户说“带我开启/开始 OriginMan Workshop”时直接调用本工具 intent=new；默认舞蹈准备页，明确受扰恢复传 course=recovery。回执提供当前平台完整页面。“继续”和“看看效果”已知原 Run 时传 runId，已知受扰恢复实验时传 contextId。学员在页面选择算力和预算。本工具不提交训练。' +
       STUDIO_WORKSHOP_NAVIGATION +
       ' Qoder 按回执操作。',
     inputSchema: {
@@ -23,6 +23,7 @@ export const WORKSHOP_TOOLS = [
         intent: { type: 'string', enum: ['start', 'new', 'continue', 'results'], default: 'start' },
         course: { type: 'string', enum: ['dance', 'recovery'] },
         computeResourceId: { type: 'string', minLength: 1, maxLength: 160 },
+        runId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$' },
         contextId: { type: 'string', pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$' },
       },
       additionalProperties: false,

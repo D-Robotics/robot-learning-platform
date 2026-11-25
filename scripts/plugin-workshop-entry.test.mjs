@@ -428,3 +428,48 @@ test('recovery results resolve experiment ID to the verified training and evalua
     ['training-run', 'evaluation-run'],
   );
 });
+
+test('Workshop opens the exact authorized Run for either course and rejects course mismatches', async () => {
+  const canonical = '90a158b1-bfa6-4c55-a13f-3c988c424511';
+  const reads = [];
+  let taskId = 'originman-recovery';
+  const dispatch = experienceProxy(
+    {
+      async readTrainingRun(id, options) {
+        reads.push(id);
+        assert.equal(options.allowPrefix, true);
+        return {
+          id: canonical,
+          taskId,
+          artifact: { sha256: 'a'.repeat(64) },
+          status: 'completed',
+          workshopEvidenceIssue: 'worker-unavailable',
+        };
+      },
+      async request(method) {
+        throw Error('Unexpected upstream call ' + method);
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: status.baseUrl } },
+  );
+  const call = (args) => dispatch('tools/call', { name: 'rdk_workshop', arguments: args });
+  const result = await call({ intent: 'continue', runId: canonical.slice(0, 8) });
+  assert.equal(result.structuredContent.course, 'recovery');
+  assert.equal(result.structuredContent.run.id, canonical);
+  assert.match(result.structuredContent.studentReply, /暂时连不上原训练的 Worker/);
+  assert.match(
+    result.structuredContent.studioNavigation.arguments.url,
+    new RegExp(canonical + '$'),
+  );
+  assert.equal(JSON.parse(result.content[0].text).run.id, canonical);
+  assert.equal(
+    (await call({ intent: 'results', course: 'dance', runId: canonical })).isError,
+    true,
+  );
+  assert.equal((await call({ intent: 'new', runId: canonical })).isError, true);
+  taskId = 'originman-dance';
+  const dance = await call({ intent: 'results', course: 'dance', runId: canonical });
+  assert.equal(dance.structuredContent.course, 'dance');
+  assert.equal(dance.structuredContent.run.id, canonical);
+  assert.deepEqual(reads, [canonical.slice(0, 8), canonical, canonical]);
+});

@@ -168,9 +168,12 @@ def tracked_style(type_, local, intensity, hands, upright, feet_delta, contacts)
 def validate_dance_config(value: dict) -> dict:
     if not isinstance(value, dict) or value.get("schemaVersion") != 1:
         raise ValueError("task.originmanDance must be a schemaVersion 1 object")
-    allowed = {"schemaVersion", "title", "bpm", "sections", "seed", "trainingSteps", "totalBeats", "rewardTuning"}
+    allowed = {"schemaVersion", "title", "bpm", "sections", "seed", "trainingSteps", "totalBeats", "rewardTuning", "compositionMode"}
     if set(value) - allowed:
         raise ValueError("task.originmanDance contains unknown fields")
+    mode = value.get("compositionMode")
+    if "compositionMode" in value and mode not in ("preset", "custom"):
+        raise ValueError("originmanDance.compositionMode must be preset or custom")
     bpm = value.get("bpm")
     if isinstance(bpm, bool) or not isinstance(bpm, (int, float)) or not math.isfinite(bpm) or not 80 <= bpm <= 140:
         raise ValueError("originmanDance.bpm must be finite and in [80, 140]")
@@ -212,6 +215,8 @@ def validate_dance_config(value: dict) -> dict:
         "seed": seed,
         "trainingSteps": steps,
     }
+    if mode is not None:
+        result["compositionMode"] = mode
     if reward_overrides:
         result["rewardTuning"] = reward_overrides
     return result

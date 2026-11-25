@@ -1358,7 +1358,7 @@ export function experienceProxy(
           '\n课堂新学员或新机离线准备：rdk_classroom_guide携带已知answers，只展示studentReply，每次一个中文问题，不重复问已知项。要求依据才detail=full。阶段标准读robot_onboarding_guide，证据读robot_acceptance_assess；needs-input不是通过。离线知识不要求平台登录，不因离线准备启动训练。' +
           '\n默认离线可了解课程，不主动授权、测试算力或连接板卡。需要账号才能继续时，提示“连接学习平台”，等用户明确要求连接才调用rdk_auth_login，浏览器确认后用rdk_auth_status。只在宿主已显式配置绑定账号时复用该身份，不索取密码或Cookie。' +
           '\n换学习平台账号用rdk_auth_switch_account。查看开发机先用rdk_development_targets list。用户明确选算力机开始Workshop时，按唯一名称匹配算力机ID，传rdk_workshop intent:new、当前课程和computeResourceId。未指定课程的新 Workshop 默认舞蹈；仅用户明确受扰恢复时传recovery。用户明确要求连接某台板卡时才按板卡列表匹配ID并用connect-board。名称有歧义时让用户选择，不在聊天收集凭据。' +
-          '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。舞蹈继续/看看效果只查询原Run。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
+          '\n任务意图优先：当前对话已明确OriginMan强化学习跳舞时，“带我开始/重新开始Workshop”沿 danceTraining 流程取得新 contextId并继续已确认编舞；不得展示旧实验结果或调用rdk_workshop、rdk_originman_train等受扰恢复链路。继续或查看原舞蹈结果，用 rdk_workshop 传 intent:continue 或 results 和原 runId。提交、等待和状态查询回执的qoderNavigation/visualization必须打开并聚焦到本轮Run；宿主不支持导航时给可点击链接。' +
           '\n简短咨询预算用途、计数单位或流程/效果/回放完成标准：优先rdk_originman_course_brief，逐字展示studentReply两句即结束，不加载整份指南和历史证据。实际成绩另读原评测；明确问依据才按需读引用。不编造计数倍率。' +
           '\n交互约定：默认简短中文，按“当前进度→本次结果→下一步”回答。认证、版本、契约和资源校验在后台完成，正常时不逐项播报。只在阶段变化、阻断或需要用户选择时更新；不重复播报running，不展示内部推理。UUID、工具名、摘要和错误码仅在用户查看诊断时展开。正常结果优先给曲线、对比图和回放入口；宿主能打开工作台则在工作台展示，否则给可点击链接。没有实际渲染能力不伪装交互卡片，没有播放器观测不称已播放。' +
           '\n高级独立训练才使用预算选择与原子训练工具：按用户已选预算执行，不重复问。已选择恢复课程后用rdk_workshop打开按钮工作台，在页面选择预算并自动接续；只咨询或先不要开始时不提交。高级手动提交仍核对当前账号、完整manifest、同源父Run与权重，失败不改标识重交。' +
@@ -1737,50 +1737,87 @@ export function experienceProxy(
               await upstream.request('tools/call', { name, arguments: args }, { signal }),
             );
           const args = params.arguments ?? {};
-          if (
-            args.course === 'dance' &&
-            ['continue', 'results'].includes(args.intent) &&
-            !args.computeResourceId
-          ) {
-            return dispatch(
-              'tools/call',
-              {
-                name: LEARNING_GUIDE_TOOL.name,
-                arguments: {
-                  task: 'dance',
-                  intent: 'results',
-                  ...(args.contextId && { contextId: args.contextId }),
-                },
-              },
-              signal,
-            );
-          }
-          const catalog =
-            args.course === 'recovery' && args.computeResourceId ? await readCatalog(signal) : null;
-          payload = await workshopEntry(args, call, {
-            remote:
-              upstream.workshopSession &&
-              ((operation, input, accountId) =>
-                upstream.workshopSession(operation, input, {
-                  signal,
-                  accountId,
-                })),
-            readResult: async (contextId) =>
-              readToolResult(
-                await dispatch(
-                  'tools/call',
-                  { name: 'rdk_experiment_resume', arguments: { contextId } },
-                  signal,
-                ),
+          if (args.runId !== undefined) {
+            if (
+              !['continue', 'results'].includes(args.intent) ||
+              Object.keys(args).some((key) => !['intent', 'course', 'runId'].includes(key)) ||
+              (args.course !== undefined && !['dance', 'recovery'].includes(args.course)) ||
+              typeof args.runId !== 'string' ||
+              !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(args.runId)
+            )
+              throw Error('查看已有 Workshop 请使用原 Run ID 或实验标识其中一个。');
+            const value = upstream.readTrainingRun
+              ? { run: await upstream.readTrainingRun(args.runId, { signal, allowPrefix: true }) }
+              : await readRun(args.runId, signal);
+            const run = value.run ?? value;
+            const runId = run.id ?? run.runId;
+            const course = { 'originman-dance': 'dance', 'originman-recovery': 'recovery' }[
+              run.taskId
+            ];
+            if (
+              !matchesRunIdentifier(args.runId, runId) ||
+              !course ||
+              (args.course && args.course !== course)
+            )
+              throw Error('原 Run 与所选 Workshop 课程不匹配，请核对原记录。');
+            payload = attachRunVisualization(
+              await runResults(
+                observe({ ...value, run, course, stage: run.status }, runId),
+                runId,
+                signal,
               ),
-            readModels: upstream.readModels && (() => upstream.readModels({ signal })),
-            courseReadiness:
-              upstream.courseReadiness && ((args) => upstream.courseReadiness({ ...args, signal })),
-            toolNames: catalog?.tools.map((t) => t.name),
-            defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
-            authentication,
-            signal,
-          });
+              runId,
+              baseUrl,
+            );
+          } else {
+            if (
+              args.course === 'dance' &&
+              ['continue', 'results'].includes(args.intent) &&
+              !args.computeResourceId
+            ) {
+              return dispatch(
+                'tools/call',
+                {
+                  name: LEARNING_GUIDE_TOOL.name,
+                  arguments: {
+                    task: 'dance',
+                    intent: 'results',
+                    ...(args.contextId && { contextId: args.contextId }),
+                  },
+                },
+                signal,
+              );
+            }
+            const catalog =
+              args.course === 'recovery' && args.computeResourceId
+                ? await readCatalog(signal)
+                : null;
+            payload = await workshopEntry(args, call, {
+              remote:
+                upstream.workshopSession &&
+                ((operation, input, accountId) =>
+                  upstream.workshopSession(operation, input, {
+                    signal,
+                    accountId,
+                  })),
+              readResult: async (contextId) =>
+                readToolResult(
+                  await dispatch(
+                    'tools/call',
+                    { name: 'rdk_experiment_resume', arguments: { contextId } },
+                    signal,
+                  ),
+                ),
+              readModels: upstream.readModels && (() => upstream.readModels({ signal })),
+              courseReadiness:
+                upstream.courseReadiness &&
+                ((args) => upstream.courseReadiness({ ...args, signal })),
+              toolNames: catalog?.tools.map((t) => t.name),
+              defaultResourceId: env.RDK_WORKSHOP_COMPUTE_RESOURCE_ID,
+              authentication,
+              signal,
+            });
+          }
         } else if (params.name === 'rdk_originman_course_brief')
           payload = courseBrief(params.arguments ?? {});
         else if (params.name === 'rdk_originman_training_choice')
@@ -2252,7 +2289,7 @@ export function experienceProxy(
                   : JSON.stringify(
                       EXPERIMENT_TOOLS.some((t) => t.name === params.name)
                         ? experimentModelResult(payload)
-                        : params.name === 'rdk_workshop'
+                        : params.name === 'rdk_workshop' && !payload.run
                           ? {
                               ...(payload.training ? experimentModelResult(payload) : {}),
                               contextId: payload.contextId,

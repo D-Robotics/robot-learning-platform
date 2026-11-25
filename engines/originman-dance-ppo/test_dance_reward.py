@@ -129,6 +129,13 @@ class RewardTuningValidationTests(unittest.TestCase):
         config = validate_dance_config(self.base_config())
         self.assertNotIn("rewardTuning", config)
 
+    def test_composition_mode_is_preserved_and_checked(self):
+        for mode in ("preset", "custom"):
+            config = validate_dance_config(self.base_config(compositionMode=mode))
+            self.assertEqual(validate_dance_config(config)["compositionMode"], mode)
+        with self.assertRaises(ValueError):
+            validate_dance_config(self.base_config(compositionMode="other"))
+
     def test_valid_overrides_are_normalized_and_kept(self):
         config = validate_dance_config(
             self.base_config(rewardTuning={"squatDepthM": 0.05, "tiltPenalty": 4})

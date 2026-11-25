@@ -104,6 +104,7 @@
               <button class="top-menu-item" type="button" role="menuitem" id="refresh-button">
                 刷新工作区
               </button>
+              <a class="top-menu-item" role="menuitem" href="https://rdkstudio.d-robotics.cc/robotics-learning/plugins/rdk-robot-learning-platform-latest.zip" download>下载学习平台插件</a>
               <button class="top-menu-item" id="onboarding-help-button" type="button" role="menuitem" aria-haspopup="dialog" aria-controls="usage-guide">使用指引</button>
               <div class="top-menu-item top-menu-account" id="account-menu-item" hidden>
                 <span class="top-menu-account-k">账号</span>
@@ -987,11 +988,12 @@
                       </div>
                       <p class="small-note"><a href="./originman-dance-references/index.html">查看动作参考与仿真回放</a></p>
                       <p class="small-note" id="originman-dance-error" aria-live="polite"></p>
+                      <div id="originman-dance-resource"></div>
                       <p class="small-note" id="originman-dance-readiness" role="status"></p>
                       <div class="training-plans-actions">
                         <button class="button button-ghost button-small" id="originman-configure-contract" type="button">选择舞蹈契约</button>
                         <button class="button button-ghost button-small" id="originman-manage-compute" type="button">打开执行资源</button>
-                        <button class="button button-primary button-small" id="originman-configure-run" type="button">前往 Run 与进度</button>
+                        <button class="button button-primary button-small" id="originman-configure-run" type="button">检查并提交训练</button>
                       </div>
                     </div>
                   </section>
@@ -1022,7 +1024,7 @@
                     </dialog>
                   </section>
 
-                  <div class="training-grid"><div class="training-field-group" role="group" aria-labelledby="training-group-basic">
+                  <div class="training-grid"><div class="training-field-group" id="training-basic-settings" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
                     ><select id="training-profile" aria-label="选择训练档位">
@@ -1057,12 +1059,16 @@
                       <optgroup label="研究栈 · 上游原生">
                         <option value="isaac-lab">Isaac Lab · CUDA 主机（含 sim2sim）</option>
                       </optgroup></select
-                    ><label class="field-label" for="compute-resource-select">训练资源</label
-                    ><select id="compute-resource-select" aria-label="选择 GPU 训练资源">
-                      <option value="">服务端默认本地 Worker</option>
-                    </select
                     >
-                    <button class="button button-ghost button-small" id="originman-check-compute" type="button" hidden>检查所选 Worker</button>
+                    <div id="training-resource-slot">
+                      <div id="training-resource-field" class="training-plans-picker">
+                        <label class="field-label" for="compute-resource-select">训练资源</label>
+                        <select id="compute-resource-select" aria-label="选择训练资源">
+                          <option value="">使用已配置的本地 Worker</option>
+                        </select>
+                        <button class="button button-ghost button-small" id="originman-check-compute" type="button" hidden>检查所选 Worker</button>
+                      </div>
+                    </div>
                     </div>
                     <div class="training-field-group" id="training-demonstrations" hidden role="group" aria-labelledby="training-group-demonstrations">
                       <div class="training-group-title" id="training-group-demonstrations">示教轨迹</div>
@@ -2665,7 +2671,7 @@
     <script defer src="./originman-simulator.js?v=2"></script>
     <script defer src="./originman-round-comparison.js?v=1"></script>
     <script defer src="./originman-workshop.js?v=1"></script>
-    <script defer src="./app.js?v=duck-lab-88"></script>
+    <script defer src="./app.js?v=duck-lab-89"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-20"></script>

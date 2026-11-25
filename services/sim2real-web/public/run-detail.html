@@ -6,7 +6,7 @@
     <title>本次运行 · RDK Robot Learning</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./run-detail-page.mjs?v=6"></script>
+    <script type="module" src="./run-detail-page.mjs?v=7"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -45,6 +45,11 @@
           <p id="run-hardware-readiness" hidden></p>
           <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
           <p><a id="run-copy-config" hidden>用本轮参数准备下一轮</a></p>
+          <details class="experiment-details" id="run-logs" hidden>
+            <summary>本轮引擎日志</summary>
+            <button type="button" id="run-logs-load">读取日志</button>
+            <pre id="run-logs-output" class="empty-state" tabindex="0" aria-label="本轮引擎日志">等待读取。</pre>
+          </details>
           <div class="comparison-scroll">
             <table id="run-config-table" hidden>
               <caption>平台记录的训练配置</caption>
@@ -68,15 +73,6 @@
           </div>
         </section>
 
-        <section aria-labelledby="curve-heading">
-          <div class="section-heading">
-            <h2 id="curve-heading">训练过程曲线</h2>
-            <span id="curve-caption">等待本次 Run 的采样点</span>
-          </div>
-          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
-          <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
-        </section>
-
         <section aria-labelledby="quality-heading">
           <div class="section-heading">
             <h2 id="quality-heading">训练结果与质量门</h2>
@@ -90,6 +86,15 @@
               <tbody id="quality-body"></tbody>
             </table>
           </div>
+        </section>
+
+        <section aria-labelledby="curve-heading">
+          <div class="section-heading">
+            <h2 id="curve-heading">训练过程曲线</h2>
+            <span id="curve-caption">等待本次 Run 的采样点</span>
+          </div>
+          <svg id="reward-chart" viewBox="0 0 720 240" role="img" aria-label="本次训练真实上报的奖励曲线" hidden></svg>
+          <p id="curve-empty" class="empty-state">暂无可展示的训练曲线；不会用其他 Run 或示例曲线代替。</p>
         </section>
 
         <section id="resimulated-replay" aria-labelledby="resimulated-heading" hidden>

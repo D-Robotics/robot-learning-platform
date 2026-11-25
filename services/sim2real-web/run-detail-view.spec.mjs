@@ -513,3 +513,44 @@ test('auto iteration confirms a claimed pass only after reading the exact final 
     'https://platform.test/learning/api/v1/duck/runs/run-final/artifact',
   );
 });
+
+test('completed recovery Run shows the same receipt diagnosis as the plugin and retains log tails', async (t) => {
+  const f = fixture();
+  t.after(f.close);
+  const run = {
+    id: 'run_42',
+    taskId: 'originman-recovery',
+    status: 'completed',
+    backend: 'local',
+    mock: false,
+    externalRunId: 'worker-run',
+  };
+  const page = await startRunDetail({
+    document: f.document,
+    location: f.location,
+    fetchImpl: async (url) =>
+      String(url).endsWith('/logs')
+        ? Response.json({
+            runId: run.id,
+            lines: [],
+            source: 'retained-tail',
+            stdoutTail: 'original training finished',
+          })
+        : Response.json({ run, workshopEvidenceIssue: 'worker-unavailable' }),
+  });
+  t.after(() => page.dispose());
+  const { workshopEvidenceMessage } =
+    await import('../../plugins/rdk-robot-learning-platform/scripts/plugin-errors.mjs');
+  assert.equal(f.document.getElementById('run-status').textContent, '已完成');
+  assert.equal(
+    f.document.getElementById('run-next-action').textContent,
+    workshopEvidenceMessage('worker-unavailable'),
+  );
+  assert.equal(f.document.getElementById('run-logs').hidden, false);
+  f.document.getElementById('run-logs-load').click();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    f.document.getElementById('run-logs-output').textContent,
+    'original training finished',
+  );
+});
