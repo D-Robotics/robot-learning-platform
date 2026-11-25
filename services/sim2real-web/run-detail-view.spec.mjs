@@ -554,3 +554,33 @@ test('completed recovery Run shows the same receipt diagnosis as the plugin and 
     'original training finished',
   );
 });
+
+test('changing a Worker inside the dance editor preserves the selection until change is handled', async (t) => {
+  const f = new JSDOM(fs.readFileSync(new URL('./public/index.html', import.meta.url), 'utf8'), {
+    url: 'https://platform.test/learning/?robot=originman#train/configure',
+    runScripts: 'outside-only',
+  });
+  t.after(() => f.window.close());
+  f.window.eval(fs.readFileSync(new URL('./public/training-plans.js', import.meta.url), 'utf8'));
+  const resource = f.window.document.getElementById('compute-resource-select');
+  f.window.document.getElementById('originman-dance-resource').append(resource);
+  resource.add(new f.window.Option('课堂共享 GPU', 'gpu'));
+  let selected = '';
+  resource.addEventListener('change', () => {
+    selected = resource.value;
+  });
+  f.window.TrainingPlans.mount({
+    request: async () => ({ plans: [] }),
+    readContext: () => ({ productId: 'originman' }),
+    applyContext() {},
+    refreshControls() {},
+    hasDanceContract: () => true,
+    onDraftChange() {
+      resource.value = selected;
+    },
+  });
+  resource.value = 'gpu';
+  resource.dispatchEvent(new f.window.Event('input', { bubbles: true }));
+  resource.dispatchEvent(new f.window.Event('change', { bubbles: true }));
+  assert.equal(selected, 'gpu');
+});

@@ -159,6 +159,8 @@ window.TrainingPlans = (() => {
     }
 
     root.addEventListener('input', (event) => {
+      // The resource selector updates workbench state on change. Rendering here would reset it first.
+      if (event.target === byId('compute-resource-select')) return;
       if (event.target === goal) {
         Object.assign(draft[mode], { title: title.value, bpm: bpm.value });
         mode = goal.value === 'originman-dance' ? 'preset' : 'custom';
