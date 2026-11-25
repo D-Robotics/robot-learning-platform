@@ -551,7 +551,6 @@ async function main(distribution) {
     assert.equal(new Set(extendedTools.map((tool) => tool.name)).size, extendedTools.length);
     assert.ok(extendedTools.some((tool) => tool.name === 'rdk_originman_reference_track'));
     const mutations = new Set([
-      'rdk_workshop',
       'rdk_development_targets',
       'rdk_experiment_remember',
       'rdk_auth_login',
