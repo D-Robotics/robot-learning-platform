@@ -183,6 +183,7 @@ try {
   try { assert.ok(!disabled.tools.some(item => item.name.endsWith('__rdk_projects_list')), 'disabled custom MCP must hide plugin tools'); }
   finally { await disabled.close(); }
   setPluginEnabled(imported.id, false);
+  await agentApp.reloadSkills?.();
   for (const name of exportedSkills) assert.ok(!agentApp.listSkills().some(skill => skill.name === name), 'disabled plugin must hide ' + name);
   setPluginEnabled(imported.id, true);
   process.stdout.write(JSON.stringify({ installed: true, authenticatedToolCall: true, runtimeConsumed: true, config: resolved }) + '\\n');
