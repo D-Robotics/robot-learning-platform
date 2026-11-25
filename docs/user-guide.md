@@ -24,12 +24,11 @@
 
 没有浏览器适配器时，可以从外部仿真、设备遥测或已有模型开始。接入自己的本体时，先确认平台已具备对应的仿真、训练执行或板端能力，再选择所需的环节。[硬件适配](hardware-adapters.md)
 
-## OriginMan 课程
+## OriginMan 舞蹈 Workshop
 
-选择 **OriginMan → 模型与契约**，在「登记模型」内选择 **受扰恢复 · SAC**，再点 **打开受扰恢复课堂**。在课堂里先看参考，选择算力和预算，确认后开始训练，随后查看同一策略的仿真评测与回放。
+打开 [OriginMan 舞蹈 Workshop](https://rdkstudio.d-robotics.cc/robotics-learning/workshop.html)。可选整支预置舞蹈、从动作组开始自由编排，或导入自己的参考轨迹。预览轨迹后选择算力，完成筛查、选择预算并开始仿真训练。结果页提供评测、回放和 ONNX 策略文件。
 
-- [OriginMan 课程指引](../plugins/rdk-robot-learning-platform/references/user-guide.md#workshop受扰恢复课程)在工作台内打开八步交互指引，可按步查看训练、评测、回放和对照方法。
-- [OriginMan 强化学习跳舞](../plugins/rdk-robot-learning-platform/references/user-guide.md#originman-强化学习跳舞)介绍舞段编排、算力和 PPO 训练。
+自由编排按当前账号保存在此设备。重新打开同一入口可继续编辑，提交前请重新预览和筛查。
 
 ## 准备数据或试跑仿真
 

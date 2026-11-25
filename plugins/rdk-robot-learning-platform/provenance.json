@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan Workshop 提供预置舞蹈、动作组自由编排和舞蹈仿真回放。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -50,7 +50,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "d697124f851766e925d8c69d816e166d331c8a5b9ebd6de57ebbc15dbaa52335",
+    "ui/experiment.html": "8da1033dfd81a748d88e5935490dc3a605d0643c153d786d6df8d4fbd572f417",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5"
   },
   "uiBuild": {
@@ -63,7 +63,7 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "6ae4b713e6ede204eab364a04e8398b56085f6a953fb81472ef057a0af733796",
-      "plugins/rdk-robot-learning-platform/plugin.json": "3636c33ace5e4097eee3a200b1c10bffb28457261a885c2058a625a9f6c39972",
+      "plugins/rdk-robot-learning-platform/plugin.json": "ff1f18492de40c1c74850bceb97922f9fa410cb0d95414c47479f82ce4baab63",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
       "services/sim2real-web/public/experiment.css": "6f865edb6bfea2ffbfa76c8443a525a6fcb6045a14416b3c94e2c545de5aee41",

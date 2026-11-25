@@ -5197,7 +5197,7 @@ export function createSim2RealRouter(
             unsupported
               ? '所选 Worker 还不支持原版站姿标定，请使用云端仿真 Worker 或更新本地 Worker。'
               : busy
-                ? 'Worker 正在处理任务，请稍后提交。'
+                ? '算力正在筛查另一条轨迹或检查环境。请稍后重新提交。'
                 : !report
                   ? 'Worker 未返回可核验的筛查结果。请检查连接后重试。'
                   : '编排未通过物理筛查。请在跟跳页面筛查当前轨迹，定位失败帧后再提交。',
