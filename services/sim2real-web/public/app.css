@@ -5710,7 +5710,7 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
 .top-menu-list {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
+  inset-inline-end: 0;
   z-index: 60;
   display: grid;
   min-width: 190px;
@@ -5719,6 +5719,12 @@ html.theme-dark .agent-assistant-health { max-width: 150px; }
   border-radius: 11px;
   background: var(--panel-raised, var(--panel));
   box-shadow: 0 18px 44px rgba(6, 10, 18, 0.5);
+}
+@media (max-width: 720px) {
+  .top-menu-list {
+    inset-inline-start: 0;
+    inset-inline-end: auto;
+  }
 }
 .top-menu-item {
   display: flex;
