@@ -124,6 +124,12 @@ try {
       if (req.headers.cookie !== cookie) return json({ error: 'LOGIN_REQUIRED' }, 401);
       if (route === '/api/v1/duck/auth/session')
         return json({ authenticated: true, accountId: 'classroom-fixture' });
+      if (route === '/api/v1/duck/originman-motion/catalog')
+        return json({ ok: true, presets: [{ id: 'fixture-preset' }], motions: [] });
+      if (route === '/api/v1/duck/originman-motion/preview' && req.method === 'POST') {
+        assert.deepEqual(body, { presetId: 'fixture-preset' });
+        return json({ ok: true, preview: { frames: 200, seconds: 4, trajectorySha256: hash } });
+      }
       if (route === '/api/v1/duck/workshop-sessions' && req.method === 'GET')
         return json({
           ok: true,
@@ -329,6 +335,11 @@ try {
   assert.equal((await call('rdk_auth_status')).authenticated, true);
   assert.equal((await call('rdk_auth_login', { openBrowser: false })).authenticated, true);
   assert.equal(state.authStarts, 1);
+  const library = await call('rdk_originman_motion_library');
+  assert.equal(library.presets[0].id, 'fixture-preset');
+  const motion = await call('rdk_originman_motion_preview', { presetId: 'fixture-preset' });
+  assert.equal(motion.preview.trajectorySha256, hash);
+  assert.equal(state.writes.length, 0);
   const targets = await call('rdk_development_targets');
   assert.equal(targets.compute[0].id, 'worker-fixture');
   assert.equal(targets.boards[0].id, 'board-fixture');
