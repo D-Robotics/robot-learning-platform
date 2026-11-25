@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Export portable plugin ZIPs, with an optional self-contained Studio target. */
+/** Export portable plugin ZIPs, optionally bundling Studio runtimes. */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2);
 if (args.includes('--help')) {
   console.log(
-    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nPass --studio-target <os-arch> --studio-runtime <official Node archive> to include a self-contained Studio setup ZIP.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
+    'Usage: node scripts/package-platform-plugin.mjs [--out-dir DIR] [--studio-target OS-ARCH --studio-runtime ARCHIVE | --studio-universal-runtime-dir DIR]\nExports plugin and marketplace ZIPs plus SHA256SUMS.\nTo produce one Studio ZIP for Windows and macOS, place all four pinned Node archives from runtime-downloads.json in DIR under their original names.\nRequires Python 3 (PYTHON override).\nRun npm run verify:plugin before distributing a candidate.',
   );
   process.exit(0);
 }
@@ -19,7 +19,12 @@ for (let index = 0; index < args.length; index += 2) {
   const option = args[index];
   const value = args[index + 1];
   if (
-    !['--out-dir', '--studio-target', '--studio-runtime'].includes(option) ||
+    ![
+      '--out-dir',
+      '--studio-target',
+      '--studio-runtime',
+      '--studio-universal-runtime-dir',
+    ].includes(option) ||
     !value ||
     value.startsWith('--') ||
     options.has(option)
@@ -33,8 +38,12 @@ const outputDirectory = path.resolve(
 );
 const studioTarget = options.get('--studio-target');
 const studioRuntime = options.get('--studio-runtime');
+const universalRuntimeDirectory = options.get('--studio-universal-runtime-dir');
 if (Boolean(studioTarget) !== Boolean(studioRuntime)) {
   throw new Error('Specify --studio-target and --studio-runtime together.');
+}
+if (studioTarget && universalRuntimeDirectory) {
+  throw new Error('Choose either single-target or universal Studio packaging.');
 }
 const pluginRoot = path.join(repositoryRoot, 'plugins', 'rdk-robot-learning-platform');
 const manifest = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'plugin.json'), 'utf8'));
@@ -89,23 +98,47 @@ const instructions = [
   },
 ];
 const archiveNames = [pluginArchive, marketplaceArchive];
-if (studioTarget) {
+if (studioTarget || universalRuntimeDirectory) {
   if (!files.includes(path.join(pluginRoot, 'scripts/experience-mcp.mjs'))) {
     throw new Error('Required Studio MCP launcher missing.');
   }
   const runtimeManifest = JSON.parse(
     fs.readFileSync(path.join(pluginRoot, 'runtime-downloads.json'), 'utf8'),
   );
-  const runtime =
-    Object.hasOwn(runtimeManifest.targets, studioTarget) && runtimeManifest.targets[studioTarget];
-  if (!runtime) throw new Error(`Unsupported Studio target: ${studioTarget}`);
-  const studioArchive = `${manifest.name}-${manifest.version}-studio-${studioTarget}.zip`;
-  const windows = studioTarget.startsWith('win32-');
-  const binary = windows ? 'node.exe' : 'node';
-  const launcher = windows ? 'setup-studio-windows.cmd' : 'setup-studio-macos.command';
-  const launcherSource = windows
-    ? 'portable-studio-setup-windows.cmd'
-    : 'portable-studio-setup-macos.command';
+  const universal = Boolean(universalRuntimeDirectory);
+  const targets = universal
+    ? ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64']
+    : [studioTarget];
+  const runtimes = targets.map((target) => {
+    const runtime =
+      Object.hasOwn(runtimeManifest.targets, target) && runtimeManifest.targets[target];
+    if (!runtime) throw new Error(`Unsupported Studio target: ${target}`);
+    return {
+      target,
+      runtimeVersion: runtimeManifest.version,
+      source: runtime.url,
+      checksumSource: runtimeManifest.checksumSource,
+      archive: universal
+        ? path.resolve(
+            universalRuntimeDirectory,
+            path.posix.basename(new URL(runtime.url).pathname),
+          )
+        : path.resolve(studioRuntime),
+      sha256: runtime.sha256,
+      binaryMember: `${runtime.folder}/${runtime.binary}`,
+      licenseMember: `${runtime.folder}/LICENSE`,
+      binary: target.startsWith('win32-') ? 'node.exe' : 'node',
+    };
+  });
+  const studioArchive = `${manifest.name}-${manifest.version}-studio-${universal ? 'universal' : studioTarget}.zip`;
+  const launchers = [
+    ...(targets.some((target) => target.startsWith('darwin-'))
+      ? ['setup-studio-macos.command']
+      : []),
+    ...(targets.some((target) => target.startsWith('win32-'))
+      ? ['setup-studio-windows.cmd', 'setup-studio-windows.ps1']
+      : []),
+  ];
   instructions.push({
     output: path.join(outputDirectory, studioArchive),
     entries: [
@@ -114,25 +147,17 @@ if (studioTarget) {
         source: path.join(repositoryRoot, 'scripts/portable-studio-setup.mjs'),
         name: `${manifest.name}/setup-studio.mjs`,
       },
-      {
-        source: path.join(repositoryRoot, 'scripts', launcherSource),
+      ...launchers.map((launcher) => ({
+        source: path.join(
+          repositoryRoot,
+          'scripts',
+          'portable-' + launcher.replace('setup-studio', 'studio-setup'),
+        ),
         name: `${manifest.name}/${launcher}`,
         mode: 0o100755,
-      },
+      })),
     ],
-    studio: {
-      name: manifest.name,
-      target: studioTarget,
-      runtimeVersion: runtimeManifest.version,
-      source: runtime.url,
-      checksumSource: runtimeManifest.checksumSource,
-      archive: path.resolve(studioRuntime),
-      sha256: runtime.sha256,
-      binaryMember: `${runtime.folder}/${runtime.binary}`,
-      licenseMember: `${runtime.folder}/LICENSE`,
-      binary,
-      launcher,
-    },
+    studio: { name: manifest.name, universal, runtimes },
   });
   archiveNames.push(studioArchive);
 }
@@ -143,7 +168,7 @@ const result = spawnSync(
   [
     '-c',
     String.raw`
-import hashlib, io, json, stat, sys, tarfile, zipfile
+import hashlib, json, stat, sys, tarfile, tempfile, zipfile
 from pathlib import Path
 
 def checksum(data):
@@ -153,30 +178,39 @@ def json_bytes(data):
     return (json.dumps(data, ensure_ascii=False, indent=2) + '\n').encode()
 
 def runtime_files(studio):
-    data = Path(studio['archive']).read_bytes()
-    if checksum(data) != studio['sha256']:
-        raise ValueError('Official Node archive SHA-256 does not match the pinned target')
     members = [studio['binaryMember'], studio['licenseMember']]
-    if studio['target'].startswith('win32-'):
-        with zipfile.ZipFile(io.BytesIO(data)) as source:
-            for member in members:
-                info = source.getinfo(member)
-                if info.is_dir() or stat.S_ISLNK(info.external_attr >> 16):
-                    raise ValueError('Node runtime and license must be regular archive files')
-            return [source.read(member) for member in members]
-    with tarfile.open(fileobj=io.BytesIO(data), mode='r:gz') as source:
-        entries = [source.getmember(member) for member in members]
-        if not all(entry.isfile() for entry in entries):
-            raise ValueError('Node runtime and license must be regular archive files')
-        return [source.extractfile(entry).read() for entry in entries]
+    with Path(studio['archive']).open('rb') as archive:
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: archive.read(1024 * 1024), b''):
+            digest.update(chunk)
+        if digest.hexdigest() != studio['sha256']:
+            raise ValueError('Official Node archive SHA-256 does not match the pinned target: ' + studio['target'])
+        archive.seek(0)
+        if studio['target'].startswith('win32-'):
+            with zipfile.ZipFile(archive) as source:
+                for member in members:
+                    info = source.getinfo(member)
+                    if info.is_dir() or stat.S_ISLNK(info.external_attr >> 16):
+                        raise ValueError('Node runtime and license must be regular archive files')
+                return [source.read(member) for member in members]
+        with tarfile.open(fileobj=archive, mode='r:gz') as source:
+            entries = [source.getmember(member) for member in members]
+            if not all(entry.isfile() for entry in entries):
+                raise ValueError('Node runtime and license must be regular archive files')
+            return [source.extractfile(entry).read() for entry in entries]
 
-def studio_payloads(studio, payloads, runtime):
-    root = studio['name'] + '/'
-    binary, license_text = runtime
-    binary_path = 'mcp/runtime/' + studio['binary']
-    payloads[root + binary_path] = (binary, 0o100755)
-    payloads[root + 'mcp/runtime/LICENSE'] = (license_text, 0o100644)
-    payloads[root + 'mcp/runtime/provenance.json'] = (json_bytes({
+def write_zip_entry(archive, name, data, mode):
+    info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+    info.create_system = 3
+    info.external_attr = (mode & 0xffff) << 16
+    info.compress_type = zipfile.ZIP_DEFLATED
+    archive.writestr(info, data)
+
+def write_runtime(add, studio, directory):
+    binary, license_text = runtime_files(studio)
+    add(directory + studio['binary'], binary, 0o100755)
+    add(directory + 'LICENSE', license_text, 0o100644)
+    add(directory + 'provenance.json', json_bytes({
         'target': studio['target'],
         'nodeVersion': studio['runtimeVersion'],
         'archive': studio['source'],
@@ -184,42 +218,60 @@ def studio_payloads(studio, payloads, runtime):
         'archiveSha256': studio['sha256'],
         'binarySha256': checksum(binary),
     }), 0o100644)
-    guide = (
+
+def write_studio_entries(add, studio):
+    for item in studio['runtimes']:
+        directory = 'mcp/runtime/'
+        if studio['universal']:
+            directory += item['target'] + '/'
+        write_runtime(add, item, directory)
+    if studio['universal']:
+        platform = '此包适用于 64 位 Windows 和 macOS，包含 Windows x64、Windows ARM64、Intel Mac 和 Apple 芯片 Mac 的 Node.js 运行时。'
+        launcher = 'Windows 双击 setup-studio-windows.cmd，macOS 双击 setup-studio-macos.command。安装器会选择本机架构的运行时。'
+    else:
+        target = studio['runtimes'][0]['target']
+        platform = '此包适用于 ' + target + '，已包含 Node.js 运行时。'
+        filename = 'setup-studio-windows.cmd' if target.startswith('win32-') else 'setup-studio-macos.command'
+        launcher = '双击解压目录中的 ' + filename + '。'
+    add('STUDIO-SETUP.md', (
         '# Studio 安装\n\n'
-        '此包适用于 ' + studio['target'] + '，已包含 Node.js 运行时。\n\n'
+        + platform + '\n\n'
         '1. 解压 ZIP，打开 Studio。\n'
         '2. 在扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录并启用插件。\n'
-        '3. 双击解压目录中的 ' + studio['launcher'] + '。安装器将配置 Studio 已导入的副本。\n'
+        '3. ' + launcher + '安装器将配置 Studio 已导入的副本。\n'
         '4. 新建对话检查学习平台状态。首次连接按浏览器提示登录。\n\n'
         '安装完成后，启动文件位于 Studio 的插件安装目录。解压来源可移走。'
         '如需停用此插件，也在 Studio 的 MCP 设置中停用机器人学习连接。\n'
-    ).encode()
-    payloads[root + 'STUDIO-SETUP.md'] = (guide, 0o100644)
-    inventory = ''.join(
-        checksum(payload) + '  ' + name[len(root):] + '\n'
-        for name, (payload, _) in sorted(payloads.items()) if name != root + 'FILES.sha256'
-    )
-    payloads[root + 'FILES.sha256'] = (inventory.encode(), 0o100644)
+    ).encode(), 0o100644)
+
+def write_zip(archive, filename):
+    with zipfile.ZipFile(filename, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as target:
+        studio = archive.get('studio')
+        root = studio['name'] + '/' if studio else ''
+        inventory = {}
+        def add(name, data, mode):
+            write_zip_entry(target, root + name, data, mode)
+            inventory[name] = checksum(data)
+        for entry in archive['entries']:
+            name, source = entry['name'], Path(entry['source'])
+            if studio and name == root + 'FILES.sha256':
+                continue
+            mode = entry.get('mode', source.stat().st_mode)
+            if studio:
+                add(name[len(root):], source.read_bytes(), mode)
+            else:
+                write_zip_entry(target, name, source.read_bytes(), mode)
+        if studio:
+            write_studio_entries(add, studio)
+            receipt = ''.join(digest + '  ' + name + '\n' for name, digest in sorted(inventory.items()))
+            write_zip_entry(target, root + 'FILES.sha256', receipt.encode(), 0o100644)
 
 archives = json.load(sys.stdin)
-verified_runtimes = {
-    archive['output']: runtime_files(archive['studio'])
-    for archive in archives if 'studio' in archive
-}
-for archive in archives:
-    payloads = {}
-    for entry in archive['entries']:
-        source = Path(entry['source'])
-        payloads[entry['name']] = (source.read_bytes(), entry.get('mode', source.stat().st_mode))
-    if 'studio' in archive:
-        studio_payloads(archive['studio'], payloads, verified_runtimes[archive['output']])
-    with zipfile.ZipFile(archive['output'], 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as target:
-        for name, (data, mode) in payloads.items():
-            info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
-            info.create_system = 3
-            info.external_attr = (mode & 0xffff) << 16
-            info.compress_type = zipfile.ZIP_DEFLATED
-            target.writestr(info, data)
+with tempfile.TemporaryDirectory(dir=Path(archives[0]['output']).parent) as stage:
+    for archive in archives:
+        write_zip(archive, Path(stage) / Path(archive['output']).name)
+    for archive in archives:
+        (Path(stage) / Path(archive['output']).name).replace(archive['output'])
 `,
   ],
   { input: JSON.stringify(instructions), encoding: 'utf8' },
