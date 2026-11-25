@@ -198,32 +198,26 @@ const firstImage = manual.locator('article img').first();
 await firstImage.scrollIntoViewIfNeeded();
 await firstImage.evaluate((img) => img.decode());
 record('illustrated manual loads screenshots', (await manual.locator('article img').count()) > 0);
-await chapter.selectOption({ label: 'OriginMan 课程' });
+await chapter.selectOption({ label: 'OriginMan 舞蹈 Workshop' });
 record(
   'manual chapter navigation scrolls within the manual',
   await manual.locator('#usage-manual-scroll').evaluate((scroll) => scroll.scrollTop > 0),
 );
-const originmanCourseLink = manual.getByRole('link', { name: 'OriginMan 课程指引', exact: true });
-await originmanCourseLink.click();
-const courseGuide = page.getByRole('dialog', { name: 'OriginMan 课程指引', exact: true });
-await courseGuide.waitFor({ state: 'visible' });
+const workbenchUrl = page.url();
+await Promise.all([
+  page.waitForURL((url) => url.pathname.endsWith('/workshop.html')),
+  manual.getByRole('link', { name: 'OriginMan 舞蹈 Workshop', exact: true }).click(),
+]);
+const referenceSources = page.getByRole('region', { name: '选择参考轨迹' });
+await referenceSources.waitFor({ state: 'visible' });
 record(
-  'the OriginMan chapter opens the interactive course on step one',
-  (await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible()) &&
-    (await courseGuide.getByRole('status').textContent()) === '第 1 / 8 步',
+  'the OriginMan chapter opens the dance Workshop with all three reference sources',
+  (await referenceSources.getByRole('link').count()) === 3,
 );
-await courseGuide.getByRole('button', { name: '下一步' }).click();
-record(
-  'the course advances to the SAC configuration instructions',
-  (await courseGuide.getByRole('heading', { name: '配置本次 SAC 训练' }).isVisible()) &&
-    (await courseGuide.getByRole('status').textContent()) === '第 2 / 8 步',
-);
-for (let step = 3; step <= 8; step++) {
-  await courseGuide.getByRole('button', { name: '下一步' }).click();
-  assert.equal(await courseGuide.getByRole('status').textContent(), `第 ${step} / 8 步`);
-}
-await courseGuide.getByRole('button', { name: '完成' }).click();
-record('all eight course steps are reachable and return to the manual', await manual.isVisible());
+await page.goto(workbenchUrl);
+await openGuide();
+await guide.getByRole('button', { name: '打开图文使用手册', exact: true }).click();
+await manual.waitFor({ state: 'visible' });
 await manual.getByRole('link', { name: '训练配置', exact: true }).click();
 await page.waitForFunction(() => document.body.dataset.flowChild === 'configure');
 record('manual stays open while the workbench navigates', await manual.isVisible());
@@ -282,54 +276,26 @@ const originmanTaskPage = new URL('?robot=originman#train/prepare', BASE);
 await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
 await page.locator('#originman-default-contracts').waitFor({ state: 'visible' });
 const task = page.getByRole('combobox', { name: '选择训练任务契约' });
-const classroom = page.getByRole('button', { name: '打开受扰恢复课堂', exact: true });
-record('the dance task has no recovery classroom shortcut', !(await classroom.isVisible()));
-await task.selectOption('recovery');
-await classroom.waitFor({ state: 'visible' });
-await task.selectOption('dance');
-record('switching back to dance hides the recovery shortcut', !(await classroom.isVisible()));
-await task.selectOption('recovery');
-await classroom.click();
-await page.waitForURL(/#classroom$/);
-const recoveryHeading = page.getByRole('heading', {
-  name: 'OriginMan · 受扰恢复课堂',
-  exact: true,
-});
-await recoveryHeading.waitFor({ state: 'visible' });
 record(
-  'the recovery task opens the native simulator and recovery evidence in the workbench',
-  (await page.locator('#originman-sim-canvas').count()) === 1 &&
-    (await page.locator('#originman-round-comparison').count()) === 1 &&
-    (await page.locator('[data-view-section="classroom"] iframe').count()) === 0,
-);
-await page.goBack({ waitUntil: 'domcontentloaded' });
-record(
-  'leaving the classroom restores the OriginMan model panel',
-  (await task.isVisible()) && !(await recoveryHeading.isVisible()),
-);
-await page.goto(new URL('#classroom', BASE).href, { waitUntil: 'domcontentloaded' });
-await recoveryHeading.waitFor({ state: 'visible' });
-record(
-  'a standalone classroom bookmark restores OriginMan and the native classroom',
-  (await page.locator('#product-select').inputValue()) === 'originman',
+  'OriginMan models start with dance and have no recovery classroom',
+  (await task.inputValue()) === 'dance' &&
+    (await task.locator('option[value="recovery"]').count()) === 0 &&
+    (await page.locator('#originman-classroom-slot').count()) === 0,
 );
 
 await page.setViewportSize({ width: 390, height: 844 });
 await page.goto(BASE, { waitUntil: 'domcontentloaded' });
 await openGuide();
 await guide.getByRole('button', { name: '打开图文使用手册', exact: true }).click();
-await originmanCourseLink.click();
+await Promise.all([
+  page.waitForURL((url) => url.pathname.endsWith('/workshop.html')),
+  manual.getByRole('link', { name: 'OriginMan 舞蹈 Workshop', exact: true }).click(),
+]);
+await referenceSources.waitFor({ state: 'visible' });
 record(
-  'the mobile menu also reaches the interactive OriginMan course through the manual',
-  await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible(),
-);
-await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
-await task.selectOption('recovery');
-await classroom.click();
-await recoveryHeading.waitFor({ state: 'visible' });
-record(
-  'the mobile classroom opens the native simulation panel within the workbench',
-  await page.getByRole('heading', { name: 'OriginMan 仿真场', exact: true }).isVisible(),
+  'the mobile manual opens the same Workshop without horizontal overflow',
+  (await referenceSources.getByRole('link').count()) === 3 &&
+    (await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)),
 );
 
 record(
@@ -359,6 +325,7 @@ record(
   advisory5xx.size ? [...advisory5xx].slice(0, 4).join(' | ') : 'none',
 );
 
+await page.goto(BASE, { waitUntil: 'domcontentloaded' });
 await page.evaluate(() => {
   window.location.hash = '#overview';
 });
