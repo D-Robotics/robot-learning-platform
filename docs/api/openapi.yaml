@@ -257,6 +257,54 @@ paths:
       responses:
         "200": { description: Available manifests for recovery and dance }
         "401": { description: Sign in required }
+  /api/v1/duck/originman-motion/catalog:
+    get:
+      tags: [workspace]
+      operationId: listOriginManMotion
+      summary: Read the configured OriginMan preset and motion IDs without submitting a run
+      responses:
+        "200": { description: Presets, motions, source, and composition limits }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "503": { description: The configured catalog is unavailable }
+  /api/v1/duck/originman-motion/preview:
+    post:
+      tags: [workspace]
+      operationId: previewOriginManMotion
+      summary: Validate a preset or ordered motion sequence and return bounded preview samples
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [presetId]
+                  properties:
+                    presetId: { type: string }
+                - type: object
+                  additionalProperties: false
+                  required: [blocks]
+                  properties:
+                    blocks:
+                      type: array
+                      minItems: 1
+                      maxItems: 128
+                      items:
+                        type: object
+                        additionalProperties: false
+                        required: [id]
+                        properties:
+                          id: { type: string }
+                          repeats: { type: integer, minimum: 1, maximum: 8 }
+                    bpm: { type: number, minimum: 80, maximum: 140 }
+                    transitionSeconds: { type: number, minimum: 0, maximum: 2 }
+      responses:
+        "200": { description: Frame count, duration, curve samples, and trajectory SHA-256 }
+        "400": { description: Invalid or unknown composition }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "422": { description: The selected trajectory exceeded range or motion limits }
+        "503": { description: The configured catalog is unavailable }
   /api/v1/duck/originman-reference:
     get:
       tags: [workspace]

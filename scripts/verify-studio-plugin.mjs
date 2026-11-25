@@ -162,7 +162,12 @@ try {
   assert.deepEqual(resolved, { name: 'rdk-robot-learning-platform', ...exported });
   const unauthenticated = await fetch('http://127.0.0.1:' + platform.address().port + '/api/v1/duck/projects');
   assert.equal(unauthenticated.status, 401, 'real platform route must require fixture identity');
-  const loaded = await loadStudioMcpTools({ ownerKey: 'local:plugin-fixture', networkPolicy: { enabled: true }, includeUserConfigured: true });
+  const loaded = await loadStudioMcpTools({
+    ownerKey: 'local:plugin-fixture',
+    networkPolicy: { enabled: true },
+    includeUserConfigured: true,
+    requestedMcpServers: ['rdk-robot-learning-platform'],
+  });
   try {
     const tool = loaded.tools.find(item => item.name.endsWith('__rdk_projects_list'));
     assert.ok(tool, 'installed plugin must be consumed by the real Studio Agent MCP loader');
@@ -172,6 +177,10 @@ try {
     assert.ok(text.includes('owned-demo-project'), text);
     assert.ok(!text.includes('foreign-demo-project'), 'platform owner filtering must survive native plugin execution');
     assert.ok(requests.some(item => item.path === '/api/v1/duck/projects' && item.authenticated));
+    const motion = loaded.tools.find(item => item.name.endsWith('__rdk_originman_motion_library'));
+    assert.ok(motion, 'native Studio must discover the motion-library tool');
+    const catalog = await motion.execute({}, { abortSignal: new AbortController().signal });
+    assert.ok(JSON.stringify(catalog).includes('example-arms-preset'), 'native Studio must read the authenticated motion catalog');
   } finally { await loaded.close(); }
   const disabled = await loadStudioMcpTools({ ownerKey: 'local:plugin-fixture', networkPolicy: { enabled: true }, includeUserConfigured: false });
   try { assert.ok(!disabled.tools.some(item => item.name.endsWith('__rdk_projects_list')), 'disabled custom MCP must hide plugin tools'); }

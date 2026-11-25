@@ -154,28 +154,45 @@ class ReferenceTracking(gym.Env):
             "tilt": tilt,
             "yaw": math.degrees(yaw),
             "jointAbsError": float(np.mean(np.abs(error))),
+            "jointSquaredError": float(np.mean(error ** 2)),
         }
 
 
-def evaluate(env, policy):
+def evaluate(env, policy, ranges=()):
     observations, _ = env.reset()
     frames = [env.data.qpos.copy()]
-    errors, peak = [], 0
+    errors, squared, tilts, peak = [], [], [], 0
     for _ in env.target:
         observations, _, failed, complete, data = env.step(policy(observations))
         frames.append(env.data.qpos.copy())
         errors.append(data["jointAbsError"])
+        squared.append(data["jointSquaredError"])
+        tilts.append(data["tilt"])
         peak = max(peak, data["tilt"])
         if failed or complete:
             break
     passed = (not failed and complete and peak < PROFILE["evaluation"]["maxTiltDeg"]
               and abs(data["yaw"]) < PROFILE["evaluation"]["maxAbsFinalYawDeg"])
+    sections = []
+    for item in ranges:
+        start, end = item["from"], item["to"]
+        observed = squared[start:end]
+        heights = [frame[2] for frame in frames[start:start + len(observed) + 1]]
+        sections.append({
+            "id": item["id"], "framesExpected": end - start, "framesEvaluated": len(observed),
+            "completed": len(observed) == end - start and not (failed and end == len(squared)),
+            **({"trackingRmseRad": float(np.sqrt(np.mean(observed))),
+                "maxTiltDeg": max(tilts[start:end]),
+                "squatDescentM": max(0.0, float(heights[0] - min(heights)))} if observed else {}),
+        })
     return {
         "framesExpected": len(env.target),
         "framesEvaluated": len(errors),
         "completed": bool(complete and not failed),
         "firstFailedFrame": len(errors) if failed else None,
         "trackingMaeRad": float(np.mean(errors)),
+        "trackingRmseRad": float(np.sqrt(np.mean(squared))),
+        **({"sections": sections} if sections else {}),
         "maxTiltDeg": peak,
         "finalYawDeg": data["yaw"],
         "qualityGatePassed": passed,
@@ -213,7 +230,26 @@ def gate_allows_training(evidence):
             and evidence["maxTiltDeg"] < PROFILE["evaluation"]["maxTiltDeg"])
 
 
-def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env):
+def composition_ranges(training, frames):
+    source = training.get("originmanReferenceComposition")
+    if source is None:
+        return []
+    ranges = source.get("ranges")
+    if not isinstance(ranges, list) or not 1 <= len(ranges) <= 90:
+        raise ValueError("invalid reference choreography segments")
+    previous = 0
+    for item in ranges:
+        if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or
+                type(item.get("from")) is not int or type(item.get("to")) is not int or
+                not previous <= item["from"] < item["to"] <= frames):
+            raise ValueError("invalid reference choreography frame boundaries")
+        previous = item["to"]
+    if ranges[0]["from"] != 0 or previous != frames:
+        raise ValueError("reference choreography does not cover the intended trajectory")
+    return ranges
+
+
+def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     factory = lambda: ReferenceTracking(bundle, trajectory)
@@ -223,22 +259,37 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                       batch_size=128, n_epochs=4, learning_rate=3e-4,
                       policy_kwargs={"net_arch": [128, 128], "log_std_init": -2.8})
         checkpoints = []
+        progress = WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE)
         while learner.num_timesteps < budget:
             learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
                           reset_num_timesteps=False,
-                          callback=WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE))
+                          callback=progress)
             learner.save(output / "final")
             policy_path = output / "policy.onnx"
             policy_sha = write_onnx(output / "final.zip", policy_path, 96)
             session = ReferenceEvaluator(onnx.load(policy_path))
-            result, frames = evaluate(
-                evaluation_env, lambda obs: session.run(None, {"observation": obs[None]})[0][0]
-            )
+            parity_error = 0.0
+
+            def predict(observation):
+                nonlocal parity_error
+                values = session.run(None, {"observation": observation[None]})[0][0]
+                if ranges:
+                    with torch.no_grad():
+                        tensor = torch.from_numpy(observation[None]).to(learner.device)
+                        torch_values = learner.policy._predict(tensor, deterministic=True).cpu().numpy()[0]
+                    parity_error = max(parity_error, float(np.max(np.abs(values - torch_values))))
+                return values
+
+            result, frames = evaluate(evaluation_env, predict, ranges)
+            if ranges:
+                result["onnxMaxAbsError"] = parity_error
+                if parity_error >= 1e-6:
+                    raise ValueError("exported ONNX failed the reference policy parity check")
             checkpoints.append({"steps": learner.num_timesteps, "policySha256": policy_sha,
                                 **result})
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
-            if result["qualityGatePassed"]:
+            if result["qualityGatePassed"] and not ranges:
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
@@ -264,6 +315,7 @@ def main():
         raise ValueError("invalid budget, seed or parallel environment count")
 
     trajectory = validate_trajectory(tracks["trajectory"])
+    ranges = composition_ranges(training, len(trajectory[0]))
     output = Path(os.environ["RDK_SIM2REAL_JOB_DIR"])
     result_path = Path(os.environ["RDK_SIM2REAL_RESULT_FILE"])
     bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
@@ -277,7 +329,7 @@ def main():
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
-        bundle, output, trajectory, budget, num_envs, seed, env
+        bundle, output, trajectory, budget, num_envs, seed, env, ranges
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"

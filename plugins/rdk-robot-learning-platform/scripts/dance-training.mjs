@@ -1,5 +1,6 @@
 /** Submit one learner-configured OriginMan dance run through the authenticated platform API. */
 import fs from 'node:fs';
+import { motionProperties } from './originman-motion.mjs';
 import { selectCourseAssets, registerCourseModel } from './course-setup.mjs';
 import { submitOnce, recoverSubmission } from './submission-journal.mjs';
 import { DANCE_SECTION_TYPES, resolveOriginmanDanceConfig } from './originman-dance-config.mjs';
@@ -79,12 +80,52 @@ const schema = {
 
 export const DANCE_CONFIG_SCHEMA = schema.properties.dance;
 
+const { required: legacyFields, properties: legacyProperties } = DANCE_CONFIG_SCHEMA;
+const referenceRecipe = {
+  ...DANCE_CONFIG_SCHEMA,
+  properties: { ...legacyProperties, ...motionProperties },
+  required: [],
+  oneOf: [
+    {
+      required: legacyFields,
+      not: {
+        anyOf: ['presetId', 'blocks', 'transitionSeconds'].map((key) => ({ required: [key] })),
+      },
+    },
+    {
+      required: ['presetId'],
+      not: {
+        anyOf: ['blocks', 'sections', 'bpm', 'transitionSeconds'].map((key) => ({
+          required: [key],
+        })),
+      },
+    },
+    {
+      required: ['blocks'],
+      not: { anyOf: ['presetId', 'sections'].map((key) => ({ required: [key] })) },
+    },
+  ],
+};
+
 export const DANCE_TRAINING_TOOLS = [
   {
     name: 'rdk_originman_dance_train',
     description:
-      '仅当用户明确要求单轮时提交已确认的 OriginMan 舞蹈 PPO 仿真配方。按目标和总预算自动调奖励，请直接调用 rdk_originman_dance_iterate。可选算力、模型、并行环境数（1–64），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 64 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
-    inputSchema: schema,
+      '选定预置 ID 或动作块时走参考轨迹跟跳，需要明确选择支持跟跳的 Worker，并先用舞蹈预览工具核对。旧 sections 配方用原舞蹈引擎。仅当用户明确要求单轮时提交已确认的 OriginMan 舞蹈 PPO 仿真配方。按目标和总预算自动调奖励，请直接调用 rdk_originman_dance_iterate。可选算力、模型、并行环境数（1–64），可改舞段、节拍、拍数、幅度、seed、训练预算及参数表列出的奖励项。默认 50 万步和 64 个并行环境；8192 步只用于流程快检。新手或改参重训优先调用 rdk_learning_guide，按其 nextArguments 提交；同一 contextId 用于重试或查原 Run。提交前重新检查指定 Worker。舞蹈仅仿真',
+    inputSchema: {
+      ...schema,
+      properties: {
+        ...schema.properties,
+        dance: referenceRecipe,
+        referenceTrainingSteps: {
+          type: 'integer',
+          minimum: 8192,
+          maximum: 2000000,
+          multipleOf: 4096,
+        },
+        expectedTrajectorySha256: { type: 'string', pattern: '^[a-f0-9]{64}$' },
+      },
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
   },
 ];

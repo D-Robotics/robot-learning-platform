@@ -108,6 +108,17 @@ export interface Sim2RealRunMetrics {
     framesExpected: number;
     framesEvaluated: number;
     trackingMaeRad: number;
+    trackingRmseRad?: number;
+    onnxMaxAbsError?: number;
+    sections?: {
+      id: string;
+      framesExpected: number;
+      framesEvaluated: number;
+      completed: boolean;
+      trackingRmseRad?: number;
+      maxTiltDeg?: number;
+      squatDescentM?: number;
+    }[];
     maxTiltDeg: number;
     finalYawDeg: number;
     qualityGatePassed: boolean;
@@ -145,6 +156,7 @@ export interface Sim2RealRunProgressPoint {
   totalIterations: number;
   meanReward: number;
   recentSuccess: number;
+  episodeSamples?: number;
   elapsedSeconds?: number;
   at?: string;
 }

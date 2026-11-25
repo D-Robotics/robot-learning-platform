@@ -1,3 +1,9 @@
+import {
+  listOriginmanMotion,
+  OriginmanMotionError,
+  prepareOriginmanMotion,
+  summarizeOriginmanMotion,
+} from '../sim2real/originman-motion.js';
 import { getWorkshopRun } from '../sim2real/workshop-run-evidence.js';
 import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
 import {
@@ -70,6 +76,8 @@ export function registerSim2RealWorkshopRoutes(
         s.json({ ok: true, schemaVersion: 1, ...((await fn(r, owner)) as object) });
       } catch (e) {
         if (e instanceof ExperimentError) sendApiError(s, e.status, e.code, e.message);
+        else if (e instanceof OriginmanMotionError)
+          sendApiError(s, e.status, 'ORIGINMAN_MOTION_INVALID', e.message);
         else sendApiError(s, 503, 'WORKSHOP_UNAVAILABLE', '课程暂不可用，保留原实验，不重新提交。');
       }
     });
@@ -81,6 +89,17 @@ export function registerSim2RealWorkshopRoutes(
         410,
       );
   };
+  const motionApi = options.prefix + '/originman-motion';
+  router.get(
+    motionApi + '/catalog',
+    handle(async () => listOriginmanMotion()),
+  );
+  router.post(
+    motionApi + '/preview',
+    handle(async (request) => ({
+      preview: summarizeOriginmanMotion(await prepareOriginmanMotion(request.body)),
+    })),
+  );
   const referenceApi = options.prefix + '/originman-reference';
   router.get(
     referenceApi,

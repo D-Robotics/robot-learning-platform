@@ -57,7 +57,7 @@ const MAX_PROGRESS_POINTS = 512;
 // the mjx adapter), so one pattern keeps the worker engine-agnostic:
 //   [starter-ppo] iter 12/400 meanReward=0.041 recentSuccess=0.38 goalRange=[0.80,1.20] elapsed=107.6s
 const PROGRESS_LINE_RE =
-  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?/g;
+  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?(?: episodeSamples=(\d+))?/g;
 
 function parseProgressLine(chunk, job) {
   for (const match of String(chunk).matchAll(PROGRESS_LINE_RE)) {
@@ -76,11 +76,15 @@ function parseProgressLine(chunk, job) {
       continue;
     }
     const elapsed = Number(match[6]);
+    const samples = Number(match[7]);
     const point = {
       iteration,
       totalIterations: total,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
+        ? { episodeSamples: samples }
+        : {}),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       at: new Date().toISOString(),
     };
@@ -117,11 +121,15 @@ function safeProgress(job) {
     }
     lastIteration = iteration;
     const elapsed = Number(raw.elapsedSeconds);
+    const samples = raw.episodeSamples;
     points.push({
       iteration,
       totalIterations: total,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
+        ? { episodeSamples: samples }
+        : {}),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       ...(typeof raw.at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw.at) ? { at: raw.at } : {}),
     });

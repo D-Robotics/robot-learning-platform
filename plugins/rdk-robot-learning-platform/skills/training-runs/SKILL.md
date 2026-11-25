@@ -14,6 +14,8 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 ## OriginMan 自定义舞蹈
 
+预置参考舞蹈和动作组自由编排先用 `rdk_originman_motion_library` 取得当前平台的动作或预置 ID，再用 `rdk_originman_motion_preview` 核对实际时长和轨迹摘要。确认后用 `rdk_originman_dance_train` 提交 `dance: {presetId}` 或 `dance: {blocks, transitionSeconds}`。指定支持跟跳的 Worker，并带上预览返回的 `expectedTrajectorySha256`。将本轮 Run 打开到 Studio 右侧，用 `rdk_training_wait` 等待结果。旧式 `sections` 配方仍用原入口和原策略契约。只提供文件时打开 `rdk_originman_reference_track`，由用户在页面导入。
+
 舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项。算力未选时展示当前账号的可选算力和执行资源入口，按 `resumeArguments` 保留已有编舞和预算。明确确认编舞、算力和预算后，将引导返回的 `nextArguments` 原样传给 `rdk_originman_dance_train`。改参重训用 `intent:"retry"` 和原 Run。只改一段时传 `sectionEdits`，段号从 1 开始。学员可明确选择模型或算力，确认前先展示变化。`modelId` 可省略，工具按专用契约查找或登记。
 
 提交舞蹈后立即接续回执提供的 `rdk_originman_dance_acceptance`。学员也可以对一条已有的舞蹈 Run 说「一键仿真验收」。工具按同一 Run 等待，每次仍在训练时用 `nextArguments` 继续。训练完成后自动用原 ONNX 做独立评测，核对策略、场景和契约。取得判定后按 `studioNavigation` 打开右侧，在同一页看达标判定、逐项检查、回放和策略下载。只查状态仍可用 `rdk_training_wait`。

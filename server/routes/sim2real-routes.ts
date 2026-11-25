@@ -1,3 +1,5 @@
+import { OriginmanMotionError, prepareOriginmanMotion } from '../sim2real/originman-motion.js';
+import type { OriginmanMotionProvenance } from '../../shared/originman-reference-training.js';
 import { getWorkshopRun, readWorkshopRunEvidence } from '../sim2real/workshop-run-evidence.js';
 import { registerComputeSshRoutes } from './sim2real-compute-ssh-routes.js';
 import { studioDesktopBridge } from '../sim2real/studio-desktop-bridge.js';
@@ -4939,6 +4941,32 @@ export function createSim2RealRouter(
         request.body && typeof request.body === 'object'
           ? (request.body as Record<string, unknown>)
           : {};
+      const draft = (body.training as Record<string, unknown> | undefined)?.originmanReference;
+      let composition: OriginmanMotionProvenance | undefined;
+      if (draft && typeof draft === 'object' && Object.hasOwn(draft, 'composition')) {
+        const {
+          composition: recipe,
+          trajectory,
+          expectedTrajectorySha256,
+          ...trainingOptions
+        } = draft as Record<string, unknown>;
+        try {
+          if (body.taskId !== ORIGINMAN_REFERENCE_TASK || trajectory !== undefined)
+            throw new OriginmanMotionError('编排与上传轨迹只能选择其中一种。');
+          const prepared = await prepareOriginmanMotion(recipe);
+          if (expectedTrajectorySha256 !== prepared.provenance.trajectorySha256)
+            throw new OriginmanMotionError('编排或动作库内容已变更，请重新预览后再提交。', 409);
+          composition = prepared.provenance;
+          body.training = {
+            ...(body.training as Record<string, unknown>),
+            originmanReference: { ...trainingOptions, trajectory: prepared.trajectory },
+          };
+        } catch (error) {
+          if (!(error instanceof OriginmanMotionError)) throw error;
+          sendApiError(response, error.status, 'ORIGINMAN_MOTION_INVALID', error.message);
+          return;
+        }
+      }
       const { parsed, apiError } = parseRunRequest(request, body);
       if (apiError || !parsed) {
         sendApiError(response, apiError!.status, apiError!.code, apiError!.message, {
@@ -4960,6 +4988,7 @@ export function createSim2RealRouter(
         datasetIds: requestedDatasetIds,
         requestedVia,
       } = parsed;
+      if (composition && training) training.originmanReferenceComposition = composition;
       if (
         isWebCloudDeployment() &&
         (taskId === 'originman-recovery' ||

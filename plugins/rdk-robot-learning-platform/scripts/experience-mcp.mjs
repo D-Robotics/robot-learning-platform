@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+import {
+  ORIGINMAN_MOTION_TOOLS,
+  isReferenceDance,
+  validateReferenceDance,
+  trainReferenceDance,
+} from './originman-motion.mjs';
 /** Add read-only experience composition while preserving the installed upstream MCP. */
 import { readFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -498,6 +504,7 @@ const loadedSources = Object.fromEntries(
     'submission-journal.mjs',
     'workshop-course.mjs',
     'originman-dance-config.mjs',
+    'originman-motion.mjs',
     'dance-coaching.mjs',
     'dance-training.mjs',
     'dance-evaluation.mjs',
@@ -636,6 +643,7 @@ export const EXPERIENCE_TOOLS = [
   LEARNING_GUIDE_TOOL,
   ORIGINMAN_DANCE_DRAFT_TOOL,
   ORIGINMAN_REFERENCE_TOOL,
+  ...ORIGINMAN_MOTION_TOOLS,
   DANCE_ITERATION_TOOL,
   ...DANCE_TRAINING_TOOLS,
   ...DANCE_EVALUATION_TOOLS,
@@ -1595,6 +1603,15 @@ export function experienceProxy(
               ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
               : '在右侧导入 NPZ 或加载示例摆臂。轨迹校验通过后，选择 Worker 并提交仿真训练。',
           };
+        } else if (params.name === 'rdk_originman_motion_library') {
+          if (Object.keys(input).length) throw Error('动作库查询不需要参数。');
+          if (!upstream.listOriginmanMotion) throw Error('请先连接机器人学习平台。');
+          payload = await upstream.listOriginmanMotion({ signal });
+        } else if (params.name === 'rdk_originman_motion_preview') {
+          if (!upstream.previewOriginmanMotion) throw Error('请先连接机器人学习平台。');
+          payload = await upstream.previewOriginmanMotion(validateReferenceDance(input), {
+            signal,
+          });
         } else if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
@@ -1948,7 +1965,9 @@ export function experienceProxy(
           const plan = confirmedDancePlans.get(params.arguments?.contextId);
           if (plan && !isDeepStrictEqual(params.arguments, plan))
             throw Error('配方已变更，请重新预览并确认本轮参数。');
-          payload = await submitDance(params.arguments ?? {}, signal);
+          payload = isReferenceDance(input.dance)
+            ? await trainReferenceDance(input, upstream, signal)
+            : await submitDance(input, signal);
         } else if (params.name === 'rdk_classroom_guide')
           payload = classroomGuide(params.arguments ?? {});
         else if (params.name === 'rdk_robot_onboarding_guide')
@@ -2143,7 +2162,16 @@ export function experienceProxy(
               payload.training.status === 'completed' && payload.evaluation?.status === 'completed',
           };
         }
-        if (params.name === 'rdk_originman_dance_train') {
+        if (
+          params.name === 'rdk_originman_dance_train' &&
+          payload.taskId === REFERENCE_TRACKING_TASK
+        ) {
+          if (payload.run?.id) {
+            payload = attachRunVisualization(payload, payload.run.id, baseUrl);
+            payload.nextTool = 'rdk_training_wait';
+            payload.nextArguments = { runId: payload.run.id };
+          }
+        } else if (params.name === 'rdk_originman_dance_train') {
           const runId = payload.submission?.runId;
           if (runId) {
             workflow = {

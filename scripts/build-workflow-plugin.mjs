@@ -71,6 +71,7 @@ for (const name of [
   'dance-evaluation.mjs',
   'dance-iteration.mjs',
   'originman-dance-config.mjs',
+  'originman-motion.mjs',
   'workshop-entry.mjs',
   'development-targets.mjs',
   'compute-onboarding.mjs',

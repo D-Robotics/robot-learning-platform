@@ -124,27 +124,32 @@ function metricRows(evidence) {
   });
 }
 
-function drawCurve(document, run) {
-  const svg = document.getElementById('reward-chart');
-  const empty = document.getElementById('curve-empty');
+function drawCurve(document, run, completion = false) {
+  const svg = document.getElementById(completion ? 'completion-chart' : 'reward-chart');
+  const empty = document.getElementById(completion ? 'completion-empty' : 'curve-empty');
   if (!svg || !empty) return;
   svg.replaceChildren();
   const raw = Array.isArray(run.progress) ? run.progress : [];
   const points = raw.map((point, index) => ({
     x: Number(point.iteration ?? point.step ?? point.trainingStep ?? index + 1),
-    y: Number(point.meanReward ?? point.reward ?? point.mean_reward),
+    y: completion
+      ? point.episodeSamples > 0 && point.recentSuccess >= 0 && point.recentSuccess <= 1
+        ? point.recentSuccess * 100 : NaN
+      : Number(point.meanReward ?? point.reward ?? point.mean_reward),
   })).filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y));
   if (!points.length) {
     svg.setAttribute('hidden', '');
     empty.hidden = false;
-    text(document, 'curve-caption', '本次 Run 未返回曲线采样');
+    if (!completion) text(document, 'curve-caption', '本次 Run 未返回曲线采样');
     return;
   }
   const namespace = 'http://www.w3.org/2000/svg';
   const xMin = Math.min(...points.map((point) => point.x));
   const xMax = Math.max(...points.map((point) => point.x));
-  const yMin = Math.min(...points.map((point) => point.y));
-  const yMax = Math.max(...points.map((point) => point.y));
+  const low = Math.min(...points.map((point) => point.y));
+  const high = Math.max(...points.map((point) => point.y));
+  const yMin = completion ? 0 : low;
+  const yMax = completion ? 100 : high;
   const xRange = xMax - xMin || 1;
   const yRange = yMax - yMin || 1;
   const coordinates = points.map((point) => {
@@ -163,11 +168,13 @@ function drawCurve(document, run) {
   label.setAttribute('x', '60');
   label.setAttribute('y', '18');
   label.setAttribute('class', 'reward-label');
-  label.textContent = `${points.length} 个本次采样点 · ${yMin.toFixed(3)} 至 ${yMax.toFixed(3)}`;
+  label.textContent = completion
+    ? `${points.length} 个采样点 · ${low.toFixed(1)}% 至 ${high.toFixed(1)}%`
+    : `${points.length} 个本次采样点 · ${low.toFixed(3)} 至 ${high.toFixed(3)}`;
   svg.append(axis, line, label);
   svg.removeAttribute('hidden');
   empty.hidden = true;
-  text(document, 'curve-caption', '仅显示本次 Run 上报的数据');
+  if (!completion) text(document, 'curve-caption', '仅显示本次 Run 上报的数据');
 }
 
 function renderDance(document, run) {
@@ -206,7 +213,7 @@ function renderDance(document, run) {
   text(document, 'run-kind', 'OriginMan · PPO 舞蹈仿真');
 }
 
-function referenceQualityRows(evidence) {
+function referenceQualityRows(evidence, composition) {
   if (!evidence) return [];
   const rows = [
     ['轨迹完成度', `${evidence.framesEvaluated} / ${evidence.framesExpected} 帧`],
@@ -215,6 +222,21 @@ function referenceQualityRows(evidence) {
     ['末尾偏航（通过标准绝对值 < 5°）', `${evidence.finalYawDeg.toFixed(2)}°`],
     ['参考轨迹 SHA-256', evidence.referenceSha256],
   ];
+  if (Number.isFinite(evidence.trackingRmseRad))
+    rows.push(['关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
+  if (Number.isFinite(evidence.onnxMaxAbsError))
+    rows.push(['ONNX 最大推理差异', evidence.onnxMaxAbsError.toExponential(2)]);
+  const sections = evidence.sections;
+  if (composition && Array.isArray(sections) && sections.length === composition.ranges?.length &&
+      sections.every((section, index) => section.id === composition.ranges[index].id &&
+        section.framesExpected === composition.ranges[index].to - composition.ranges[index].from)) {
+    sections.forEach((section, index) => {
+      const metrics = [section.completed ? '完成' : '未完成', section.framesEvaluated + '/' + section.framesExpected + ' 帧'];
+      if (Number.isFinite(section.trackingRmseRad)) metrics.push('RMSE ' + section.trackingRmseRad.toFixed(4) + ' rad');
+      if (Number.isFinite(section.squatDescentM)) metrics.push('下降 ' + (section.squatDescentM * 1000).toFixed(1) + ' mm');
+      rows.push(['第 ' + (index + 1) + ' 段 · ' + section.id, metrics.join(' · ')]);
+    });
+  }
   return rows;
 }
 
@@ -261,7 +283,7 @@ function renderQuality(document, run) {
     const label = document.getElementById('quality-summary');
     if (label) label.textContent += summary + next;
   }
-  const rows = tracking ? referenceQualityRows(reference) : metricRows(evidence);
+  const rows = tracking ? referenceQualityRows(reference, run.training?.originmanReferenceComposition) : metricRows(evidence);
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
   if (table && body) {
@@ -434,6 +456,10 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   const body = document.getElementById('run-config-body');
   const configRows = [
     ['算法', config.algorithm],
+    ['参考来源', config.originmanReferenceComposition?.displayName],
+    ['参考配方', config.originmanReferenceComposition?.source],
+    ['动作顺序', config.originmanReferenceComposition?.blocks?.map(({ id, repeats }) => id + ' × ' + repeats).join(' → ')],
+    ['参考帧数', config.originmanReferenceSummary?.frames],
     ['训练预算', config.originmanReferenceSummary?.trainingSteps ?? config.originmanReference?.trainingSteps ?? danceConfigFor(run)?.trainingSteps ?? config.timesteps ?? config.trainingSteps ?? config.totalTimesteps],
     ['实际训练步数', run.metrics?.trainingSteps],
     ['已评测 checkpoint', run.metrics?.originmanReference?.checkpointEvaluations],
@@ -463,6 +489,7 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   renderDanceReferenceLinks(document, run, SECTION_LABELS);
   if (tracking) text(document, 'run-kind', 'OriginMan · 参考轨迹仿真');
   drawCurve(document, run);
+  if (tracking) drawCurve(document, run, true);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }

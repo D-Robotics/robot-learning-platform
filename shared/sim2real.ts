@@ -2,6 +2,7 @@ import {
   ORIGINMAN_REFERENCE_ENGINE,
   validateOriginmanReferenceTraining,
   type OriginmanReferenceTraining,
+  type OriginmanMotionProvenance,
 } from './originman-reference-training.js';
 import type {
   ModelArtifactDescriptor,
@@ -275,6 +276,8 @@ export interface Sim2RealTrainingSpec {
   syntheticSmoke?: boolean;
   originmanDance?: OriginmanDanceTraining;
   originmanReference?: OriginmanReferenceTraining;
+  /** Platform-generated snapshot of the selected choreography. */
+  originmanReferenceComposition?: OriginmanMotionProvenance;
   /** Only the trajectory metadata is retained in the platform run ledger. */
   originmanReferenceSummary?: { trainingSteps: number; seed: number; frames: number; fps: 50 };
 }

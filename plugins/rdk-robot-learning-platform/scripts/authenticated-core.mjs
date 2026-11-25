@@ -553,6 +553,74 @@ export async function connectAuthenticatedCore({
       );
       return { datasets, studentReply };
     },
+    async listOriginmanMotion({ signal } = {}) {
+      return readWorkspaceJson(
+        '/originman-motion/catalog',
+        signal,
+        await verifiedWorkspaceAccount(),
+      );
+    },
+    async previewOriginmanMotion(composition, { signal } = {}) {
+      return readWorkspaceJson(
+        '/originman-motion/preview',
+        signal,
+        await verifiedWorkspaceAccount(),
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(composition),
+        },
+      );
+    },
+    async submitOriginmanMotion(args, { signal } = {}) {
+      const accountId = await verifiedWorkspaceAccount();
+      const {
+        contextId,
+        computeResourceId,
+        numEnvs,
+        composition,
+        trainingSteps,
+        expectedTrajectorySha256,
+      } = args;
+      const post = (route, body, headers) =>
+        readWorkspaceJson(route, signal, accountId, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...headers },
+          body: JSON.stringify(body),
+        });
+      const { modelId } = await post('/originman-reference/model', { computeResourceId });
+      const taskId = 'originman-reference-track';
+      const result = await post(
+        '/runs',
+        {
+          modelId,
+          computeResourceId,
+          requestedVia: 'agent',
+          taskId,
+          backend: 'local',
+          label: 'OriginMan · 参考舞蹈',
+          training: {
+            profile: trainingSteps === 8192 ? 'smoke' : 'standard',
+            algorithm: 'ppo',
+            engine: 'originman-reference-ppo',
+            video: true,
+            maxIterations: trainingSteps / 4096,
+            numEnvs,
+            originmanReference: { composition, expectedTrajectorySha256, trainingSteps, seed: 7 },
+          },
+        },
+        { 'Idempotency-Key': 'originman-motion-' + contextId },
+      );
+      if (!result.run?.id || result.run.taskId !== taskId)
+        throw new PluginRequestError(
+          'WORKSPACE_EVIDENCE_MISMATCH',
+          '平台未确认新建的参考舞蹈 Run。',
+          {
+            httpStatus: 502,
+          },
+        );
+      return { ...result, taskId };
+    },
     async rehearseOriginmanDanceCpu({ runId, deviceId }, { signal } = {}) {
       const accountId = await verifiedWorkspaceAccount();
       const requestSignal = AbortSignal.any([

@@ -45,3 +45,24 @@ renderer plus FFmpeg. The engine uses CUDA when available with
 the Worker so the platform has current engine capabilities. Allow up to 16 MiB
 on the authenticated OriginMan reference upload and screening paths if a reverse
 proxy imposes a lower limit. Other training uploads use the standard limit.
+
+## Workshop reference choreography
+
+The Workshop and the Studio MCP can preview an existing preset or an ordered
+list of motion IDs with repeat counts. The platform compiles the same references
+at submission, checks the preview SHA-256 and records the recipe and source
+digests with the Run. Configured compositions have a 90-second limit. The
+simulation reports tracking RMSE, per-block completion and ONNX parity. The
+legacy dance recipe and the direct reference file upload retain their contracts.
+
+The built-in catalog includes a teaching example. To enable an approved shared
+library, prepare a source `catalog.json` with `schemaVersion: 1`, `motions` and
+`presets`. Each motion needs `id`, `file` (a sibling 50 Hz NPZ or JSON),
+`displayName`, and `category`. Set `clipped` if the source was scaled. Each
+preset needs `id`, `displayName`, `bpm`, and ordered `blocks` with `id` and
+optional `repeats`, plus optional `transitionSeconds`. Run
+`python scripts/import-originman-motion-library.py catalog.json /absolute/output`
+with NumPy available, then set `RDK_ORIGINMAN_MOTION_DIR` on the platform service
+to the output directory. Use a directory outside the public web root. This
+library is available to signed-in learners. Individual source recordings can
+also be uploaded directly from the reference page for an account's own Run.

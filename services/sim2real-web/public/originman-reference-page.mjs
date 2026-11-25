@@ -1,3 +1,4 @@
+import { mountOriginmanMotion } from './originman-motion-editor.mjs';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
@@ -61,10 +62,17 @@ function setError(message = '') {
   error.hidden = !message;
 }
 
+const query = new URLSearchParams(location.search);
+const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
+if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
+
 function refresh() {
   const editing = submitting || preparing || Boolean(screening);
-  const failed = currentScreeningFailed();
-  submit.disabled = editing || checking || !trajectory || !selectedWorkerReady() || failed;
+  const uploaded = motion.isUpload();
+  const failed = uploaded && currentScreeningFailed();
+  const ready = uploaded ? Boolean(trajectory) : Boolean(motion.submission());
+  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed;
+  motion.setLocked(editing || checking);
   byId('reference-screen-blocker').hidden = !failed;
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
@@ -288,14 +296,17 @@ screenCancel.addEventListener('click', () => screening?.abort());
 
 byId('reference-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !trajectory || currentScreeningFailed()) return;
+  const reference = motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
+  if (submitting || checking || preparing || screening || !selectedWorkerReady() || !reference ||
+      (motion.isUpload() && currentScreeningFailed())) return;
   submitting = true;
   refresh();
   setError();
   const computeResourceId = worker.value;
   const trainingSteps = Number(byId('reference-steps').value);
   const numEnvs = Number(envs.value);
-  const key = [computeResourceId, trainingSteps, numEnvs].join('/');
+  const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
+    reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest]);
   if (!attempt || attempt.key !== key) attempt = { key, id: crypto.randomUUID() };
   try {
     const { modelId } = await api('originman-reference/model', { computeResourceId });
@@ -305,7 +316,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
       training: {
         profile: trainingSteps === 8192 ? 'smoke' : 'standard', algorithm: 'ppo',
         engine: 'originman-reference-ppo', video: true, maxIterations: trainingSteps / 4096, numEnvs,
-        originmanReference: { trajectory, trainingSteps, seed: 7 },
+        originmanReference: { ...reference, trainingSteps, seed: 7 },
       },
     }, attempt.id);
     const runId = result.run?.id;
@@ -328,7 +339,7 @@ try {
   showCalibration(calibration);
   status.textContent = '请选择文件或加载示例。';
   try {
-    await loadWorkers();
+    await loadWorkers(query.get('computeResourceId'));
   } catch (cause) {
     workerHint.textContent = cause.message;
   }
@@ -337,3 +348,5 @@ try {
   setError(cause.message);
 }
 refresh();
+
+void motion.start();

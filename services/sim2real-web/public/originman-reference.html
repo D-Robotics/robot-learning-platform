@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=4"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-1"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -17,15 +17,47 @@
       <aside aria-label="任务说明">
         <p class="eyebrow">OriginMan · 仿真</p>
         <h1>参考轨迹跟跳</h1>
-        <p>导入每帧的关节目标，训练策略在仿真中完整跟随。两个头部通道固定为零。</p>
+        <p>选择预置舞蹈、从动作库编排，或导入自己的轨迹。预览后可提交仿真训练。</p>
         <ol class="experiment-steps">
-          <li>导入并校验轨迹</li>
+          <li>选择并校验轨迹</li>
           <li>选择算力并提交训练</li>
           <li>查看评测、回放和 ONNX</li>
         </ol>
       </aside>
       <section class="experiment-content" aria-label="任务表单">
-        <section aria-labelledby="reference-import-heading">
+        <section aria-labelledby="reference-mode-heading">
+          <h2 id="reference-mode-heading">选择参考来源</h2>
+          <label>编排方式
+            <select id="reference-mode">
+              <option value="preset">预置舞蹈</option>
+              <option value="blocks">动作组自由编排</option>
+              <option value="upload">导入自己的轨迹</option>
+            </select>
+          </label>
+          <div id="reference-motion-panel" hidden>
+            <p id="reference-motion-source"></p>
+            <p id="reference-motion-presets">
+              <label>预置舞蹈 <select id="reference-motion-preset"></select></label>
+            </p>
+            <div id="reference-motion-blocks" hidden>
+              <p><label>搜索动作 <input id="reference-motion-search" type="search" /></label></p>
+              <p><label>动作 <select id="reference-motion-action"></select></label>
+              <button id="reference-motion-add" type="button">添加到编排</button></p>
+              <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
+              <p><label>节奏 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
+              <label>过渡秒数 <input id="reference-motion-transition" type="number" min="0" max="2" step="0.02" value="0.4" /></label></p>
+            </div>
+            <p id="reference-motion-estimate"></p>
+            <button id="reference-motion-prepare" type="button" disabled>预览参考轨迹</button>
+            <p id="reference-motion-status" role="status" aria-live="polite"></p>
+            <div id="reference-motion-result" hidden>
+              <label>预览关节 <select id="reference-motion-joint"></select></label>
+              <svg id="reference-motion-curve" viewBox="0 0 400 110" role="img" aria-label="参考关节角随时间变化"><path fill="none" stroke="currentColor" stroke-width="2"></path></svg>
+              <p id="reference-motion-range"></p>
+            </div>
+          </div>
+        </section>
+        <section id="reference-import-section" aria-labelledby="reference-import-heading">
           <h2 id="reference-import-heading">导入参考轨迹</h2>
           <p id="reference-format">支持 50 Hz 的 NPZ 或 JSON。关节位置使用相对站姿的弧度，速度使用弧度/秒。</p>
           <p><input id="reference-file" type="file" accept=".npz,.json" aria-label="选择参考轨迹文件" aria-describedby="reference-format" disabled /></p>
@@ -66,7 +98,7 @@
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
             <p id="reference-worker-hint" role="status"></p>
-            <details class="experiment-details">
+            <details id="reference-screen-details" class="experiment-details">
               <summary>训练前物理筛查</summary>
               <p>由所选 Worker 用标定场景逐帧模拟。批量支持 8 个文件，逐项报告帧数、峰值倾角和首个失败帧。</p>
               <p><button id="reference-screen-current" type="button" disabled>筛查当前轨迹</button></p>
@@ -76,7 +108,7 @@
               <p id="reference-screen-status" role="status" aria-live="polite"></p>
               <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
             </details>
-            <p>标准与长训每 32,768 步评测一次 checkpoint。完整度、峰值倾角和末尾偏航同时达标时提前结束。</p>
+            <p>标准与长训每 32,768 步评测一次。预置和自由编排跑完所选预算。上传轨迹可在完整度、倾角和偏航达标后提前结束。</p>
             <p id="reference-screen-blocker" role="status" hidden>当前轨迹未通过所选 Worker 的物理筛查。请调整轨迹或重新筛查后再提交。</p>
             <button id="reference-submit" type="submit" disabled>开始仿真训练</button>
           </form>

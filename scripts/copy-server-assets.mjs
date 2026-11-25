@@ -121,6 +121,7 @@ try {
       'dance-iteration',
       'dance-training',
       'originman-dance-config',
+      'originman-motion',
       'submission-journal',
     ].map((name) => 'plugins/rdk-robot-learning-platform/scripts/' + name + '.mjs'),
     'plugins/rdk-robot-learning-platform/references/originman-dance-manifest.json',

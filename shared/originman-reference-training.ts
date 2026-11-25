@@ -16,6 +16,16 @@ export interface OriginmanReferenceTrajectory {
   joint_vel: number[][];
 }
 
+export interface OriginmanMotionProvenance {
+  source: string;
+  displayName: string;
+  blocks: { id: string; repeats: number; sha256: string }[];
+  ranges: { id: string; from: number; to: number }[];
+  transitionSeconds: number;
+  bpm: number;
+  trajectorySha256: string;
+}
+
 export interface OriginmanReferenceTraining {
   trajectory: OriginmanReferenceTrajectory;
   trainingSteps: number;

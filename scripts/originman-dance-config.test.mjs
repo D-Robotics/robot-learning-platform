@@ -155,3 +155,74 @@ test('the read-only dance preview fills an omitted schema version on its first M
   assert.throws(() => originmanDanceDraft([input]), /expected an object/);
   assert.throws(() => resolveOriginmanDanceConfig(input), /schemaVersion/);
 });
+
+test('MCP lists and previews motion without writing, then submits the pinned recipe once', async () => {
+  const digest = 'b'.repeat(64);
+  const recipe = { blocks: [{ id: 'example-arms', repeats: 3 }], transitionSeconds: 0.4 };
+  const calls = [];
+  const dispatch = experienceProxy(
+    {
+      request() {
+        assert.fail('Unexpected legacy MCP call');
+      },
+      async listOriginmanMotion() {
+        calls.push('list');
+        return { ok: true, motions: [] };
+      },
+      async previewOriginmanMotion(args) {
+        assert.deepEqual(args, recipe);
+        calls.push('preview');
+        return { ok: true, preview: { trajectorySha256: digest } };
+      },
+      async submitOriginmanMotion(args) {
+        calls.push('submit');
+        assert.deepEqual(args, {
+          composition: recipe,
+          computeResourceId: 'worker-1',
+          contextId: 'motion-1',
+          expectedTrajectorySha256: digest,
+          numEnvs: 1,
+          trainingSteps: 8192,
+        });
+        return {
+          ok: true,
+          taskId: 'originman-reference-track',
+          run: {
+            id: 'reference-run-1',
+            status: 'queued',
+            taskId: 'originman-reference-track',
+          },
+        };
+      },
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning' } },
+  );
+  const call = (name, args) => dispatch('tools/call', { name, arguments: args });
+  assert.notEqual((await call('rdk_originman_motion_library', {})).isError, true);
+  assert.notEqual((await call('rdk_originman_motion_preview', recipe)).isError, true);
+  assert.deepEqual(calls, ['list', 'preview']);
+  const input = {
+    dance: recipe,
+    computeResourceId: 'worker-1',
+    contextId: 'motion-1',
+    referenceTrainingSteps: 8192,
+    numEnvs: 1,
+  };
+  const stale = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: 'a'.repeat(64),
+  });
+  assert.equal(stale.isError, true);
+  const result = await call('rdk_originman_dance_train', {
+    ...input,
+    expectedTrajectorySha256: digest,
+  });
+  assert.notEqual(result.isError, true, result.content?.[0]?.text);
+  assert.deepEqual(calls, ['list', 'preview', 'preview', 'preview', 'submit']);
+  assert.equal(result.structuredContent.run.id, 'reference-run-1');
+  assert.equal(result.structuredContent.nextTool, 'rdk_training_wait');
+  assert.match(
+    result.structuredContent.studioNavigation.arguments.url,
+    /originman-reference-run\.html/,
+  );
+});

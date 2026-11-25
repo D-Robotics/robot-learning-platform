@@ -564,6 +564,44 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   };
 }
 
+function safeReferenceSections(value: unknown) {
+  if (!Array.isArray(value) || !value.length || value.length > 90) return undefined;
+  const rows: NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['sections']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return undefined;
+    const { id, framesExpected, framesEvaluated, completed } = item;
+    if (
+      typeof id !== 'string' ||
+      !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) ||
+      !Number.isSafeInteger(framesExpected) ||
+      framesExpected < 50 ||
+      framesExpected > 4500 ||
+      !Number.isSafeInteger(framesEvaluated) ||
+      framesEvaluated < 0 ||
+      framesEvaluated > framesExpected ||
+      typeof completed !== 'boolean'
+    )
+      return undefined;
+    const row: (typeof rows)[number] = {
+      id,
+      framesExpected,
+      framesEvaluated,
+      completed: completed && framesEvaluated === framesExpected,
+    };
+    for (const [key, maximum] of [
+      ['trackingRmseRad', 20],
+      ['maxTiltDeg', 180],
+      ['squatDescentM', 10],
+    ] as const) {
+      const metric = item[key];
+      if (typeof metric === 'number' && Number.isFinite(metric) && metric >= 0 && metric <= maximum)
+        row[key] = metric;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanReference'] {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const { replay, video: safeVideo } = safeDanceMetrics(value) ?? {};
@@ -582,6 +620,9 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     framesExpected,
     framesEvaluated,
     trackingMaeRad,
+    trackingRmseRad,
+    onnxMaxAbsError,
+    sections: rawSections,
     maxTiltDeg,
     finalYawDeg,
     qualityGatePassed,
@@ -614,10 +655,20 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     ![referenceSha256, sceneSha256].every((digest) => /^[a-f0-9]{64}$/.test(digest))
   )
     return undefined;
+  const sections = safeReferenceSections(rawSections);
   return {
     framesExpected,
     framesEvaluated,
     trackingMaeRad,
+    ...(typeof trackingRmseRad === 'number' &&
+      Number.isFinite(trackingRmseRad) &&
+      trackingRmseRad >= 0 &&
+      trackingRmseRad <= 20 && { trackingRmseRad }),
+    ...(typeof onnxMaxAbsError === 'number' &&
+      Number.isFinite(onnxMaxAbsError) &&
+      onnxMaxAbsError >= 0 &&
+      onnxMaxAbsError < 1e-6 && { onnxMaxAbsError }),
+    ...(sections && { sections }),
     maxTiltDeg,
     finalYawDeg,
     qualityGatePassed:
@@ -782,12 +833,16 @@ function safeProgressPoints(value: unknown): Sim2RealRunProgressPoint[] | undefi
     }
     lastIteration = iteration;
     const elapsedSeconds = Number(point.elapsedSeconds);
+    const samples = Number(point.episodeSamples);
     const at = safeText(point.at, 40);
     points.push({
       iteration,
       totalIterations,
       meanReward,
       recentSuccess,
+      ...(Number.isSafeInteger(samples) &&
+        samples >= 0 &&
+        samples <= 50 && { episodeSamples: samples }),
       ...(Number.isFinite(elapsedSeconds) && elapsedSeconds >= 0 ? { elapsedSeconds } : {}),
       ...(at ? { at } : {}),
     });
