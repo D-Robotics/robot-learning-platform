@@ -51,8 +51,22 @@ $node = Join-Path $directory 'node.exe'
 $runtime = Get-Content -LiteralPath (Join-Path $directory 'provenance.json') -Raw | ConvertFrom-Json
 $info = Get-Item -LiteralPath $node
 if ($info.PSIsContainer -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
-    $runtime.binarySha256 -notmatch '^[a-f0-9]{64}$' -or
-    (Get-FileHash -LiteralPath $node -Algorithm SHA256).Hash.ToLowerInvariant() -ne $runtime.binarySha256) {
+    $runtime.binarySha256 -cnotmatch '^[a-f0-9]{64}$') {
+  throw 'Node checksum failed. Extract the verified archive again.'
+}
+
+# Windows PowerShell inherits module paths from the host terminal. Use the
+# .NET checksum API even when Get-FileHash cannot be imported.
+$sha256 = [Security.Cryptography.SHA256]::Create()
+$stream = $null
+try {
+  $stream = [IO.File]::OpenRead($node)
+  $digest = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+} finally {
+  if ($null -ne $stream) { $stream.Dispose() }
+  $sha256.Dispose()
+}
+if ($digest -cne $runtime.binarySha256) {
   throw 'Node checksum failed. Extract the verified archive again.'
 }
 & $node (Join-Path $root 'setup-studio.mjs')
