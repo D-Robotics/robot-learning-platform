@@ -82,7 +82,7 @@ const fixtureDir = await mkdtemp(path.join(os.tmpdir(), 'rdk-local-worker-'));
 const fixture = path.join(fixtureDir, 'engine.mjs');
 await writeFile(
   fixture,
-  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nconsole.log('[engine] engine=start task=goal-navigation profile=smoke iters=4 envs=16 device=cuda');\nconsole.log('[engine] iter 1/4 meanReward=-0.004 recentSuccess=0.00 goalRange=[0.80,1.20] elapsed=0.7s');\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s');\nawait new Promise((resolve) => setTimeout(resolve, 30));\n// A partially-flushed duplicate must not create a backward or duplicate point.\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s iter 3/4 meanReward=0.003 recentSuccess=0.04 goalRange=[0.80,1.20] elapsed=1.4s');\nconsole.log('[engine] iter 4/4 meanReward=0.012 recentSuccess=0.06 goalRange=[0.80,1.20] elapsed=1.8s');\nawait new Promise((resolve) => setTimeout(resolve, 90));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n// The bundle manifest is opt-in so one fixture can exercise the legacy path\n// (no manifest), the verified path, and a tampered bundle.\nconst mode = process.env.RDK_SIM2REAL_TEST_MANIFEST;\nif (mode === 'good' || mode === 'tampered') {\n  const { createHash } = await import('node:crypto');\n  const names = ['policy.onnx', 'eval-report.json'];\n  const lines = [];\n  for (const name of names) {\n    const bytes = await (await import('node:fs/promises')).readFile(process.env.RDK_SIM2REAL_JOB_DIR + '/' + name);\n    lines.push(createHash('sha256').update(bytes).digest('hex') + '  ' + name);\n  }\n  if (mode === 'tampered') {\n    // Record a digest for content that is not what policy.onnx holds.\n    lines[0] = 'f'.repeat(64) + '  policy.onnx';\n  }\n  await writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/SHA256SUMS', lines.join('\\n') + '\\n');\n}\n`,
+  `import { writeFile } from 'node:fs/promises';\nconsole.error('Bearer fake-secret token=should-hide');\nconsole.log('[engine] engine=start task=goal-navigation profile=smoke iters=4 envs=16 device=cuda');\nconsole.log('[engine] iter 1/4 meanReward=-0.004 recentSuccess=0.00 goalRange=[0.80,1.20] elapsed=0.7s');\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s');\nawait new Promise((resolve) => setTimeout(resolve, 30));\n// A partially-flushed duplicate must not create a backward or duplicate point.\nconsole.log('[engine] iter 2/4 meanReward=-0.006 recentSuccess=0.01 goalRange=[0.80,1.20] elapsed=1.1s iter 3/4 meanReward=0.003 recentSuccess=0.04 goalRange=[0.80,1.20] elapsed=1.4s');\nconsole.log('[engine] iter 4/4 meanReward=0.012 recentSuccess=0.06 goalRange=[0.80,1.20] elapsed=1.8s');\nawait new Promise((resolve) => setTimeout(resolve, Number(process.env.RDK_SIM2REAL_TEST_ENGINE_DELAY_MS || 90)));\nconst result = { checkpoint: { checkpointId: 'cp-1', artifactRef: 'artifact://microduck/cp-1', iteration: 1 }, artifact: { artifactId: 'policy-1', artifactRef: 'artifact://microduck/policy-1', kind: 'source', format: 'onnx', deployable: true }, metrics: { reward: 3.5, platformTokenLeaked: Boolean(process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN) }, deployable: true };\nconst evalReport = { schemaVersion: 1, taskId: 'originbot-goal-navigation', trained: { envelopes: { nominal: { successRate: 0.88, collisionRate: 0, episodes: 50, successRateCiLow: 0.756, collisionRateCiHigh: 0.071 } } }, qualityGate: { criteria: { minSuccessRate: 0.7, maxCollisionRate: 0.15, gateOn: 'ciLowerBound' } } };\nif (process.env.RDK_SIM2REAL_TEST_LARGE_RESULT === '1') result.padding = 'x'.repeat(1_100_000);\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/policy.onnx', 'onnx-fixture');\nawait writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify(result));\nawait writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/eval-report.json', JSON.stringify(evalReport));\n// The bundle manifest is opt-in so one fixture can exercise the legacy path\n// (no manifest), the verified path, and a tampered bundle.\nconst mode = process.env.RDK_SIM2REAL_TEST_MANIFEST;\nif (mode === 'good' || mode === 'tampered') {\n  const { createHash } = await import('node:crypto');\n  const names = ['policy.onnx', 'eval-report.json'];\n  const lines = [];\n  for (const name of names) {\n    const bytes = await (await import('node:fs/promises')).readFile(process.env.RDK_SIM2REAL_JOB_DIR + '/' + name);\n    lines.push(createHash('sha256').update(bytes).digest('hex') + '  ' + name);\n  }\n  if (mode === 'tampered') {\n    // Record a digest for content that is not what policy.onnx holds.\n    lines[0] = 'f'.repeat(64) + '  policy.onnx';\n  }\n  await writeFile(process.env.RDK_SIM2REAL_JOB_DIR + '/SHA256SUMS', lines.join('\\n') + '\\n');\n}\n`,
   { mode: 0o600 },
 );
 process.env.RDK_SIM2REAL_TRAIN_EXECUTABLE = process.execPath;
@@ -678,25 +678,25 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   // A verified bundle is published with `verified: true`; a manifest that
   // disagrees with the files on disk fails the run closed, because publishing it
   // would hand the staging chain bytes of unknown provenance.
-  const submit = async (modelId, key) => {
+  const submit = async (modelId, key, owner = 'alice') => {
     const response = await fetch(`http://127.0.0.1:${recoveredAddress.port}/train`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-sim2real-account': 'alice',
+        'x-sim2real-account': owner,
         authorization: 'Bearer worker-test-token',
         'idempotency-key': key,
       },
-      body: JSON.stringify({ ...request, model: { modelId, version: 'v1' } }),
+      body: JSON.stringify({ ...request, accountId: owner, model: { modelId, version: 'v1' } }),
     });
     assert.equal(response.status, 202);
     return (await response.json()).runId;
   };
-  const awaitTerminal = async (runId) => {
+  const awaitTerminal = async (runId, owner = 'alice') => {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const response = await fetch(
         `http://127.0.0.1:${recoveredAddress.port}/runs/${encodeURIComponent(runId)}`,
-        { headers: { 'x-sim2real-account': 'alice', authorization: 'Bearer worker-test-token' } },
+        { headers: { 'x-sim2real-account': owner, authorization: 'Bearer worker-test-token' } },
       );
       const body = await response.json();
       if (body.status === 'completed' || body.status === 'failed') return body;
@@ -727,6 +727,52 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
       ')',
   );
 
+  const workerBase = `http://127.0.0.1:${recoveredAddress.port}`;
+  process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '2';
+  process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT = '1';
+  process.env.RDK_SIM2REAL_TEST_ENGINE_DELAY_MS = '1800';
+  const aliceFirst = await submit('pool-fixture', 'pool-first');
+  const aliceNext = await submit('pool-fixture', 'pool-next');
+  const bobFirst = await submit('pool-fixture', 'pool-first', 'bob');
+  const charlieFirst = await submit('pool-fixture', 'pool-first', 'charlie');
+  const poolStatus = async (id, owner) => {
+    const response = await fetch(`${workerBase}/runs/${id}`, {
+      headers: { 'x-sim2real-account': owner, authorization: 'Bearer worker-test-token' },
+    });
+    assert.equal(response.status, 200);
+    return (await response.json()).status;
+  };
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (
+      (await poolStatus(aliceFirst, 'alice')) === 'running' &&
+      (await poolStatus(bobFirst, 'bob')) === 'running'
+    )
+      break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(await poolStatus(aliceFirst, 'alice'), 'running');
+  assert.equal(await poolStatus(bobFirst, 'bob'), 'running');
+  assert.equal(await poolStatus(aliceNext, 'alice'), 'queued');
+  assert.equal(await poolStatus(charlieFirst, 'charlie'), 'queued');
+  const poolHealth = await (await fetch(`${workerBase}/healthz`)).json();
+  assert.equal(poolHealth.maxConcurrentJobs, 2);
+  assert.equal(poolHealth.maxConcurrentJobsPerAccount, 1);
+  assert.equal(poolHealth.activeJobs, 2);
+  assert.equal(poolHealth.queuedJobs, 2);
+  const results = await Promise.all([
+    awaitTerminal(aliceFirst),
+    awaitTerminal(aliceNext),
+    awaitTerminal(bobFirst, 'bob'),
+    awaitTerminal(charlieFirst, 'charlie'),
+  ]);
+  assert.ok(results.every((result) => result.status === 'completed'));
+  assert.ok(Date.parse(results[1].startedAt) >= Date.parse(results[0].finishedAt));
+  process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT = '3';
+  assert.equal((await fetch(`${workerBase}/healthz`)).status, 503);
+  console.log(
+    '[local-training-worker] PASS — two accounts share one worker, extra jobs queue and finish',
+  );
+
   console.log(
     '[local-training-worker] PASS — external engine result is required; unconfigured mode fails closed',
   );
@@ -743,6 +789,8 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   delete process.env.RDK_SIM2REAL_LOCAL_WORKER_DATA_DIR;
   delete process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN;
   delete process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS;
+  delete process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT;
+  delete process.env.RDK_SIM2REAL_TEST_ENGINE_DELAY_MS;
   delete process.env.RDK_SIM2REAL_TEST_LARGE_RESULT;
   if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = previousNodeEnv;

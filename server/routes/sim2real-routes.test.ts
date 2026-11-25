@@ -4,7 +4,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
@@ -2382,6 +2382,68 @@ describe('Sim2Real HTTP routes', () => {
       expect(workerTrainings[workerTrainings.length - 1]).not.toHaveProperty('engine');
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('shares configured GPU slots across SSO accounts without exposing private runners or credentials', async () => {
+    const legacyUrl = 'http://127.0.0.1:19097/train';
+    const sharedUrl = 'http://127.0.0.1:19101/train';
+    const legacyToken = 'a'.repeat(40);
+    const sharedToken = 'b'.repeat(40);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_URL', legacyUrl);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_TOKEN', legacyToken);
+    vi.stubEnv('RDK_SIM2REAL_SHARED_GPU_NAME', 'Classroom GPU 7');
+    vi.stubEnv(
+      'RDK_SIM2REAL_SHARED_GPU_POOL_JSON',
+      JSON.stringify([
+        { name: 'Classroom GPU 0', runnerUrl: sharedUrl, runnerToken: sharedToken },
+        { name: 'Duplicate', runnerUrl: sharedUrl + '/', runnerToken: sharedToken },
+        { name: 'Broken', runnerUrl: 'file:///train', runnerToken: sharedToken },
+      ]),
+    );
+    try {
+      await fixture();
+      const auth: Sim2RealAuthPort = {
+        isMultiUserDeployment: () => true,
+        resolvePrincipal: (request) => {
+          const accountId = request.headers['x-test-account'];
+          return typeof accountId === 'string' ? { accountId } : null;
+        },
+        resolveAccessToken: () => null,
+      };
+      const router = createSim2RealRouter({ auth });
+      const alice = { 'x-test-account': 'alice' };
+      const bob = { 'x-test-account': 'bob' };
+      const created = await invoke(router, 'post', '/api/sim2real/compute-resources', {
+        headers: alice,
+        body: { name: 'Alice GPU', runnerUrl: 'http://127.0.0.1:19102/train' },
+      });
+      expect(created.statusCode).toBe(201);
+      const list = (headers: Record<string, string>) =>
+        invoke(router, 'get', '/api/sim2real/compute-resources', { headers });
+
+      expect((await list({})).statusCode).toBe(401);
+      const first = await list(alice);
+      const second = await list(bob);
+      expect(first.statusCode).toBe(200);
+      expect(second.statusCode).toBe(200);
+      const legacy = 'c1a55-' + createHash('sha256').update(legacyUrl).digest('hex').slice(0, 24);
+      const shared = second.body.computeResources;
+      expect(shared).toHaveLength(2);
+      expect(shared).toEqual(first.body.computeResources.slice(0, 2));
+      expect(first.body.computeResources).toHaveLength(3);
+      expect(shared[0]).toMatchObject({ name: 'Classroom GPU 7', id: legacy });
+      expect(shared[1]).toMatchObject({ name: 'Classroom GPU 0', runnerUrl: sharedUrl });
+      expect(JSON.stringify(first.body)).not.toContain(legacyToken);
+      expect(JSON.stringify(first.body)).not.toContain(sharedToken);
+      const patch = await invoke(router, 'patch', '/api/sim2real/compute-resources/:id', {
+        headers: bob,
+        params: { id: shared[1].id },
+        body: { name: 'Changed' },
+      });
+      expect(patch.statusCode).toBe(403);
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

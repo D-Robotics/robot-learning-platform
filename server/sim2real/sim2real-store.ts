@@ -36,6 +36,7 @@ import {
 import { redactInternalError } from './http-helpers.js';
 import { validateRunForDeployment } from './release-evidence.js';
 import { isWebCloudDeployment, resolveDataDir } from './standalone-adapters.js';
+import { normalizeComputeRunnerUrl } from './robogo-runner.js';
 import { acquireStorageLease } from './storage-lease.js';
 
 const LEDGER_VERSION = 1 as const;
@@ -2370,53 +2371,101 @@ export async function getSim2RealLineage(
   };
 }
 
-/** One administrator-provisioned worker queue. Run ownership remains per SSO account. */
-let sharedGpu: { resource: Sim2RealComputeResource; runnerToken: string } | undefined;
-function configuredSharedGpu() {
-  const url = process.env.RDK_SIM2REAL_SHARED_GPU_URL?.trim();
-  const token = process.env.RDK_SIM2REAL_SHARED_GPU_TOKEN?.trim();
-  if (!url || !token || token.length < 32) {
-    sharedGpu = undefined;
-    return;
-  }
-  if (!sharedGpu || url !== sharedGpu.resource.runnerUrl || token !== sharedGpu.runnerToken) {
+type SharedGpu = { resource: Sim2RealComputeResource; runnerToken: string };
+let sharedGpus = new Map<string, SharedGpu>();
+let sharedGpuSettings: Array<string | undefined> = [];
+
+function configuredSharedGpus(): ReadonlyMap<string, SharedGpu> {
+  const settings = [
+    process.env.RDK_SIM2REAL_SHARED_GPU_POOL_JSON,
+    process.env.RDK_SIM2REAL_SHARED_GPU_URL,
+    process.env.RDK_SIM2REAL_SHARED_GPU_TOKEN,
+    process.env.RDK_SIM2REAL_SHARED_GPU_NAME,
+  ];
+  if (settings.every((value, index) => value === sharedGpuSettings[index])) return sharedGpus;
+
+  const [poolJson, legacyUrl, legacyToken, legacyName] = settings;
+  const next = new Map<string, SharedGpu>();
+  const endpoints = new Set<string>();
+  function register(input: unknown, preserveLegacyId = false) {
+    if (!input || typeof input !== 'object' || next.size >= 32) return;
+    const { name, runnerUrl, runnerToken } = input as Record<string, unknown>;
+    if (
+      typeof name !== 'string' ||
+      !name.trim() ||
+      name.length > 120 ||
+      /[\u0000-\u001f\u007f]/.test(name) ||
+      typeof runnerUrl !== 'string' ||
+      typeof runnerToken !== 'string' ||
+      !/^[\x21-\x7e]{32,4096}$/.test(runnerToken.trim())
+    )
+      return;
+    let url: string;
+    try {
+      url = normalizeComputeRunnerUrl(runnerUrl.trim(), 'server-runner');
+    } catch {
+      return;
+    }
+    if (endpoints.has(url)) return;
+    endpoints.add(url);
+    // Preserve the ID already stored on runs that used the single-worker setting.
+    if (preserveLegacyId) url = runnerUrl.trim();
+    const id = 'c1a55-' + createHash('sha256').update(url).digest('hex').slice(0, 24);
+    const token = runnerToken.trim();
+    const previous = sharedGpus.get(id);
     const now = new Date().toISOString();
-    sharedGpu = {
-      runnerToken: token,
-      resource: {
-        id: 'c1a55-' + createHash('sha256').update(url).digest('hex').slice(0, 24),
-        name: '课堂共享 GPU',
-        kind: 'local-gpu',
-        source: 'server-runner',
-        runnerUrl: url,
-        status: 'unknown',
-        tokenConfigured: true,
-        createdAt: now,
-        updatedAt: now,
-      },
-    };
+    const resource: Sim2RealComputeResource =
+      previous?.runnerToken === token
+        ? { ...previous.resource, name: name.trim() }
+        : {
+            id,
+            name: name.trim(),
+            kind: 'local-gpu',
+            source: 'server-runner',
+            runnerUrl: url,
+            status: 'unknown',
+            tokenConfigured: true,
+            createdAt: now,
+            updatedAt: now,
+          };
+    next.set(id, { resource, runnerToken: token });
   }
-  return sharedGpu;
+  register(
+    { name: legacyName?.trim() || '课堂共享 GPU', runnerUrl: legacyUrl, runnerToken: legacyToken },
+    true,
+  );
+  if (poolJson) {
+    try {
+      const pool: unknown = JSON.parse(poolJson);
+      if (Array.isArray(pool)) for (const entry of pool.slice(0, 32)) register(entry);
+    } catch {
+      // An invalid pool configuration must not remove the legacy shared resource.
+    }
+  }
+
+  sharedGpuSettings = settings;
+  sharedGpus = next;
+  return sharedGpus;
 }
 
 export async function listSim2RealComputeResources(
   owner?: string,
 ): Promise<Sim2RealComputeResource[]> {
   const ledger = await readLedger();
-  const shared = configuredSharedGpu();
+  const shared = [...configuredSharedGpus().values()].map(({ resource }) => copy(resource));
   const resources = (ledger.computeResources ?? [])
     .filter((item) => ownerMatches(item, owner))
     .slice(0, 100)
     .map((item) => copy(withoutComputeResourcePrivate(item)));
-  return shared ? [copy(shared.resource), ...resources] : resources;
+  return [...shared, ...resources];
 }
 
 export async function getSim2RealComputeResource(
   id: string,
   owner?: string,
 ): Promise<Sim2RealComputeResource | null> {
-  const shared = configuredSharedGpu();
-  if (shared?.resource.id === id) return copy(shared.resource);
+  const shared = configuredSharedGpus().get(id);
+  if (shared) return copy(shared.resource);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2428,8 +2477,8 @@ export async function getSim2RealComputeResourceSecret(
   id: string,
   owner?: string,
 ): Promise<{ resource: Sim2RealComputeResource; runnerToken?: string } | null> {
-  const shared = configuredSharedGpu();
-  if (shared?.resource.id === id) return copy(shared);
+  const shared = configuredSharedGpus().get(id);
+  if (shared) return copy(shared);
   const ledger = await readLedger();
   const found = (ledger.computeResources ?? []).find(
     (item) => item.id === id && ownerMatches(item, owner),
@@ -2489,8 +2538,8 @@ export async function updateSim2RealComputeResource(
   owner?: string,
   checked?: { runnerUrl: string; runnerToken: string; source?: string },
 ): Promise<Sim2RealComputeResource | null> {
-  const shared = configuredSharedGpu();
-  if (shared?.resource.id === id) {
+  const shared = configuredSharedGpus().get(id);
+  if (shared) {
     // Only the server-side active probe supplies checked coordinates. A client PATCH
     // cannot change the shared destination, credentials, or attest worker health.
     if (

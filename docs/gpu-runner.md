@@ -217,8 +217,12 @@ RDK_SIM2REAL_TRAIN_ENGINES_JSON='{…,"isaac-lab":{"executable":"/usr/bin/python
 
 大规模训练（万级并行、域随机化）请继续参考 `engines/mjlab-rsl-rl-adapter/README.md`，在同一 worker 协议下替换引擎可执行文件即可。
 
-## 多账号共用一张卡
+## 多账号共用 GPU
 
-管理员在平台服务配置 `RDK_SIM2REAL_SHARED_GPU_URL`（Worker 的 /train 地址）和 `RDK_SIM2REAL_SHARED_GPU_TOKEN`（与 Worker 相同的至少 32 字符密钥）。登录后的学员选择「课堂共享 GPU」，无需领取密钥或重复登记机器。每张卡使用一个 Worker 进程，通过 `CUDA_VISIBLE_DEVICES` 固定设备。默认 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS=1`，同卡的多个账号可同时提交，多出的任务在同一 Worker 排队。按显存实测提高此值可以同时执行多份训练。运行记录、日志、策略和取消操作按提交账号授权。
+每张卡运行一个 Worker，用 GPU UUID 固定 `CUDA_VISIBLE_DEVICES`，并为每个 Worker 指定独立端口、数据目录和 Runner 密钥。设置 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS=2` 和 `RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT=1` 后，每张卡可同时训练两个账号。同一账号在同一张卡上的后续任务进入队列。空出的名额由最早提交且当前有资格运行的任务使用。
+
+在平台服务的受保护环境文件配置 `RDK_SIM2REAL_SHARED_GPU_POOL_JSON`，每项包含 `name`、`runnerUrl`（以 `/train` 结尾）和 `runnerToken`（至少 32 字符）。原有 `RDK_SIM2REAL_SHARED_GPU_URL` 和 `RDK_SIM2REAL_SHARED_GPU_TOKEN` 可以继续保留，已关联的训练记录仍使用原资源 ID。通过 `RDK_SIM2REAL_SHARED_GPU_NAME` 可以设置原资源的显示名称。
+
+学员登录后在算力下拉框选择所需 GPU。提交后任务留在所选卡的队列，运行记录、日志、策略、回放和取消操作由平台和 Worker 按账号授权。
 
 恢复课请在 Worker 的引擎配置中为 `originman-recovery` 配置 Python executable、指向 `workshop_adapter.py` 的 args 和指向同目录 `workshop_preflight.py` 的 preflightArgs。环境预检使用该 Python 检查场景、依赖和所选训练设备。

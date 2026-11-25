@@ -135,7 +135,7 @@ const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
 const queuedJobs = [];
 const activeJobs = new Set();
-let screening = false;
+let screening = null;
 let workerShuttingDown = false;
 const jobChildren = new Map();
 const cancellationBarriers = new Map();
@@ -594,22 +594,29 @@ function engineFor(request) {
   return { engineId: selected.id, executable: selected.executable, args: selected.args };
 }
 
-function maxConcurrentJobs() {
-  const raw = String(process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS || '1').trim();
+function concurrencyLimit(name, fallback, upperBound) {
+  const raw = String(process.env[name] ?? fallback).trim();
   const value = Number(raw);
-  if (
-    !/^\d+$/.test(raw) ||
-    !Number.isSafeInteger(value) ||
-    value < 1 ||
-    value > MAX_CONCURRENT_JOBS_LIMIT
-  ) {
+  if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < 1 || value > upperBound) {
     throw fail(
-      `RDK_SIM2REAL_MAX_CONCURRENT_JOBS must be an integer from 1 to ${MAX_CONCURRENT_JOBS_LIMIT}`,
+      `${name} must be an integer from 1 to ${upperBound}`,
       500,
       'worker_configuration_invalid',
     );
   }
   return value;
+}
+
+function concurrencyLimits() {
+  const total = concurrencyLimit('RDK_SIM2REAL_MAX_CONCURRENT_JOBS', 1, MAX_CONCURRENT_JOBS_LIMIT);
+  const perAccount = concurrencyLimit('RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT', total, total);
+  return { total, perAccount };
+}
+
+function activeAccountJobs(owner) {
+  let count = 0;
+  for (const job of activeJobs) if (job.accountId === owner) count++;
+  return count;
 }
 
 function publicJob(job) {
@@ -650,6 +657,7 @@ function childEnvironment(job) {
   // model-registry credential should inject it through its own wrapper.
   for (const key of Object.keys(environment)) {
     if (
+      key === 'RDK_SIM2REAL_SHARED_GPU_POOL_JSON' ||
       /^(?:RDK_SIM2REAL|RDK_STUDIO|SSO)_.*(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/i.test(key) ||
       /^(?:RDK_SIM2REAL|RDK_STUDIO)_.*(?:COOKIE|DATABASE_URL)$/i.test(key)
     ) {
@@ -1084,9 +1092,9 @@ async function finish(job, code, stdout, stderr) {
 }
 
 async function pumpQueue() {
-  let limit;
+  let limits;
   try {
-    limit = maxConcurrentJobs();
+    limits = concurrencyLimits();
   } catch {
     // /healthz reports invalid configuration. Keep queued work visible rather
     // than launching it with an implicit fallback or dropping it.
@@ -1095,11 +1103,17 @@ async function pumpQueue() {
   while (
     !workerShuttingDown &&
     !preflightInFlight &&
-    activeJobs.size + Number(screening) < limit &&
+    activeJobs.size + Number(Boolean(screening)) < limits.total &&
     queuedJobs.length
   ) {
-    const job = queuedJobs.shift();
-    if (!job || job.status !== 'queued') continue;
+    // A second job from a running account must not block the next eligible account.
+    const index = queuedJobs.findIndex(
+      (job) =>
+        job.status === 'queued' &&
+        activeAccountJobs(job.accountId) + Number(screening === job.accountId) < limits.perAccount,
+    );
+    if (index < 0) return;
+    const [job] = queuedJobs.splice(index, 1);
     let config;
     try {
       // Engine routing is resolved at launch time from the persisted request
@@ -1156,7 +1170,7 @@ async function handleTrain(request, response) {
     throw fail('the reference upload transport requires OriginMan reference tracking');
   }
   const engines = workerEngines();
-  maxConcurrentJobs();
+  concurrencyLimits();
   if (!engines.size) {
     json(response, 503, {
       ok: false,
@@ -1226,21 +1240,23 @@ async function handleTrain(request, response) {
 }
 
 async function handleReferenceScreen(request, response) {
-  accountId(request, {});
+  const owner = accountId(request, {});
   await ensureJobsLoaded();
   const engine = engineFor({ training: { engine: REFERENCE_ENGINE } });
   if (!engineExecutableReady(engine.executable)) {
     throw fail('reference engine executable is unavailable', 503, 'engine_executable_unavailable');
   }
+  const limits = concurrencyLimits();
   if (
     preflightInFlight ||
     screening ||
     queuedJobs.length ||
-    activeJobs.size >= maxConcurrentJobs()
+    activeJobs.size >= limits.total ||
+    activeAccountJobs(owner) >= limits.perAccount
   ) {
     throw fail('reference worker is busy', 409, 'reference_screen_busy');
   }
-  screening = true;
+  screening = owner;
   try {
     const trajectory = await bodyJson(request, MAX_REFERENCE_BODY);
     const input = JSON.stringify(trajectory);
@@ -1286,7 +1302,7 @@ async function handleReferenceScreen(request, response) {
       referenceSha256: createHash('sha256').update(input).digest('hex'),
     });
   } finally {
-    screening = false;
+    screening = null;
     void pumpQueue();
   }
 }
@@ -1984,6 +2000,7 @@ export function createLocalTrainingWorkerServer() {
       if (request.method === 'GET' && request.url === '/healthz') {
         let configured = false;
         let engineIds = [];
+        let limits;
         try {
           const engines = workerEngines();
           configured = engines.size > 0;
@@ -1991,7 +2008,7 @@ export function createLocalTrainingWorkerServer() {
             .filter((engine) => engineExecutableReady(engine.executable))
             .map((engine) => engine.id)
             .sort();
-          maxConcurrentJobs();
+          limits = concurrencyLimits();
         } catch (error) {
           json(response, 503, {
             ok: false,
@@ -2024,7 +2041,8 @@ export function createLocalTrainingWorkerServer() {
             : configured && !engineIds.length
               ? { error: 'engine_executable_unavailable' }
               : {}),
-          maxConcurrentJobs: maxConcurrentJobs(),
+          maxConcurrentJobs: limits.total,
+          maxConcurrentJobsPerAccount: limits.perAccount,
           activeJobs: activeJobs.size,
           queuedJobs: queuedJobs.length,
           cuda: null,
