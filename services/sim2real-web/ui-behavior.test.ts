@@ -474,6 +474,49 @@ async function boot(
 }
 
 describe('Sim2Real workbench DOM behavior', () => {
+  it('coalesces silent refreshes and preserves a deliberate follow-up refresh', async () => {
+    const { window } = await boot();
+    const fetchDefault = window.fetch;
+    const pending: Array<(response: Response) => void> = [];
+    window.fetch = vi.fn((input, init) => {
+      if (!String(input).includes('/overview?')) return fetchDefault(input, init);
+      return new Promise<Response>((resolve) => pending.push(resolve));
+    });
+    const load = window.eval('loadOverview') as (options: { silent?: boolean }) => Promise<void>;
+    const first = load({ silent: true });
+    expect(load({ silent: true })).toBe(first);
+    const followUp = load({});
+    expect(load({})).toBe(followUp);
+    expect(pending).toHaveLength(1);
+    pending[0](Response.json(overview()));
+    await first;
+    await vi.waitFor(() => expect(pending).toHaveLength(2));
+    pending[1](Response.json(overview()));
+    await followUp;
+    expect(window.document.getElementById('main-content')?.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('does not replace newer model compatibility when an older request finishes last', async () => {
+    const { window } = await boot();
+    const pending: Array<(response: Response) => void> = [];
+    window.fetch = vi.fn(() => new Promise<Response>((resolve) => pending.push(resolve)));
+    const load = window.eval('loadModelDetails') as (modelId: string) => Promise<void>;
+    const first = load('model-1');
+    const newer = load('model-1');
+    pending[1](
+      Response.json({ model: model(), compatibility: [{ platform: 'rdk-x5', deployable: true }] }),
+    );
+    await newer;
+    expect(window.document.querySelector('.compatibility-summary-label')?.textContent).toBe(
+      '可上板',
+    );
+    pending[0](Response.json({ model: model(), compatibility: [] }));
+    await first;
+    expect(window.document.querySelector('.compatibility-summary-label')?.textContent).toBe(
+      '可上板',
+    );
+  });
+
   it('shows an SSH probe failure even when the tunnel can still be disconnected', async () => {
     const { window } = await boot({
       url: 'http://127.0.0.1:3000/sim2real/#station/devices',

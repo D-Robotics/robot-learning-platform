@@ -1,7 +1,7 @@
-import type { Sim2RealRunRecord } from '../../shared/sim2real.js';
+import type { Sim2RealComputeResource, Sim2RealRunRecord } from '../../shared/sim2real.js';
 import { fetchLocalRunArtifact } from './local-runner.js';
 import { readPolicyArtifact } from './policy-artifact-store.js';
-import { getSim2RealComputeResourceSecret } from './sim2real-store.js';
+import { getSim2RealComputeResourceSecret, readSim2RealRelayArtifact } from './sim2real-store.js';
 
 export type RunPolicyRetention =
   | { state: 'not-applicable' }
@@ -39,7 +39,12 @@ async function readRunPolicyArchive(
   owner: string | undefined,
   sha256: string,
 ): Promise<{ retention: RunPolicyRetention; bytes?: Buffer }> {
-  if (run.relayAgentUrl) return { retention: { state: 'not-applicable' } };
+  if (run.relayAgentUrl) {
+    const bytes = await readSim2RealRelayArtifact(sha256);
+    return bytes
+      ? { retention: { state: 'retained', sha256, bytes: bytes.length }, bytes }
+      : { retention: { state: 'unavailable', sha256 } };
+  }
   const stored = await readPolicyArtifact(sha256, owner);
   return stored.state === 'retained'
     ? { retention: { state: 'retained', sha256, bytes: stored.bytes.length }, bytes: stored.bytes }
@@ -61,7 +66,10 @@ export async function resolveRunPolicyDownload(
   run: Sim2RealRunRecord,
   owner: string | undefined,
   accountId: string,
-  timeoutMs?: number,
+  options: {
+    timeoutMs?: number;
+    allowWorker?: (resource: Sim2RealComputeResource) => boolean;
+  } = {},
 ) {
   const policy = validateRunPolicy(run);
   if (!policy.ok) return { ...policy, retention: { state: 'not-applicable' } } as const;
@@ -75,15 +83,19 @@ export async function resolveRunPolicyDownload(
       source: 'platform-retained',
       retention,
     } as const;
-  const resource = run.computeResourceId
-    ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
-    : null;
+  const resource =
+    !run.relayAgentUrl && run.computeResourceId
+      ? await getSim2RealComputeResourceSecret(run.computeResourceId, owner)
+      : null;
   const fetched =
-    accountId && (!run.computeResourceId || resource)
+    !run.relayAgentUrl &&
+    accountId &&
+    (!run.computeResourceId ||
+      (resource && (!options.allowWorker || options.allowWorker(resource.resource))))
       ? await fetchLocalRunArtifact({
           accountId,
           externalRunId: policy.externalRunId,
-          timeoutMs,
+          timeoutMs: options.timeoutMs,
           ...(resource
             ? { runnerUrl: resource.resource.runnerUrl, runnerToken: resource.runnerToken ?? '' }
             : {}),
@@ -94,7 +106,7 @@ export async function resolveRunPolicyDownload(
       ok: false,
       status: 502,
       code: 'SIM2REAL_ARTIFACT_FETCH_FAILED',
-      message: '无法从执行端取回制品字节。',
+      message: run.relayAgentUrl ? '中继制品尚未上传或无法读取。' : '无法从执行端取回制品字节。',
       retention,
     } as const;
   if (fetched.sha256 !== policy.sha256)

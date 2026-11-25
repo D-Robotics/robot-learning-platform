@@ -707,7 +707,7 @@ paths:
     get:
       tags: [runs]
       summary: Download the digest-verified ONNX policy for a completed local Run
-      description: Prefers the verified copy held by the platform for the current account, with a worker fallback.
+      description: Prefers the verified copy held by the platform, including uploaded relay artifacts. Non-relay runs can fall back to the original worker.
       operationId: getRunArtifact
       responses:
         "200":
@@ -843,9 +843,8 @@ paths:
         Serves the digest-verified ONNX artifact of a completed, real (non-mock)
         local run so the browser trial runs the exact bytes that would be
         staged to a board. The browser trial is an operator aid and never
-        release evidence. The response carries the worker-recomputed
-        X-Artifact-Sha256 header and is rejected when it diverges from the
-        ledger's recorded digest.
+        release evidence. The response carries X-Artifact-Sha256, verified
+        against the run ledger for either retained or worker-served bytes.
       parameters:
         - $ref: "#/components/parameters/RunId"
       responses:
@@ -2374,19 +2373,19 @@ paths:
       operationId: postBoardStationDriveStop
       description: >-
         Zero-speed emergency stop. Always forwarded to the board agent
-        regardless of both drive switches, so the stop path has no failure
-        mode from gating. The board writes a zero command frame and the
-        chassis watchdog enforces rest.
+        regardless of the drive switches. The acknowledgment covers the
+        zero command or publisher shutdown. Check motion feedback for rest.
       parameters:
         - in: query
           name: deviceId
           schema: { type: string }
       responses:
         "200":
-          description: Stop delivered; zero-speed frame published.
+          description: Zero command accepted or publisher stopped.
           content: { application/json: { schema: { $ref: "#/components/schemas/DriveState" } } }
         "401": { $ref: "#/components/responses/AuthRequired" }
-        "502": { description: Board agent unreachable; chassis watchdog still enforces rest. }
+        "502": { description: Delivery to the board agent could not be confirmed. }
+        "503": { description: The board agent could not confirm zero output. }
   /api/v1/duck/board-station/policy-infer:
     post:
       tags: [board-station]

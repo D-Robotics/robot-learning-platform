@@ -136,11 +136,13 @@ function safeProgress(job) {
   }
   return points.length ? points : undefined;
 }
-const MAX_JOBS = 1000;
+const MAX_OUTSTANDING_JOBS = 1000;
 const MAX_CONCURRENT_JOBS_LIMIT = 32;
 const SAFE_RUN_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,199}$/;
 const profiles = new Set(['smoke', 'low-vram', 'standard', 'high-vram']);
 const jobs = new Map();
+const archivedJobs = new Map();
+const archivedJobKeys = new Map();
 const pendingJobWrites = new WeakMap();
 const queuedJobs = [];
 const activeJobs = new Set();
@@ -151,6 +153,29 @@ const cancellationBarriers = new Map();
 const activeChildren = new Set();
 const finalizingJobs = new Set();
 let jobsLoadPromise;
+const terminalJobStatuses = new Set(['cancelled', 'completed', 'failed']);
+
+function archivedJobKey(owner, key) {
+  return JSON.stringify([owner, key]);
+}
+
+function archiveJob(job) {
+  archivedJobs.set(job.runId, job.accountId);
+  if (job.idempotencyKey) {
+    archivedJobKeys.set(archivedJobKey(job.accountId, job.idempotencyKey), job.runId);
+  }
+  jobs.delete(job.runId);
+}
+
+async function readWorkerJob(runId, owner) {
+  const current = jobs.get(runId);
+  if (current) return current.accountId === owner ? current : null;
+  if (archivedJobs.get(runId) !== owner) return null;
+  const dir = path.join(DATA_DIR, runId);
+  const job = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8'));
+  if (job.accountId !== owner || !terminalJobStatuses.has(job.status)) return null;
+  return { ...job, dir, runId };
+}
 
 function loopbackHost(host) {
   const value = String(host || '')
@@ -696,7 +721,7 @@ async function restorePersistedJobs() {
   }
   const recovered = [];
   for (const entry of entries) {
-    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name) || jobs.size >= MAX_JOBS) continue;
+    if (!entry.isDirectory() || !SAFE_RUN_ID.test(entry.name)) continue;
     const dir = path.join(DATA_DIR, entry.name);
     try {
       const parsed = JSON.parse(await readFile(path.join(dir, 'job.json'), 'utf8'));
@@ -737,9 +762,13 @@ async function restorePersistedJobs() {
       }
       delete candidate.pid;
       delete candidate.timeout;
-      jobs.set(candidate.runId, candidate);
-      if (candidate.errorCode === 'worker_restarted')
-        await persist(candidate).catch(() => undefined);
+      if (['queued', 'running', 'cancelling'].includes(parsed.status)) {
+        jobs.set(candidate.runId, candidate);
+        if (candidate.errorCode === 'worker_restarted')
+          await persist(candidate).catch(() => undefined);
+      } else {
+        archiveJob(candidate);
+      }
     } catch {
       // A partial/corrupt job must not make the worker unavailable. It is
       // intentionally left on disk for operator inspection.
@@ -997,11 +1026,16 @@ async function launch(job, config) {
     stderr = (stderr + String(chunk)).slice(-MAX_LOG);
     feedLogStream(job, 'stderr', chunk);
   });
-  const timeoutMs = Math.min(
-    Math.max(Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000), 1000),
-    7 * 86_400_000,
-  );
-  job.timeout = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+  const requestedTimeout = Number(process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS || 86_400_000);
+  const timeoutMs = Number.isFinite(requestedTimeout)
+    ? Math.min(Math.max(requestedTimeout, 1000), 7 * 86_400_000)
+    : 86_400_000;
+  job.timeout = setTimeout(() => {
+    if (job.cancelRequestedAt || finalizingJobs.has(job)) return;
+    job.timedOutAt = new Date().toISOString();
+    job.message = '训练已超时，正在等待训练进程退出。';
+    stopTrainingChild(job, child);
+  }, timeoutMs);
   child.once('error', (error) => {
     feedLogStream(job, 'stderr', error.message + '\n');
     return finish(job, 1, stdout, `${stderr}\n${error.message}`);
@@ -1014,13 +1048,16 @@ async function launch(job, config) {
 async function finish(job, code, stdout, stderr) {
   if (job.finishedAt || finalizingJobs.has(job)) return;
   finalizingJobs.add(job);
+  if (job.timeout) clearTimeout(job.timeout);
   const cancellation = cancellationBarriers.get(job);
   if (cancellation && !(await cancellation)) {
     finalizingJobs.delete(job);
-    job.message = '取消尚未确认：训练进程组仍存在或无法检查，请检查 worker；资源仍保留。';
+    job.message = '尚未确认训练进程组已退出，请检查 Worker。训练资源仍保留。';
     await persist(job).catch(() => undefined);
     return;
   }
+  const child = jobChildren.get(job);
+  if (child) activeChildren.delete(child);
   jobChildren.delete(job);
   cancellationBarriers.delete(job);
   // The process is done, so no chunk can complete a partial line anymore:
@@ -1030,20 +1067,18 @@ async function finish(job, code, stdout, stderr) {
     if (partial) appendLogLine(job, stream, partial);
   }
   job.logPartials = undefined;
-  if (job.timeout) clearTimeout(job.timeout);
-  const childPid = job.pid;
-  for (const child of activeChildren) {
-    if (childPid != null && child.pid === childPid) activeChildren.delete(child);
-  }
   activeJobs.delete(job);
   job.timeout = undefined;
   job.finishedAt = new Date().toISOString();
   job.pid = undefined;
   try {
-    if (job.cancelRequestedAt) {
-      job.status = 'cancelled';
+    if (job.cancelRequestedAt || job.timedOutAt) {
+      job.status = job.timedOutAt ? 'failed' : 'cancelled';
       job.deployable = false;
-      job.message = '训练已取消，执行进程已停止；未发布训练制品。';
+      if (job.timedOutAt) job.errorCode = 'training_timeout';
+      job.message = job.timedOutAt
+        ? '训练超过时限，执行进程已停止。'
+        : '训练已取消，执行进程已停止；未发布训练制品。';
       job.exitCode = code;
       if (stdout) job.stdoutTail = scrubLog(stdout);
       if (stderr) job.stderrTail = scrubLog(stderr);
@@ -1203,6 +1238,9 @@ async function persist(job) {
   pendingJobWrites.set(job, pending);
   try {
     await pending;
+    if (terminalJobStatuses.has(snapshot.status) && jobs.get(job.runId) === job) {
+      archiveJob(job);
+    }
   } finally {
     if (pendingJobWrites.get(job) === pending) pendingJobWrites.delete(job);
   }
@@ -1235,22 +1273,28 @@ async function handleTrain(request, response) {
   const owner = accountId(request, source);
   const key = requestKey(request, source);
   const fingerprint = requestFingerprint(source, owner);
-  for (const job of jobs.values()) {
-    if (key && job.accountId === owner && job.idempotencyKey === key) {
-      if (job.fingerprint !== fingerprint)
+  if (key) {
+    const archivedId = archivedJobKeys.get(archivedJobKey(owner, key));
+    const previous = archivedId
+      ? await readWorkerJob(archivedId, owner)
+      : [...jobs.values()].find((job) => job.accountId === owner && job.idempotencyKey === key);
+    if (archivedId && !previous)
+      throw fail('无法读取已归档的任务。', 503, 'worker_job_archive_unavailable');
+    if (previous) {
+      if (previous.fingerprint !== fingerprint)
         throw fail(
           'Idempotency-Key was reused for a different request',
           409,
           'idempotency_conflict',
         );
-      json(response, 200, { ...publicJob(job), idempotentReplay: true });
+      json(response, 200, { ...publicJob(previous), idempotentReplay: true });
       return;
     }
   }
   if (!engine || !engineExecutableReady(engine.executable))
     throw fail('所选训练引擎的解释器或可执行文件不可用。', 503, 'engine_executable_unavailable');
-  if (jobs.size >= MAX_JOBS)
-    throw fail('worker job retention limit reached', 429, 'worker_queue_full');
+  if (jobs.size >= MAX_OUTSTANDING_JOBS)
+    throw fail('worker queue limit reached', 429, 'worker_queue_full');
   const runId = `local-${normalized.modelId.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 48)}-${randomUUID()}`;
   const dir = path.join(DATA_DIR, runId);
   const job = {
@@ -1359,11 +1403,6 @@ async function handleReferenceScreen(request, response) {
 
 async function handleStatus(request, response, runId) {
   await ensureJobsLoaded();
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1371,7 +1410,8 @@ async function handleStatus(request, response, runId) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1664,6 +1704,44 @@ async function hasLiveProcessGroup(
     return true;
   }
 }
+// Running jobs own a POSIX process group, including subprocesses launched
+// by the training engine. Keep the slot until the group has shut down.
+function stopTrainingChild(job, child) {
+  const group = process.platform !== 'win32' && child.pid;
+  const signal = (name) => {
+    try {
+      if (group) process.kill(-group, name);
+      else child.kill(name);
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+  };
+  cancellationBarriers.set(
+    job,
+    (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      try {
+        signal('SIGKILL');
+        for (let attempt = 0; attempt < 40; attempt++) {
+          const running = group
+            ? await hasLiveProcessGroup(group)
+            : child.exitCode === null && child.signalCode === null;
+          if (!running) return true;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      } catch {
+        // An uncertain shutdown retains its reservation for operator review.
+      }
+      return false;
+    })(),
+  );
+  try {
+    signal('SIGTERM');
+  } catch {
+    // The bounded forced-stop path still attempts to reclaim the process.
+  }
+}
+
 async function handleCancel(request, response, runId) {
   await ensureJobsLoaded();
   let owner;
@@ -1673,8 +1751,8 @@ async function handleCancel(request, response, runId) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  const job = jobs.get(runId);
-  if (!job || job.accountId !== owner) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1682,7 +1760,7 @@ async function handleCancel(request, response, runId) {
     json(response, 200, publicJob(job));
     return;
   }
-  if (job.status === 'cancelling') {
+  if (job.status === 'cancelling' || job.timedOutAt) {
     json(response, 202, publicJob(job));
     return;
   }
@@ -1718,36 +1796,8 @@ async function handleCancel(request, response, runId) {
   }
   job.status = 'cancelling';
   job.message = '已请求取消，正在等待训练进程退出。';
-  // Each engine owns its POSIX process group. Kill the group rather than just
-  // the Python launcher, otherwise multiprocessing/CUDA workers can survive.
-  const signalGroup = (signal) => {
-    try {
-      process.kill(-child.pid, signal);
-    } catch (error) {
-      if (error.code !== 'ESRCH') throw error;
-    }
-  };
-  cancellationBarriers.set(
-    job,
-    new Promise((resolve) => {
-      setTimeout(async () => {
-        try {
-          signalGroup('SIGKILL');
-          for (let attempt = 0; attempt < 40; attempt++) {
-            if (!(await hasLiveProcessGroup(child.pid))) {
-              resolve(true);
-              return;
-            }
-            await new Promise((done) => setTimeout(done, 25));
-          }
-          resolve(false);
-        } catch {
-          resolve(false);
-        }
-      }, 1500);
-    }),
-  );
-  signalGroup('SIGTERM');
+  if (job.timeout) clearTimeout(job.timeout);
+  stopTrainingChild(job, child);
   await persist(job);
   json(response, 202, publicJob(job));
 }
@@ -1765,11 +1815,6 @@ async function handleCancel(request, response, runId) {
 async function handleArtifact(request, response) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent((request.url || '').slice('/runs/'.length, -'/artifact'.length));
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1777,7 +1822,8 @@ async function handleArtifact(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1860,8 +1906,8 @@ async function handleArtifact(request, response) {
 async function handleRunVideo(request, response, kind) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent(request.url.slice('/runs/'.length, -(kind.length + 1)));
-  const job = jobs.get(runId);
-  if (!job || job.accountId !== accountId(request, {})) {
+  const job = await readWorkerJob(runId, accountId(request, {}));
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -1949,11 +1995,6 @@ async function handleTelemetry(request, response) {
   const runId = decodeURIComponent(
     (request.url || '').slice('/runs/'.length, -'/telemetry'.length),
   );
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -1961,7 +2002,8 @@ async function handleTelemetry(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }
@@ -2032,11 +2074,6 @@ async function handleLogs(request, response) {
     return;
   }
   const runId = decodeURIComponent(url.pathname.slice('/runs/'.length, -'/logs'.length));
-  const job = jobs.get(runId);
-  if (!job) {
-    json(response, 404, { ok: false, error: 'run_not_found' });
-    return;
-  }
   let owner;
   try {
     owner = accountId(request, {});
@@ -2044,7 +2081,8 @@ async function handleLogs(request, response) {
     json(response, 401, { ok: false, error: 'account_required' });
     return;
   }
-  if (owner !== job.accountId) {
+  const job = await readWorkerJob(runId, owner);
+  if (!job) {
     json(response, 404, { ok: false, error: 'run_not_found' });
     return;
   }

@@ -282,37 +282,23 @@ const originmanTaskPage = new URL('?robot=originman#train/prepare', BASE);
 await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
 await page.locator('#originman-default-contracts').waitFor({ state: 'visible' });
 const task = page.getByRole('combobox', { name: '选择训练任务契约' });
-const classroom = page.getByRole('button', { name: '打开受扰恢复课堂', exact: true });
-record('the dance task has no recovery classroom shortcut', !(await classroom.isVisible()));
-await task.selectOption('recovery');
-await classroom.waitFor({ state: 'visible' });
+record('OriginMan opens with the dance task selected', (await task.inputValue()) === 'dance');
+record(
+  'the retired recovery contract is absent from the selector',
+  (await task.locator('option[value="recovery"]').count()) === 0 &&
+    (await page.getByRole('button', { name: '打开受扰恢复课堂', exact: true }).count()) === 0,
+);
+const useContract = page.getByRole('button', { name: '使用所选任务契约', exact: true });
+await task.selectOption('');
+await useContract.waitFor({ state: 'visible' });
+record('an empty selection cannot apply a contract', await useContract.isDisabled());
 await task.selectOption('dance');
-record('switching back to dance hides the recovery shortcut', !(await classroom.isVisible()));
-await task.selectOption('recovery');
-await classroom.click();
-await page.waitForURL(/#classroom$/);
-const recoveryHeading = page.getByRole('heading', {
-  name: 'OriginMan · 受扰恢复课堂',
-  exact: true,
-});
-await recoveryHeading.waitFor({ state: 'visible' });
-record(
-  'the recovery task opens the native simulator and recovery evidence in the workbench',
-  (await page.locator('#originman-sim-canvas').count()) === 1 &&
-    (await page.locator('#originman-round-comparison').count()) === 1 &&
-    (await page.locator('[data-view-section="classroom"] iframe').count()) === 0,
+await page.waitForFunction(() =>
+  /78 维观测.*18 维动作/.test(
+    document.getElementById('originman-contract-status')?.textContent || '',
+  ),
 );
-await page.goBack({ waitUntil: 'domcontentloaded' });
-record(
-  'leaving the classroom restores the OriginMan model panel',
-  (await task.isVisible()) && !(await recoveryHeading.isVisible()),
-);
-await page.goto(new URL('#classroom', BASE).href, { waitUntil: 'domcontentloaded' });
-await recoveryHeading.waitFor({ state: 'visible' });
-record(
-  'a standalone classroom bookmark restores OriginMan and the native classroom',
-  (await page.locator('#product-select').inputValue()) === 'originman',
-);
+record('the dance contract is ready and displays its dimensions', await useContract.isEnabled());
 
 await page.setViewportSize({ width: 390, height: 844 });
 await page.goto(BASE, { waitUntil: 'domcontentloaded' });
@@ -324,12 +310,10 @@ record(
   await courseGuide.getByRole('heading', { name: '确认账号与本组编号' }).isVisible(),
 );
 await page.goto(originmanTaskPage.href, { waitUntil: 'domcontentloaded' });
-await task.selectOption('recovery');
-await classroom.click();
-await recoveryHeading.waitFor({ state: 'visible' });
+await useContract.waitFor({ state: 'visible' });
 record(
-  'the mobile classroom opens the native simulation panel within the workbench',
-  await page.getByRole('heading', { name: 'OriginMan 仿真场', exact: true }).isVisible(),
+  'the mobile workbench keeps the OriginMan dance contract accessible',
+  (await task.inputValue()) === 'dance' && (await task.isVisible()),
 );
 
 record(

@@ -9091,11 +9091,18 @@ function renderAll() {
   if (activeView === 'deploy') applySubinterfacePartition('deploy', state.deployModule || 'preflight');
 }
 
+let modelDetailsGeneration = 0;
 async function loadModelDetails(modelId = state.selectedModelId) {
+  const generation = ++modelDetailsGeneration;
   if (!modelId) return;
+  const productId = state.productId;
+  const current = () =>
+    generation === modelDetailsGeneration &&
+    modelId === state.selectedModelId &&
+    productId === state.productId;
   try {
     const payload = await request('/sim2real/models/' + encodeURIComponent(modelId));
-    if (modelId !== state.selectedModelId) return;
+    if (!current()) return;
     state.model = payload.model || null;
     state.compatibility = payload.compatibility || [];
     if (state.model) {
@@ -9106,7 +9113,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
       renderReleaseGate();
     }
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401)) {
+    if (current() && !(error instanceof ApiError && error.status === 401)) {
       showToast(error instanceof Error ? error.message : '模型详情加载失败', 'error');
     }
   }
@@ -9114,6 +9121,7 @@ async function loadModelDetails(modelId = state.selectedModelId) {
 
 async function refreshActiveRuns() {
   const overview = state.overview;
+  const productId = state.productId;
   if (!overview?.runs?.length) return;
   const now = Date.now();
   for (const [deadRunId, deadUntil] of runStatusDeadUntil) {
@@ -9162,7 +9170,7 @@ async function refreshActiveRuns() {
     }),
   );
   const byId = new Map(updates.filter(Boolean).map((run) => [run.id, run]));
-  if (!byId.size || !state.overview) return;
+  if (!byId.size || overview !== state.overview || productId !== state.productId) return;
   const previousRuns = state.overview.runs;
   state.overview = {
     ...state.overview,
@@ -9293,18 +9301,39 @@ function renderResearchLoop() {
   );
 }
 
-async function loadOverview({ quiet = false, silent = false } = {}) {
-  // A foreground load and a background poll must never overlap; whichever
-  // got there first wins (this also keeps the poll's own chain serialized).
-  if (state.loading) return;
-  setLoading(!silent);
+let overviewRequest = null;
+let queuedOverviewRefresh = null;
+
+function loadOverview(options = {}) {
+  if (overviewRequest) {
+    if (options.silent) return overviewRequest;
+    // A deliberate refresh may follow a write or product switch. Run one
+    // fresh pass after the in-flight request and share it with other callers.
+    queuedOverviewRefresh ??= overviewRequest
+      .catch(() => undefined)
+      .then(() => {
+        queuedOverviewRefresh = null;
+        return loadOverview(options);
+      });
+    return queuedOverviewRefresh;
+  }
+  overviewRequest = fetchOverview(options).finally(() => {
+    overviewRequest = null;
+  });
+  return overviewRequest;
+}
+
+async function fetchOverview({ silent = false } = {}) {
+  const productId = state.productId;
+  if (!silent) setLoading(true);
   if (!state.overview) {
     setWorkspaceStatus('loading', '正在连接工作区', '正在读取项目、模型和设备状态…');
   }
   try {
     const payload = await request(
-      '/sim2real/overview?productId=' + encodeURIComponent(state.productId),
+      '/sim2real/overview?productId=' + encodeURIComponent(productId),
     );
+    if (productId !== state.productId) return;
     state.overview = payload;
     state.selectedComputeResourceId = state.selectedComputeResourceId || '';
     // The summary is intentionally lightweight and remains useful to future
@@ -9328,6 +9357,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
         ]);
     // Skipped auxiliary reads have no new success/failure evidence. Preserve
     // their last data and status until a foreground refresh checks them again.
+    if (productId !== state.productId) return;
     if (!silent) {
       state.workspaceSummary = summaryResult.status === 'fulfilled' ? summaryResult.value : state.workspaceSummary;
       if (researchLoopResult.status === 'fulfilled' && researchLoopResult.value?.ok && researchLoopResult.value?.summary) {
@@ -9358,10 +9388,12 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
     void loadWorkspaceNotices();
     clearAuthGate();
     await refreshActiveRuns();
+    if (productId !== state.productId) return;
     renderAll();
     // Model details rarely change while a run is in flight; re-fetching them
     // every silent poll doubles request volume for zero operator value.
     if (!silent) await loadModelDetails();
+    if (productId !== state.productId) return;
     setText('hero-updated', '更新于 ' + formatDate(new Date().toISOString()));
     if (summaryResult.status === 'rejected' || projectsResult.status === 'rejected' || datasetsResult.status === 'rejected') {
       const failed = [summaryResult, projectsResult, datasetsResult].filter((result) => result.status === 'rejected').length;
@@ -9370,6 +9402,7 @@ async function loadOverview({ quiet = false, silent = false } = {}) {
       clearWorkspaceStatus();
     }
   } catch (error) {
+    if (productId !== state.productId) return;
     state.serviceError = !(error instanceof ApiError && error.status === 401);
     setText(
       'service-status',
@@ -12225,6 +12258,8 @@ function wireEvents() {
   });
   $('model-select')?.addEventListener('change', async (event) => {
     state.selectedModelId = event.target.value;
+    state.model = null;
+    state.compatibility = [];
     state.activeDeployment = null;
     state.telemetry = state.telemetry?.modelId === state.selectedModelId ? state.telemetry : null;
     saveWorkspaceContext();

@@ -12,6 +12,7 @@ import {
   appendSim2RealTelemetry,
   createSim2RealRun,
   reserveSim2RealRun,
+  storeSim2RealRelayArtifact,
   updateSim2RealComputeResource,
 } from '../sim2real/sim2real-store.js';
 import { readDevices } from '../sim2real/standalone-adapters.js';
@@ -2198,6 +2199,47 @@ describe('Sim2Real HTTP routes', () => {
       expect(download.body).toMatchObject({ code: 'SIM2REAL_ARTIFACT_DIGEST_MISMATCH' });
     } finally {
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('downloads and trials the same retained relay bytes without contacting a worker', async () => {
+    const router = await fixture();
+    const registered = await invoke(router, 'post', '/api/sim2real/models', {
+      body: { manifest: userManifest() },
+    });
+    const { model } = registered.body as { model: { id: string } };
+    const bytes = Buffer.from('relay-policy-fixture');
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const run = await createSim2RealRun({
+      modelId: model.id,
+      status: 'completed',
+      summary: 'relay-test',
+      backend: 'local',
+      mock: false,
+      externalRunId: 'worker-relay-test',
+      relayAgentUrl: 'http://127.0.0.1:19091/train',
+      artifact: {
+        artifactId: 'relay-artifact',
+        artifactRef: 'artifact://relay/policy.onnx',
+        kind: 'source',
+        format: 'onnx',
+        sha256,
+      },
+    });
+    await storeSim2RealRelayArtifact(sha256, bytes);
+    const fetchWorker = vi.spyOn(globalThis, 'fetch').mockRejectedValue(Error('offline'));
+    try {
+      for (const suffix of ['artifact', 'policy.onnx']) {
+        const result = await invoke(router, 'get', '/api/sim2real/runs/:id/' + suffix, {
+          params: { id: run.id },
+        });
+        expect(result.statusCode).toBe(200);
+        expect(result.headers['x-artifact-sha256']).toBe(sha256);
+        expect(result.body).toEqual(bytes);
+      }
+      expect(fetchWorker).not.toHaveBeenCalled();
+    } finally {
+      fetchWorker.mockRestore();
     }
   });
 

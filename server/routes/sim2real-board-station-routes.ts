@@ -1019,24 +1019,24 @@ export function registerSim2RealBoardStationRoutes(
       const resolved = await resolveStation(request, response);
       if (!resolved) return;
       noStore(response);
-      const agent = await stationAgentFetch(
+      const agent = await stationAgentFetchWithStatus(
         '/v1/station/drive/stop',
         stationOptions(request, {
           method: 'POST',
           timeoutMs: 5000,
         }),
       );
-      if (!agent || typeof agent !== 'object') {
+      if (!agent) {
         sendApiError(
           response,
           502,
           'SIM2REAL_BOARD_AGENT_UNREACHABLE',
-          '急停命令未送达板端。持续按下急停并检查板端 agent；底盘固件看门狗（500ms 无命令自动停车）兜底。',
+          '无法确认板端收到停止指令。请使用设备物理急停并检查板端连接。',
           { retryable: true },
         );
         return;
       }
-      response.json(agent);
+      response.status(agent.status).json(agent.payload);
     }),
   );
 

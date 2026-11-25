@@ -377,6 +377,7 @@ describe('duck-lab-mcp platform client', () => {
   it('re-logins once on 401 and replays the original request with the fresh session', async () => {
     const calls: Array<{ url: string; method?: string; cookie?: string }> = [];
     let businessCalls = 0;
+    const runs = Array.from({ length: 30 }, (_, i) => ({ id: i, summary: 'x'.repeat(10_000) }));
     const fetchImpl = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
       const url = String(input);
       const headers = new Headers(init?.headers);
@@ -391,7 +392,7 @@ describe('duck-lab-mcp platform client', () => {
       }
       businessCalls += 1;
       if (businessCalls === 1) return new Response('{"message":"expired"}', { status: 401 });
-      return new Response('{"ok":true}', { status: 200 });
+      return Response.json({ ok: true, runs });
     }) as typeof fetch;
     const platform = createPlatformFetch(
       { ...baseConfig('http://platform.test'), username: 'u', password: 'p' },
@@ -403,7 +404,11 @@ describe('duck-lab-mcp platform client', () => {
       signal: new AbortController().signal,
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true });
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      runs: runs.slice(0, 12),
+      projection: { truncated: true },
+    });
     expect(calls.map((entry) => entry.url)).toEqual([
       'http://platform.test/api/sso/login',
       'http://platform.test/api/v1/duck/overview',

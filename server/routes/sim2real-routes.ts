@@ -142,7 +142,6 @@ import {
   updateSim2RealRun,
   claimSim2RealRunRelay,
   storeSim2RealRelayArtifact,
-  readSim2RealRelayArtifact,
   readSim2RealDanceVideo,
   storeSim2RealDanceVideo,
   updateSim2RealRunForReconcile,
@@ -2550,23 +2549,9 @@ export function createSim2RealRouter(
     requestOwner: (request, response) => requestOwner(request, response, auth),
     getRun: getSim2RealRun,
     fetchArtifact: async (run, owner) => {
-      const sha = run.artifact?.sha256;
-      if (!sha || run.backend !== 'local' || !run.externalRunId) return null;
-      if (run.relayAgentUrl) {
-        const bytes = await readSim2RealRelayArtifact(sha);
-        return bytes ? { bytes } : null;
-      }
-      const runner = await resolveRunRunner(run.computeResourceId, owner);
-      if (run.computeResourceId && !runner) return null;
       const accountId = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
-      return accountId
-        ? fetchLocalRunArtifact({
-            accountId,
-            externalRunId: run.externalRunId,
-            ...runner,
-            timeoutMs: 10_000,
-          })
-        : null;
+      const artifact = await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 10_000 });
+      return artifact.ok ? { bytes: artifact.bytes } : null;
     },
   });
 
@@ -3480,44 +3465,12 @@ export function createSim2RealRouter(
       resolveDeviceAgentUrl: (deviceId, stationOwner) =>
         deviceConnectionAgentUrl(deviceId, stationOwner),
       getRun: (runId, owner) => getSim2RealRun(runId, owner),
-      // Artifact bytes come from the run's own training worker; a run without
-      // an external id (remote/cleaned) simply cannot stage, fail-closed.
-      fetchRunArtifact: async (run, runOwner) => {
-        if (run.backend !== 'local' || !run.externalRunId) return null;
-        // The worker gates /runs/:id on the account that submitted the job.
-        // Training submission falls back to 'local-dev' in single-user mode,
-        // so the artifact fetch must resolve to the same account or the
-        // worker will (correctly) refuse the byte read.
-        const workerAccount = runOwner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
-        if (!workerAccount) return null;
-        const selectedResource = run.computeResourceId
-          ? await getSim2RealComputeResourceSecret(run.computeResourceId, runOwner)
-          : null;
-        // A run tied to a deleted resource must never silently download from
-        // the deployment-wide worker; doing so could stage a different run's
-        // artifact under the same external id.
-        if (run.computeResourceId && !selectedResource) return null;
-        if (run.relayAgentUrl && run.artifact?.sha256) {
-          const bytes = await readSim2RealRelayArtifact(run.artifact.sha256);
-          return bytes ? { bytes, sha256: run.artifact.sha256 } : null;
-        }
-        if (
-          run.computeResourceId &&
-          selectedResource &&
-          computeResourceHealthFailure(selectedResource.resource)
-        ) {
-          return null;
-        }
-        return fetchLocalRunArtifact({
-          accountId: workerAccount,
-          externalRunId: run.externalRunId,
-          ...(run.computeResourceId
-            ? {
-                runnerUrl: selectedResource!.resource.runnerUrl,
-                runnerToken: selectedResource!.runnerToken ?? '',
-              }
-            : {}),
+      fetchRunArtifact: async (run, owner) => {
+        const accountId = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
+        const artifact = await resolveRunPolicyDownload(run, owner, accountId, {
+          allowWorker: (resource) => !computeResourceHealthFailure(resource),
         });
+        return artifact.ok ? { bytes: artifact.bytes, sha256: artifact.sha256 } : null;
       },
     },
     { prefix },
@@ -4585,38 +4538,17 @@ export function createSim2RealRouter(
         });
         return;
       }
-      const runner = await resolveRunRunner(run.computeResourceId, owner);
-      if (run.computeResourceId && !runner) {
+      const artifact = await resolveRunPolicyDownload(run, owner, workerAccount);
+      if (!artifact.ok) {
+        const mismatch = artifact.code === 'SIM2REAL_ARTIFACT_DIGEST_MISMATCH';
         sendApiError(
           response,
           409,
-          'SIM2REAL_POLICY_TRIAL_ARTIFACT_UNAVAILABLE',
-          '原训练资源不可访问，无法读取策略。',
-        );
-        return;
-      }
-      const artifact = await fetchLocalRunArtifact({
-        accountId: workerAccount,
-        externalRunId: run.externalRunId,
-        ...(runner ? { runnerUrl: runner.runnerUrl, runnerToken: runner.runnerToken } : {}),
-      });
-      if (!artifact) {
-        sendApiError(
-          response,
-          409,
-          'SIM2REAL_POLICY_TRIAL_ARTIFACT_UNAVAILABLE',
-          '无法从训练 worker 读取制品字节（任务可能来自远端或制品已清理）。',
-          { retryable: true },
-        );
-        return;
-      }
-      if (run.artifact?.sha256 && artifact.sha256 !== run.artifact.sha256) {
-        sendApiError(
-          response,
-          409,
-          'SIM2REAL_POLICY_TRIAL_ARTIFACT_DIGEST_MISMATCH',
-          '制品字节与运行记录的 SHA-256 不一致，拒绝下发。',
-          { retryable: false },
+          mismatch
+            ? 'SIM2REAL_POLICY_TRIAL_ARTIFACT_DIGEST_MISMATCH'
+            : 'SIM2REAL_POLICY_TRIAL_ARTIFACT_UNAVAILABLE',
+          artifact.message,
+          { retryable: artifact.status === 502 },
         );
         return;
       }

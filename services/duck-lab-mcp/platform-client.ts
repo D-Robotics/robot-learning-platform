@@ -257,7 +257,8 @@ export function createPlatformFetch(
     const rewritten = path.startsWith(`${LEGACY_PREFIX}/`)
       ? `${config.apiPrefix}${path.slice(LEGACY_PREFIX.length)}`
       : path;
-    const response = await send(
+    const requestCookie = sessionCookie;
+    let response = await send(
       `${config.baseUrl}${rewritten}`,
       init.method,
       init.body,
@@ -265,12 +266,14 @@ export function createPlatformFetch(
       init.signal,
     );
     if (response.status === 401 && !config.cookie && config.username && config.password) {
-      sessionCookie = null;
-      // loginPromise still holds the resolved first login; drop it so
-      // ensureSession actually exchanges fresh credentials before the replay.
-      loginPromise = null;
+      await response.body?.cancel().catch(() => undefined);
+      // An overlapping request may already be refreshing this cookie.
+      if (requestCookie === sessionCookie) {
+        sessionCookie = null;
+        loginPromise = null;
+      }
       await ensureSession();
-      return send(
+      response = await send(
         `${config.baseUrl}${rewritten}`,
         init.method,
         init.body,

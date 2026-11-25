@@ -684,6 +684,23 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
     await mkdir(dir);
     await writeFile(path.join(dir, 'job.json'), JSON.stringify(snapshot));
   }
+  for (let offset = 0; offset < 1000; offset += 50) {
+    await Promise.all(
+      Array.from({ length: 50 }, async (_, index) => {
+        const id = 'local-history-' + (offset + index);
+        const dir = path.join(fixtureDir, id);
+        await mkdir(dir);
+        await writeFile(
+          path.join(dir, 'job.json'),
+          JSON.stringify({
+            ...historical,
+            runId: id,
+            idempotencyKey: id,
+          }),
+        );
+      }),
+    );
+  }
   server.closeIdleConnections?.();
   server.closeAllConnections?.();
   await new Promise((resolve) => server.close(resolve));
@@ -846,6 +863,43 @@ await writeFile(process.env.RDK_SIM2REAL_RESULT_FILE, JSON.stringify({ artifact:
   ]);
   assert.ok(results.every((result) => result.status === 'completed'));
   assert.ok(Date.parse(results[1].startedAt) >= Date.parse(results[0].finishedAt));
+  process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS = '1';
+  process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT = '1';
+  delete process.env.RDK_SIM2REAL_TEST_ENGINE_DELAY_MS;
+  const timeoutFixture = path.join(fixtureDir, 'timeout-engine.mjs');
+  await writeFile(
+    timeoutFixture,
+    `
+    import { readFile } from 'node:fs/promises';
+    const request = JSON.parse(await readFile(process.env.RDK_SIM2REAL_REQUEST_FILE, 'utf8'));
+    if (request.model.modelId === 'timeout-fixture') {
+      process.on('SIGTERM', () => {});
+      setInterval(() => {}, 25);
+    } else {
+      await import(${JSON.stringify(fixture)});
+    }
+  `,
+  );
+  process.env.RDK_SIM2REAL_TRAIN_ARGS_JSON = JSON.stringify([timeoutFixture]);
+  process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS = '1000';
+  try {
+    const timedOut = await submit('timeout-fixture', 'timeout-first');
+    const next = await submit('after-timeout-fixture', 'timeout-next');
+    assert.equal(await poolStatus(next, 'alice'), 'queued');
+    const [timeoutResult, nextResult] = await Promise.all([
+      awaitTerminal(timedOut),
+      awaitTerminal(next),
+    ]);
+    assert.equal(timeoutResult.status, 'failed');
+    assert.equal(timeoutResult.errorCode, 'training_timeout');
+    assert.equal(timeoutResult.artifact, undefined);
+    assert.equal(nextResult.status, 'completed');
+  } finally {
+    delete process.env.RDK_SIM2REAL_TRAIN_TIMEOUT_MS;
+  }
+  console.log(
+    '[local-training-worker] PASS — old history stays readable and timeout releases the queue',
+  );
   process.env.RDK_SIM2REAL_MAX_CONCURRENT_JOBS_PER_ACCOUNT = '3';
   assert.equal((await fetch(`${workerBase}/healthz`)).status, 503);
   console.log(

@@ -74,7 +74,7 @@ export function createRunQuery() {
           toolTrail: [trail],
         };
       const result = query.wantsPolicy
-        ? await resolveRunPolicyDownload(run, owner, accountId, 8_000)
+        ? await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 8_000 })
         : undefined;
       signal.throwIfAborted();
       if (recent.size >= SESSION_LIMIT) {
