@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=8';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=9';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
@@ -16,6 +16,7 @@ const appendFile = byId('reference-append');
 const speedSelect = byId('reference-speed');
 const exportButton = byId('reference-export');
 const checkWorker = byId('reference-worker-check');
+const refreshWorkers = byId('reference-worker-refresh');
 const workerHint = byId('reference-worker-hint');
 const screenCurrent = byId('reference-screen-current');
 const screenFiles = byId('reference-screen-files');
@@ -67,6 +68,12 @@ function showError(target, message = '') {
 const query = new URLSearchParams(location.search);
 const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
 if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
+byId('reference-mode').addEventListener('change', (event) => {
+  const url = new URL(location.href);
+  if (motion.isUpload()) url.searchParams.delete('mode');
+  else url.searchParams.set('mode', event.target.value);
+  history.replaceState(history.state, '', url);
+});
 
 function currentReference() {
   return motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
@@ -112,6 +119,7 @@ function refresh() {
   exampleDownload.disabled = !example;
   worker.disabled = submitting || checking || Boolean(screening);
   checkWorker.disabled = worker.disabled || !worker.value;
+  refreshWorkers.disabled = worker.disabled;
   screenCurrent.disabled = editing || checking || !ready || !selectedWorkerReady();
   screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
   screenCancel.hidden = !screening;
@@ -124,11 +132,16 @@ function selectedWorkerReady() {
 }
 
 function showWorkerHint() {
-  workerHint.textContent = !resources.length
-    ? '当前账号未登记支持跟跳的 Worker。可先导入轨迹，在工作台的「执行资源」中配置算力。'
-    : selectedWorkerReady()
-      ? 'Worker 已连接，可以筛查当前轨迹。'
-      : '选择 Worker 后检查连接，确认支持参考轨迹跟跳。';
+  const selected = resources.find(({ id }) => id === worker.value);
+  if (!resources.length) {
+    workerHint.textContent = '当前账号未找到支持本课程的算力。可在工作台的「执行资源」中核对。';
+  } else if (!selected?.ready) {
+    workerHint.textContent = '选择算力并检查连接，确认支持参考轨迹训练。';
+  } else if (selected.activeJobs >= selected.maxConcurrentJobs && selected.maxConcurrentJobs > 0) {
+    workerHint.textContent = '所选算力的运行名额已满，提交后将在这张卡上排队。';
+  } else {
+    workerHint.textContent = '算力已连接，可以筛查当前轨迹。负载为最近一次查询的快照。';
+  }
 }
 
 async function loadWorkers(selection) {
@@ -136,13 +149,16 @@ async function loadWorkers(selection) {
   resources = computeResources
     .filter(({ source, mock, engines }) => source !== 'local-agent' && mock !== true &&
       (!engines?.length || engines.includes('originman-reference-ppo')))
-    .map(({ id, name, status, mock, cuda, engines }) => ({
-      id, name, cuda,
+    .map(({ id, name, status, mock, cuda, engines, activeJobs, maxConcurrentJobs, queuedJobs }) => ({
+      id, name, cuda, activeJobs, maxConcurrentJobs, queuedJobs,
       ready: status === 'online' && mock === false && engines?.includes('originman-reference-ppo'),
     }));
   worker.replaceChildren(new Option('请选择', ''));
   for (const value of resources) {
-    const option = new Option(value.name + (value.ready ? ' · 可用' : ' · 待检查'), value.id);
+    const measured = value.ready && Number.isInteger(value.activeJobs) && value.maxConcurrentJobs > 0;
+    const state = measured ? `运行 ${value.activeJobs}/${value.maxConcurrentJobs}` : value.ready ? '可用' : '待检查';
+    const queue = value.ready && Number.isInteger(value.queuedJobs) ? ` · 排队 ${value.queuedJobs}` : '';
+    const option = new Option(`${value.name} · ${state}${queue}`, value.id);
     option.dataset.cuda = String(value.cuda === true);
     worker.append(option);
   }
@@ -208,28 +224,34 @@ worker.addEventListener('change', () => {
   showWorkerHint();
   refresh();
 });
-checkWorker.addEventListener('click', async () => {
-  if (!worker.value || checking || submitting) return;
+async function updateWorkers(testConnection) {
+  if (checking || submitting || screening || (testConnection && !worker.value)) return;
   const selection = worker.value;
   checking = true;
-  workerHint.textContent = '正在检查所选 Worker。';
+  workerHint.textContent = testConnection ? '正在检查所选算力。' : '正在刷新算力负载。';
   refresh();
   try {
-    const result = await api('compute-resources/' + encodeURIComponent(selection) + '/test', {});
+    const result = testConnection
+      ? await api('compute-resources/' + encodeURIComponent(selection) + '/test', {})
+      : undefined;
     await loadWorkers(selection);
-    if (!selectedWorkerReady()) {
+    if (result && !selectedWorkerReady()) {
       workerHint.textContent = result.connected
         ? 'Worker 已连接，跟跳引擎还不可用。请在执行资源中核对引擎配置。'
         : result.diagnostic?.message || 'Worker 连接失败，请检查执行资源配置。';
     }
   } catch (cause) {
-    resources = resources.map((resource) => resource.id === selection ? { ...resource, ready: false } : resource);
-    workerHint.textContent = cause.message;
+    if (testConnection) {
+      resources = resources.map((resource) => resource.id === selection ? { ...resource, ready: false } : resource);
+    }
+    workerHint.textContent = testConnection ? cause.message : '无法刷新负载，已保留上次查询结果。';
   } finally {
     checking = false;
     refresh();
   }
-});
+}
+checkWorker.addEventListener('click', () => void updateWorkers(true));
+refreshWorkers.addEventListener('click', () => void updateWorkers(false));
 
 async function readClip(incoming) {
   if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');
@@ -390,8 +412,10 @@ byId('reference-form').addEventListener('submit', async (event) => {
   }
 });
 
+let draftScope;
 try {
   const setup = await api('originman-reference');
+  draftScope = setup.draftScope;
   example = setup.example;
   calibration = setup.calibration;
   showCalibration(calibration);
@@ -407,4 +431,4 @@ try {
 }
 refresh();
 
-void motion.start();
+void motion.start(draftScope);

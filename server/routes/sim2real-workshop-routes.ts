@@ -110,6 +110,9 @@ export function registerSim2RealWorkshopRoutes(
   router.get(
     referenceApi,
     handle(async (_request, owner) => ({
+      draftScope: createHash('sha256')
+        .update(`originman-choreography:${owner === undefined ? 'local' : 'account:' + owner}`)
+        .digest('hex'),
       calibration: originmanReferenceCalibration,
       example: originmanReferenceExample(),
       resources: (await listSim2RealComputeResources(owner))
@@ -233,7 +236,7 @@ export function registerSim2RealWorkshopRoutes(
       if (result.busy) {
         throw new ExperimentError(
           'ORIGINMAN_REFERENCE_SCREEN_BUSY',
-          'Worker 正在处理任务，请稍后重试。',
+          '算力正在筛查另一条轨迹或检查环境。请稍后重试筛查。',
           409,
         );
       }

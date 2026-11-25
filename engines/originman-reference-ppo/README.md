@@ -24,10 +24,12 @@ The evaluator runs the exported ONNX on the same reference; completion, tilt
 below 32° and absolute terminal yaw below 5° determine the gate. The page also
 reports mean tracking error. An ONNX is downloadable for completed simulation
 runs even when the quality gate fails. This version is scoped to simulation.
-Training evaluates an exported checkpoint every 32,768 steps and at the budget
-boundary. The first passing checkpoint ends the same run, whose results record
-actual steps and use that exact ONNX and reference for replay. The 8,192-step
-smoke budget is evaluated at its end.
+Training evaluates a checkpoint every 32,768 steps and at the budget
+boundary. Preset and action-group compositions finish the selected budget.
+An uploaded trajectory can stop at the first passing checkpoint. The worker
+selects the best evaluation by pass status, frame coverage, tracking error and
+tilt, then exports its ONNX and matching replay. The results record both total
+training steps and the exported checkpoint's step count.
 
 Use the workbench's physical screen on the current trajectory or a group of up
 to eight files. The selected account Worker checks each reference through the

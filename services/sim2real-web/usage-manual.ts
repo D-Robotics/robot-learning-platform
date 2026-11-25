@@ -5,8 +5,7 @@ import MarkdownIt from 'markdown-it';
 
 const REPOSITORY_DOCS = 'https://github.com/D-Robotics/robot-learning-platform/blob/main/docs/';
 const IMAGE_PREFIX = 'assets/user-guide/';
-const ORIGINMAN_COURSE_GUIDE =
-  '../plugins/rdk-robot-learning-platform/references/user-guide.md#workshop受扰恢复课程';
+const ORIGINMAN_WORKSHOP = 'https://rdkstudio.d-robotics.cc/robotics-learning/workshop.html';
 
 export function createUsageManualRouter(
   docsRoot: string,
@@ -31,11 +30,9 @@ export function createUsageManualRouter(
   markdown.renderer.rules.link_open = (tokens, index, options, _env, renderer) => {
     const link = tokens[index];
     const href = String(link.attrGet('href') ?? '');
-    if (href === markdown.normalizeLink(ORIGINMAN_COURSE_GUIDE)) {
-      link.attrSet('data-originman-course-guide', '');
-      link.attrSet('aria-haspopup', 'dialog');
-    }
-    if (href && !href.startsWith('#')) {
+    if (href === ORIGINMAN_WORKSHOP) {
+      link.attrSet('href', publicPath('/workshop.html'));
+    } else if (href && !href.startsWith('#')) {
       link.attrSet('href', new URL(href, REPOSITORY_DOCS).href);
       link.attrSet('target', '_blank');
       link.attrSet('rel', 'noopener noreferrer');

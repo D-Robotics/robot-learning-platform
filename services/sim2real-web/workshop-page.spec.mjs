@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { JSDOM } from 'jsdom';
 import { startWorkshop } from './public/workshop-page.mjs';
 import { showWorkshopEntry, workshopRedirect } from './public/workshop-entry-page.mjs';
+import { mountOriginmanMotion } from './public/originman-motion-editor.mjs';
 const html = await fs.readFile(new URL('./fixtures/workshop-legacy.html', import.meta.url), 'utf8');
 const settle = () => new Promise((r) => setTimeout(r, 25));
 function fixture({
@@ -1053,4 +1054,71 @@ test('reference choreography submit errors stay visible when trajectory import i
   assert.equal(trainingError.closest('form').id, 'reference-form');
   trainingError.hidden = false;
   assert.equal(trainingError.closest('[hidden]'), null);
+});
+
+test('free choreography restores only the matching account draft and needs a fresh preview', async (t) => {
+  const page = await fs.readFile(
+    new URL('./public/originman-reference.html', import.meta.url),
+    'utf8',
+  );
+  const api = async (route) => {
+    assert.equal(route, 'originman-motion/catalog');
+    return {
+      presets: [],
+      motions: [
+        { id: 'walk', displayName: '踏步', category: '步伐', frames: 100 },
+        { id: 'bow', displayName: '鞠躬', category: '上肢', frames: 120 },
+      ],
+    };
+  };
+  const open = async (scope, storage = {}) => {
+    const { window } = new JSDOM(page, { url: 'https://platform.test/originman-reference.html' });
+    t.after(() => window.close());
+    for (const [key, value] of Object.entries(storage)) window.localStorage.setItem(key, value);
+    const get = (id) => window.document.getElementById('reference-' + id);
+    const editor = mountOriginmanMotion({
+      api,
+      changed() {},
+      initialMode: 'blocks',
+      document: window.document,
+    });
+    await editor.start(scope);
+    const change = (field, value) => {
+      field.value = value;
+      field.dispatchEvent(new window.Event('input'));
+    };
+    return { editor, get, change, storage: window.localStorage };
+  };
+  const owner = 'a'.repeat(64);
+  const start = await open(owner);
+  start.get('motion-add').click();
+  start.get('motion-action').value = 'bow';
+  start.get('motion-add').click();
+  start.get('motion-sequence').querySelector('[aria-label="第 2 段上移"]').click();
+  start.change(start.get('motion-sequence').querySelector('input'), '2');
+  start.change(start.get('motion-bpm'), '118');
+  start.change(start.get('motion-transition'), '0.6');
+
+  const other = await open('b'.repeat(64), start.storage);
+  assert.equal(other.get('motion-sequence').children.length, 0);
+  other.get('motion-add').click();
+
+  const restored = await open(owner, other.storage);
+  const rows = [...restored.get('motion-sequence').children];
+  assert.deepEqual(
+    rows.map((row) => row.querySelector('span').textContent.trim()),
+    ['鞠躬', '踏步'],
+  );
+  assert.deepEqual(
+    rows.map((row) => row.querySelector('input').value),
+    ['2', '1'],
+  );
+  assert.equal(restored.get('motion-bpm').value, '118');
+  assert.equal(restored.get('motion-transition').value, '0.6');
+  assert.match(restored.get('motion-draft-status').textContent, /已恢复.*重新预览和筛查/);
+  assert.equal(restored.editor.submission(), undefined);
+  assert.equal(restored.get('motion-prepare').disabled, false);
+
+  const unauthenticated = await open(undefined, other.storage);
+  assert.equal(unauthenticated.get('motion-sequence').children.length, 0);
 });
