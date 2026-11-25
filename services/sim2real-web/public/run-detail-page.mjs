@@ -220,10 +220,20 @@ function referenceQualityRows(evidence, composition) {
     ['平均关节跟踪误差', `${evidence.trackingMaeRad.toFixed(4)} rad`],
     ['峰值倾角（通过标准 < 32°）', `${evidence.maxTiltDeg.toFixed(2)}°`],
     ['末尾偏航（通过标准绝对值 < 5°）', `${evidence.finalYawDeg.toFixed(2)}°`],
-    ['参考轨迹 SHA-256', evidence.referenceSha256],
+
   ];
   if (Number.isFinite(evidence.trackingRmseRad))
     rows.push(['关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
+  if (Number.isFinite(evidence.zeroResidualRmseRad)) {
+    const evaluated = evidence.zeroResidualFramesEvaluated;
+    const rounds = ` · ${evaluated}/${evidence.framesExpected} 帧`;
+    rows.push(['纯参考关节跟踪 RMSE', evidence.zeroResidualRmseRad.toFixed(4) + ' rad' + rounds]);
+    if (evaluated === evidence.framesExpected && evidence.framesEvaluated === evaluated &&
+        Number.isFinite(evidence.trackingRmseRad) && evidence.zeroResidualRmseRad > 0) {
+      const difference = 100 * (evidence.trackingRmseRad / evidence.zeroResidualRmseRad - 1);
+      rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(1) + '%']);
+    }
+  }
   if (Number.isFinite(evidence.onnxMaxAbsError))
     rows.push(['ONNX 最大推理差异', evidence.onnxMaxAbsError.toExponential(2)]);
   const sections = evidence.sections;
@@ -302,12 +312,18 @@ function renderQuality(document, run) {
   text(document, 'run-step-quality', passed === true ? '质量门已通过' : passed === false ? '质量门未通过' : '质量证据待核验');
 }
 
+function referenceDigestMismatch(run) {
+  const expected = run.training?.originmanReferenceSummary?.trajectorySha256;
+  const reported = run.metrics?.originmanReference?.trajectorySha256;
+  return run.taskId === REFERENCE_TASK && expected && reported && expected !== reported;
+}
+
 function verifiedDanceVideo(run) {
   const evidence = replayEvidenceFor(run);
   const video = evidence?.video;
   const policySha = run.artifact?.sha256;
   const replaySha = evidence?.replay?.sha256;
-  return run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
+  return !referenceDigestMismatch(run) && run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
     SHA256_PATTERN.test(video.sha256 ?? '') && SHA256_PATTERN.test(policySha ?? '') &&
     video.policySha256 === policySha && SHA256_PATTERN.test(replaySha ?? '') &&
     video.sourceReplaySha256 === replaySha;
@@ -348,12 +364,59 @@ function showPlaybackStatus(document, video) {
   text(document, 'replay-status', message);
 }
 
+function renderReferenceSegments(document, run, video, available) {
+  const controls = document.getElementById('replay-segment-controls');
+  if (!controls) return;
+  const select = document.getElementById('replay-segment');
+  const seek = document.getElementById('replay-segment-seek');
+  const notice = document.getElementById('replay-segment-status');
+  const evidence = run.metrics?.originmanReference;
+  const ranges = run.training?.originmanReferenceComposition?.ranges ?? [];
+  const fps = evidence?.video?.fps;
+  const options = [];
+  if (available && run.taskId === REFERENCE_TASK && fps === 50 && Array.isArray(ranges)) {
+    for (const [index, range] of ranges.entries()) {
+      if (!range || !Number.isSafeInteger(range.from) || !Number.isSafeInteger(range.to) ||
+          range.from < 0 || range.from >= range.to || range.to > evidence.framesExpected ||
+          range.from >= evidence.framesEvaluated || typeof range.id !== 'string') continue;
+      const time = range.from / fps;
+      const option = document.createElement('option');
+      option.value = String(time);
+      option.textContent = `第 ${index + 1} 段 · ${range.id} · ${time.toFixed(2)} 秒`;
+      options.push(option);
+    }
+  }
+  controls.hidden = !options.length;
+  if (!options.length) {
+    select.replaceChildren();
+    seek.onclick = null;
+    notice.textContent = '';
+    return;
+  }
+  const selected = select.value;
+  if (options.map(({ textContent }) => textContent).join('|') !==
+      Array.from(select.options, ({ textContent }) => textContent).join('|')) {
+    select.replaceChildren(...options);
+    if (options.some(({ value }) => value === selected)) select.value = selected;
+  }
+  seek.onclick = () => {
+    const seconds = Number(select.value);
+    if (video.error) {
+      notice.textContent = '回放暂不可用，请刷新后重试。';
+      return;
+    }
+    video.currentTime = seconds;
+    notice.textContent = `已跳到 ${seconds.toFixed(2)} 秒。`;
+  };
+}
+
 function renderVideo(document, location, run, runId) {
   const video = document.getElementById('run-video');
   const empty = document.getElementById('replay-empty');
   const valid = verifiedDanceVideo(run);
   if (!video || !empty) return;
   const href = danceVideoUrl(location, run, runId);
+  renderReferenceSegments(document, run, video, valid && href);
   if (valid && href) {
     if (video.getAttribute('src') !== href.href) video.src = href.href;
     else if (video.error) video.load();
@@ -371,6 +434,11 @@ function renderVideo(document, location, run, runId) {
   }
   empty.hidden = false;
   const evidence = replayEvidenceFor(run);
+  if (referenceDigestMismatch(run)) {
+    text(document, 'replay-status', '训练轨迹摘要不一致');
+    text(document, 'replay-empty', 'Worker 与平台记录的训练轨迹摘要不同，当前回放未通过核验。');
+    return;
+  }
   if (!evidence?.video && run.status === 'completed' && run.training?.video === false) {
     text(document, 'replay-status', '提交时关闭了视频生成');
     text(document, 'replay-empty', '本次 Run 未生成视频。仍可查看训练曲线和分段评测。');
@@ -394,6 +462,13 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   const recovery = run.taskId === 'originman-recovery';
   const evidenceMessage = recovery && run.status === 'completed' ? workshopEvidenceMessage(evidenceIssue) : '';
   const isDance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
+  const reference = run.metrics?.originmanReference;
+  const expectedTrajectory = run.training?.originmanReferenceSummary?.trajectorySha256;
+  text(document, 'run-trajectory-sha', expectedTrajectory
+    ? expectedTrajectory + (reference?.trajectorySha256 === expectedTrajectory ? ' · 与 Worker 一致' :
+      referenceDigestMismatch(run) ? ' · 与 Worker 不一致' : '')
+    : '—');
+  text(document, 'run-reference-file-sha', reference?.referenceSha256 ?? '—');
   const status = STATUS_LABELS[run.status] ?? '状态待核对';
   text(document, 'run-title', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : recovery ? 'OriginMan · 受扰恢复' : '本次训练运行');
   text(document, 'run-status', status);

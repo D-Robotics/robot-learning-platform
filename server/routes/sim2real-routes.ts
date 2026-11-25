@@ -1,4 +1,8 @@
-import { OriginmanMotionError, prepareOriginmanMotion } from '../sim2real/originman-motion.js';
+import { originmanReferenceDigest } from '../sim2real/originman-reference-digest.js';
+import {
+  OriginmanMotionError,
+  preparePinnedOriginmanMotion,
+} from '../sim2real/originman-motion.js';
 import type { OriginmanMotionProvenance } from '../../shared/originman-reference-training.js';
 import { getWorkshopRun, readWorkshopRunEvidence } from '../sim2real/workshop-run-evidence.js';
 import { registerComputeSshRoutes } from './sim2real-compute-ssh-routes.js';
@@ -2358,6 +2362,15 @@ function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
       : run.taskId === 'originman-dance'
         ? run.metrics?.originmanDance
         : undefined;
+  const trainedTrajectory = run.metrics?.originmanReference?.trajectorySha256;
+  const expectedTrajectory = run.training?.originmanReferenceSummary?.trajectorySha256;
+  if (
+    run.taskId === ORIGINMAN_REFERENCE_TASK &&
+    trainedTrajectory &&
+    expectedTrajectory &&
+    trainedTrajectory !== expectedTrajectory
+  )
+    return undefined;
   const video = evidence?.video;
   if (
     run.status !== 'completed' ||
@@ -4953,9 +4966,7 @@ export function createSim2RealRouter(
         try {
           if (body.taskId !== ORIGINMAN_REFERENCE_TASK || trajectory !== undefined)
             throw new OriginmanMotionError('编排与上传轨迹只能选择其中一种。');
-          const prepared = await prepareOriginmanMotion(recipe);
-          if (expectedTrajectorySha256 !== prepared.provenance.trajectorySha256)
-            throw new OriginmanMotionError('编排或动作库内容已变更，请重新预览后再提交。', 409);
+          const prepared = await preparePinnedOriginmanMotion(recipe, expectedTrajectorySha256);
           composition = prepared.provenance;
           body.training = {
             ...(body.training as Record<string, unknown>),
@@ -5228,6 +5239,9 @@ export function createSim2RealRouter(
               seed: originmanReference.seed,
               frames: originmanReference.trajectory.joint_pos.length,
               fps: originmanReference.trajectory.fps,
+              trajectorySha256:
+                composition?.trajectorySha256 ??
+                originmanReferenceDigest(originmanReference.trajectory),
             },
           } as Sim2RealTrainingSpec)
         : training;

@@ -6,6 +6,7 @@ import math
 import multiprocessing
 import os
 from pathlib import Path
+import struct
 import subprocess
 import sys
 
@@ -33,12 +34,33 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+REFERENCE_DIGEST_VERSION = "originman-reference-f64be-v1"
 ROLLOUT_STEPS = 4096
 CHECKPOINT_STEPS = 32768
 
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def trajectory_digest(value):
+    result = hashlib.sha256(REFERENCE_DIGEST_VERSION.encode() + b"\0")
+    result.update(struct.pack(">II", value["fps"], len(value["joint_pos"])))
+    for name in value["joint_names"]:
+        result.update(name.encode("utf-8") + b"\0")
+    for key in ("joint_pos", "joint_vel"):
+        values = np.asarray(value[key], dtype=np.float64)
+        canonical = np.where(values == 0, 0.0, values).astype(">f8")
+        result.update(canonical.tobytes(order="C"))
+    return result.hexdigest()
+
+
+class ReferenceLimitError(ValueError):
+    def __init__(self, violation):
+        self.violation = violation
+        super().__init__(
+            f"joint target outside scene limits: {violation['joint']}, frame {violation['frame']}"
+        )
 
 
 def validate_trajectory(value):
@@ -79,8 +101,15 @@ class ReferenceTracking(gym.Env):
         self.neutral = self.stance[self.qpos]
         self.limits = self.model.actuator_ctrlrange[self.actuators]
         absolute = self.neutral + self.target
-        if np.any(absolute < self.limits[:, 0] - 1e-6) or np.any(absolute > self.limits[:, 1] + 1e-6):
-            raise ValueError("reference positions plus the stance exceed scene actuator limits")
+        violating = (absolute < self.limits[:, 0] - 1e-6) | (absolute > self.limits[:, 1] + 1e-6)
+        if violating.any():
+            frame, joint = np.argwhere(violating)[0]
+            raise ReferenceLimitError({
+                "joint": TRACKED[joint], "frame": int(frame) + 1,
+                "targetRad": float(absolute[frame, joint]),
+                "minRad": float(self.limits[joint, 0]), "maxRad": float(self.limits[joint, 1]),
+                "framesOutside": int(np.any(violating, axis=1).sum()),
+            })
         self.substeps = round(DT / self.model.opt.timestep)
         if not math.isclose(self.substeps * self.model.opt.timestep, DT):
             raise ValueError("scene physics step does not divide the 50 Hz control interval")
@@ -203,10 +232,14 @@ def reference_gate(bundle, trajectory):
     env = ReferenceTracking(bundle, trajectory)
     zero = lambda _obs: np.zeros(18)
     calibrated, _ = evaluate(env, zero)
-    original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
+    try:
+        original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
+        original_evidence = {"existingSceneGate": original}
+    except ReferenceLimitError as error:
+        original_evidence = {"existingSceneLimitViolation": error.violation}
     return env, {
         "gate": calibrated,
-        "existingSceneGate": original,
+        **original_evidence,
         "calibrationSha256": digest(PROFILE_PATH),
         "actionJoints": TRACKED,
         "controlHz": HZ,
@@ -219,10 +252,14 @@ def screen_reference():
     scene_hash = validate_bundle(bundle)["sceneSha256"]
     try:
         _, report = reference_gate(bundle, validate_trajectory(raw))
+    except ReferenceLimitError as error:
+        print(json.dumps({"invalid": str(error), "violation": error.violation}, allow_nan=False))
+        return
     except ValueError as error:
         print(json.dumps({"invalid": str(error)}, allow_nan=False))
         return
-    print(json.dumps({**report, "sceneSha256": scene_hash}, allow_nan=False))
+    print(json.dumps({**report, "sceneSha256": scene_hash,
+                      "trajectorySha256": trajectory_digest(raw)}, allow_nan=False))
 
 
 def gate_allows_training(evidence):
@@ -316,6 +353,13 @@ def main():
 
     trajectory = validate_trajectory(tracks["trajectory"])
     ranges = composition_ranges(training, len(trajectory[0]))
+    reference_digest = trajectory_digest(tracks["trajectory"])
+    provenance = training.get("originmanReferenceComposition") or {}
+    if "trajectoryDigestVersion" in provenance and (
+        provenance["trajectoryDigestVersion"] != REFERENCE_DIGEST_VERSION
+        or provenance.get("trajectorySha256") != reference_digest
+    ):
+        raise ValueError("compiled choreography digest does not match the training trajectory")
     output = Path(os.environ["RDK_SIM2REAL_JOB_DIR"])
     result_path = Path(os.environ["RDK_SIM2REAL_RESULT_FILE"])
     bundle = Path(os.environ["RDK_ORIGINMAN_DANCE_BUNDLE_DIR"])
@@ -335,8 +379,10 @@ def main():
     replay_path = output / "reference-replay.npz"
     np.savez_compressed(replay_path, qpos=np.asarray(frames))
     replay_sha = digest(replay_path)
-    results.update(referenceSha256=digest(reference_path), sceneSha256=scene_hash,
-                   replay={"sha256": replay_sha})
+    results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
+                   sceneSha256=scene_hash, replay={"sha256": replay_sha},
+                   zeroResidualRmseRad=report["gate"]["trackingRmseRad"],
+                   zeroResidualFramesEvaluated=report["gate"]["framesEvaluated"])
     video_path = output / "dance-replay.mp4"
     try:
         subprocess.run([sys.executable, str(ROOT / "engines/originman-dance-ppo/render_replay.py"),

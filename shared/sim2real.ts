@@ -279,7 +279,13 @@ export interface Sim2RealTrainingSpec {
   /** Platform-generated snapshot of the selected choreography. */
   originmanReferenceComposition?: OriginmanMotionProvenance;
   /** Only the trajectory metadata is retained in the platform run ledger. */
-  originmanReferenceSummary?: { trainingSteps: number; seed: number; frames: number; fps: 50 };
+  originmanReferenceSummary?: {
+    trainingSteps: number;
+    seed: number;
+    frames: number;
+    fps: 50;
+    trajectorySha256?: string;
+  };
 }
 
 /** Server-resolved, digest-pinned imitation input; never a client file path. */

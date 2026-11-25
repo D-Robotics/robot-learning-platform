@@ -6,6 +6,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   const preset = byId('motion-preset');
   const search = byId('motion-search');
   const action = byId('motion-action');
+  const category = byId('motion-category');
   const add = byId('motion-add');
   const sequence = byId('motion-sequence');
   const bpm = byId('motion-bpm');
@@ -34,7 +35,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
 
   function setPrepareState() {
     prepare.disabled = locked || !recipe() || isUpload() ||
-      (mode.value === 'blocks' && estimate.dataset.overLimit === 'true');
+      (mode.value === 'blocks' && estimate.dataset.invalidDuration === 'true');
   }
 
   function invalidate() {
@@ -47,17 +48,21 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
       Math.max(0, count - 1) * Math.max(0, Math.round(Number(transition.value) * 50) - 1);
     estimate.textContent = mode.value === 'blocks' && count
       ? count + ' 段 · 约 ' + (frames / 50).toFixed(1) + ' 秒（含过渡）' : '';
-    estimate.dataset.overLimit = String(frames > 4500);
+    estimate.dataset.invalidDuration = String(count > 0 && (frames < 50 || frames > 4500));
     setPrepareState();
-    if (frames > 4500 && mode.value === 'blocks') status.textContent = '超过 90 秒，请减少动作或重复次数。';
+    if (mode.value === 'blocks' && count > 0) {
+      if (frames < 50) status.textContent = '至少需要 1 秒，请增加片段或重复次数。';
+      else if (frames > 4500) status.textContent = '超过 90 秒，请减少动作或重复次数。';
+    }
     changed();
   }
 
   function populateActions() {
     const query = search.value.trim().toLowerCase();
     const selection = action.value;
-    const motions = catalog?.motions.filter(({ id, displayName, category }) =>
-      [id, displayName, category].some((value) => value.toLowerCase().includes(query))) ?? [];
+    const motions = catalog?.motions.filter(({ id, displayName, category: group }) =>
+      (!category.value || group === category.value) &&
+      [id, displayName, group].some((value) => value.toLowerCase().includes(query))) ?? [];
     action.replaceChildren(...motions.map((motion) =>
       new Option(motion.displayName + ' · ' + motion.category + (motion.clipped ? ' · 已限幅' : ''), motion.id)));
     if (motions.some(({ id }) => id === selection)) action.value = selection;
@@ -101,7 +106,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
 
   async function showMode() {
     byId('import-section').hidden = !isUpload();
-    byId('screen-details').hidden = !isUpload();
+    byId('screen-file-control').hidden = !isUpload();
     controls.hidden = isUpload();
     byId('motion-presets').hidden = mode.value !== 'preset';
     byId('motion-blocks').hidden = mode.value !== 'blocks';
@@ -116,6 +121,8 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
         : catalog.presets.length + ' 支预置 · ' + catalog.motions.length + ' 个动作';
       preset.replaceChildren(...catalog.presets.map(({ id, displayName, seconds, bpm: tempo }) =>
         new Option(displayName + ' · ' + seconds.toFixed(1) + ' 秒 · ' + tempo + ' BPM', id)));
+      const categories = [...new Set(catalog.motions.map((item) => item.category))];
+      category.replaceChildren(new Option('全部分类', ''), ...categories.map((item) => new Option(item, item)));
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
       populateActions();
       setPrepareState();
@@ -138,6 +145,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
   mode.addEventListener('change', showMode);
   for (const input of [preset, bpm, transition]) input.addEventListener('change', invalidate);
   search.addEventListener('input', populateActions);
+  category.addEventListener('change', populateActions);
   add.addEventListener('click', () => {
     const motion = catalog.motions.find(({ id }) => id === action.value);
     if (!motion || locked || blocks.length >= 128) return;
@@ -182,7 +190,7 @@ export function mountOriginmanMotion({ api, changed, initialMode }) {
     setLocked(value) {
       if (locked === value) return;
       locked = value;
-      for (const input of [mode, preset, search, action, bpm, transition]) input.disabled = locked;
+      for (const input of [mode, preset, search, action, category, bpm, transition]) input.disabled = locked;
       setPrepareState();
       renderSequence();
     },

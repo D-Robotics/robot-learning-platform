@@ -109,6 +109,9 @@ export interface Sim2RealRunMetrics {
     framesEvaluated: number;
     trackingMaeRad: number;
     trackingRmseRad?: number;
+    zeroResidualRmseRad?: number;
+    zeroResidualFramesEvaluated?: number;
+    trajectorySha256?: string;
     onnxMaxAbsError?: number;
     sections?: {
       id: string;

@@ -68,3 +68,7 @@ video { width: 100%; max-height: 480px; background: var(--bg-deep); border-radiu
 #reference-motion-sequence :is(input, button) { margin-inline-end: 4px; }
 #reference-motion-sequence input { width: 4rem; }
 #run-config-body td { overflow-wrap: anywhere; }
+
+#replay-segment-controls { margin-top: 12px; }
+#replay-segment-controls select { max-width: 100%; }
+#run-trajectory-sha, #run-reference-file-sha, #run-policy-sha { overflow-wrap: anywhere; }

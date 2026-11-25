@@ -1,7 +1,13 @@
 import {
+  originmanReferenceDigest,
+  REFERENCE_DIGEST_VERSION,
+} from '../sim2real/originman-reference-digest.js';
+import type { OriginmanMotionProvenance } from '../../shared/originman-reference-training.js';
+import {
   listOriginmanMotion,
   OriginmanMotionError,
   prepareOriginmanMotion,
+  preparePinnedOriginmanMotion,
   summarizeOriginmanMotion,
 } from '../sim2real/originman-motion.js';
 import { getWorkshopRun } from '../sim2real/workshop-run-evidence.js';
@@ -127,6 +133,8 @@ export function registerSim2RealWorkshopRoutes(
           durationSeconds: trajectory.joint_pos.length / trajectory.fps,
           fps: trajectory.fps,
           referenceSha256: createHash('sha256').update(JSON.stringify(trajectory)).digest('hex'),
+          trajectorySha256: originmanReferenceDigest(trajectory),
+          trajectoryDigestVersion: REFERENCE_DIGEST_VERSION,
         };
       } catch (error) {
         throw new ExperimentError(
@@ -141,15 +149,36 @@ export function registerSim2RealWorkshopRoutes(
     referenceApi + '/screen',
     handle(async (request, owner) => {
       let trajectory;
+      let composition: OriginmanMotionProvenance | undefined;
+      const input = request.body ?? {};
       try {
-        trajectory = validateOriginmanReferenceTrajectory(request.body?.trajectory);
+        if (Object.hasOwn(input, 'composition')) {
+          if (input.trajectory !== undefined)
+            throw new OriginmanMotionError('编排与上传轨迹只能选择其中一种。');
+          const prepared = await preparePinnedOriginmanMotion(
+            input.composition,
+            input.expectedTrajectorySha256,
+          );
+          trajectory = prepared.trajectory;
+          composition = prepared.provenance;
+        } else {
+          trajectory = validateOriginmanReferenceTrajectory(input.trajectory);
+        }
       } catch (error) {
+        if (error instanceof OriginmanMotionError) throw error;
         throw new ExperimentError(
           'ORIGINMAN_REFERENCE_INVALID',
           error instanceof Error ? error.message : '参考轨迹无效。',
           400,
         );
       }
+      const failureLocation = (frame: number | null) => {
+        if (!composition || frame === null) return {};
+        const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
+        return block >= 0
+          ? { blockNumber: block + 1, motionId: composition.ranges[block].id }
+          : { betweenBlocks: true };
+      };
       const selected = await getSim2RealComputeResourceSecret(
         String(request.body?.computeResourceId ?? ''),
         owner,
@@ -188,9 +217,26 @@ export function registerSim2RealWorkshopRoutes(
         );
       }
       if (result.invalid) {
+        if (result.violation) {
+          const { frame, joint } = result.violation;
+          return {
+            result: {
+              passed: false,
+              trajectorySha256: originmanReferenceDigest(trajectory),
+              framesExpected: trajectory.joint_pos.length,
+              framesEvaluated: 0,
+              firstFailedFrame: frame,
+              limitViolation: result.violation,
+              failureLocation: failureLocation(frame),
+              message: `第 ${frame} 帧的 ${joint} 目标角度超出所选场景的执行器限位。`,
+            },
+          };
+        }
         throw new ExperimentError('ORIGINMAN_REFERENCE_SCREEN_INVALID', result.invalid, 422);
       }
-      return { result };
+      return {
+        result: { ...result, failureLocation: failureLocation(result.firstFailedFrame ?? null) },
+      };
     }),
   );
   router.post(

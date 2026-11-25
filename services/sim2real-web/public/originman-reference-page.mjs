@@ -1,8 +1,8 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=3';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
-} from './originman-reference-compose.mjs';
+} from './originman-reference-compose.mjs?v=2';
 
 const byId = (id) => document.getElementById(id);
 const worker = byId('reference-worker');
@@ -29,7 +29,8 @@ let clips = [];
 let speed = 1;
 let trajectory;
 let trajectoryDigest;
-const failedScreenings = new Set();
+const screenings = new Map();
+let displayedScreenKey;
 let attempt;
 let preparing = false;
 let checking = false;
@@ -66,14 +67,36 @@ const query = new URLSearchParams(location.search);
 const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
 if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
 
+function currentReference() {
+  return motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
+}
+
+function currentScreenKey() {
+  const digest = motion.isUpload() ? trajectoryDigest : motion.submission()?.expectedTrajectorySha256;
+  return digest && worker.value ? worker.value + '/' + digest : '';
+}
+
 function refresh() {
   const editing = submitting || preparing || Boolean(screening);
   const uploaded = motion.isUpload();
-  const failed = uploaded && currentScreeningFailed();
-  const ready = uploaded ? Boolean(trajectory) : Boolean(motion.submission());
-  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed;
+  const ready = Boolean(currentReference());
+  const key = currentScreenKey();
+  const passed = screenings.get(key);
+  const failed = passed === false;
+  const needsScreen = !uploaded && ready && passed !== true;
+  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed || needsScreen;
+  if (!screening && displayedScreenKey !== key) {
+    screenResults.replaceChildren();
+    screenStatus.textContent = passed === true ? '当前轨迹已在所选 Worker 通过筛查。'
+      : failed ? '当前轨迹曾未通过筛查，请调整后复查。' : '';
+    displayedScreenKey = key;
+  }
+  const blocker = byId('reference-screen-blocker');
+  blocker.hidden = !failed && !(needsScreen && selectedWorkerReady());
+  blocker.textContent = failed
+    ? '当前轨迹未通过所选 Worker 的筛查。请调整轨迹或重新筛查后再提交。'
+    : '预置和自由编排需在所选 Worker 通过筛查后才能提交。';
   motion.setLocked(editing || checking);
-  byId('reference-screen-blocker').hidden = !failed;
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
   speedSelect.disabled = editing || !clips.length;
@@ -82,8 +105,8 @@ function refresh() {
   exampleDownload.disabled = !example;
   worker.disabled = submitting || checking || Boolean(screening);
   checkWorker.disabled = worker.disabled || !worker.value;
-  screenCurrent.disabled = editing || checking || !trajectory || !selectedWorkerReady();
-  screenFiles.disabled = editing || checking || !selectedWorkerReady();
+  screenCurrent.disabled = editing || checking || !ready || !selectedWorkerReady();
+  screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
   screenCancel.hidden = !screening;
   envs.disabled = submitting;
   byId('reference-steps').disabled = submitting;
@@ -93,15 +116,11 @@ function selectedWorkerReady() {
   return resources.some(({ id, ready }) => id === worker.value && ready);
 }
 
-function currentScreeningFailed() {
-  return trajectory && failedScreenings.has(worker.value + '/' + trajectoryDigest);
-}
-
 function showWorkerHint() {
   workerHint.textContent = !resources.length
     ? '当前账号未登记支持跟跳的 Worker。可先导入轨迹，在工作台的「执行资源」中配置算力。'
     : selectedWorkerReady()
-      ? '已通过连接检查，可以提交仿真训练。'
+      ? 'Worker 已连接，可以筛查当前轨迹。'
       : '选择 Worker 后检查连接，确认支持参考轨迹跟跳。';
 }
 
@@ -157,7 +176,7 @@ async function selectTrajectory(load, nextSpeed) {
     clips = nextClips;
     speed = nextSpeed;
     trajectory = value;
-    trajectoryDigest = receipt.referenceSha256;
+    trajectoryDigest = receipt.trajectorySha256 ?? receipt.referenceSha256;
     attempt = undefined;
     const list = byId('reference-clips');
     list.replaceChildren(...clips.map(({ label }) => {
@@ -207,10 +226,11 @@ checkWorker.addEventListener('click', async () => {
 
 async function readClip(incoming) {
   if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');
-  const value = /\.npz$/i.test(incoming.name)
+  const isNpz = /\.npz$/i.test(incoming.name);
+  const value = isNpz
     ? await readOriginmanNpz(await incoming.arrayBuffer())
     : JSON.parse(await incoming.text());
-  return { value, label: incoming.name };
+  return { value, label: incoming.name, float32: isNpz };
 }
 
 function readSelection(input, append) {
@@ -257,18 +277,27 @@ async function screenBatch(entries) {
       screenStatus.textContent = `正在筛查第 ${tested + 1} / ${entries.length} 项。`;
       const row = document.createElement('li');
       try {
-        const value = await load();
+        const reference = await load();
         const { result } = await api('originman-reference/screen', {
-          computeResourceId, trajectory: value,
+          computeResourceId, ...reference,
         }, undefined, controller.signal);
-        const key = computeResourceId + '/' + result.referenceSha256;
-        if (result.passed) failedScreenings.delete(key);
-        else failedScreenings.add(key);
+        const digest = result.trajectorySha256 ?? result.referenceSha256;
+        if (reference.expectedTrajectorySha256 && digest !== reference.expectedTrajectorySha256)
+          throw Error('筛查轨迹与当前预览不一致，请重新预览。');
+        screenings.set(computeResourceId + '/' + digest, result.passed);
         if (result.passed) passed++;
-        const failure = result.firstFailedFrame === null ? '' : `，首个失败帧 ${result.firstFailedFrame}`;
+        const location = result.failureLocation;
+        const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
+          : location?.betweenBlocks ? '，发生在两段过渡处' : '';
+        const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
+        const violation = result.limitViolation;
+        if (violation) {
+          row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
+        } else {
+          row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
+        }
         const detail = document.createElement('small');
-        detail.textContent = `参考 SHA-256 ${result.referenceSha256}`;
-        row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。 `;
+        detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
         row.append(detail);
       } catch (cause) {
         if (controller.signal.aborted) break;
@@ -285,20 +314,28 @@ async function screenBatch(entries) {
 }
 
 screenCurrent.addEventListener('click', () => void screenBatch([
-  { label: '当前轨迹', load: () => trajectory },
+  { label: '当前轨迹', load: currentReference },
 ]));
 screenFiles.addEventListener('change', () => {
   const files = Array.from(screenFiles.files);
   screenFiles.value = '';
-  void screenBatch(files.map((incoming) => ({ label: incoming.name, load: async () => (await readClip(incoming)).value })));
+  void screenBatch(files.map((incoming) => ({
+    label: incoming.name,
+    load: async () => ({
+      trajectory: composeOriginmanReference(
+        [await readClip(incoming)], 1, calibration.robot.jointOrder, calibration.trajectory,
+      ),
+    }),
+  })));
 });
 screenCancel.addEventListener('click', () => screening?.abort());
 
 byId('reference-form').addEventListener('submit', async (event) => {
   event.preventDefault();
-  const reference = motion.isUpload() ? (trajectory && { trajectory }) : motion.submission();
+  const reference = currentReference();
+  const passed = screenings.get(currentScreenKey());
   if (submitting || checking || preparing || screening || !selectedWorkerReady() || !reference ||
-      (motion.isUpload() && currentScreeningFailed())) return;
+      passed === false || (!motion.isUpload() && passed !== true)) return;
   submitting = true;
   refresh();
   setError();

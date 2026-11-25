@@ -1,3 +1,7 @@
+import {
+  originmanReferenceDigest,
+  REFERENCE_DIGEST_VERSION,
+} from './originman-reference-digest.js';
 import { createHash } from 'node:crypto';
 import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -136,7 +140,7 @@ async function loadCatalog(): Promise<Catalog> {
         !label(category) ||
         typeof frames !== 'number' ||
         !Number.isInteger(frames) ||
-        frames < 50 ||
+        frames < 2 ||
         frames > MAX_FRAMES ||
         typeof sha256 !== 'string' ||
         !SHA256.test(sha256) ||
@@ -217,7 +221,10 @@ async function readMotion(catalog: Catalog, motion: Motion) {
       5 * 1024 * 1024,
     );
     if (digest(bytes) !== motion.sha256) throw Error('Motion hash mismatch');
-    const trajectory = validateOriginmanReferenceTrajectory(JSON.parse(bytes.toString()));
+    const trajectory = validateOriginmanReferenceTrajectory(
+      JSON.parse(bytes.toString()),
+      'motion-block',
+    );
     if (trajectory.joint_pos.length !== motion.frames) throw Error('Motion frame count mismatch');
     return trajectory;
   } catch {
@@ -276,16 +283,19 @@ export async function prepareOriginmanMotion(input: unknown) {
       ranges.push({ id: item.id, from, to: positions.length });
     }
   }
+  const speedLimit = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
+  if (positions.length < FPS)
+    throw new OriginmanMotionError('编排至少需要 1 秒，请增加片段或重复次数。', 422);
   const velocities = positions.map((row, index) => {
     const before = Math.max(0, index - 1);
     const after = Math.min(positions.length - 1, index + 1);
-    return row.map((_, joint) =>
-      Number(
-        (((positions[after][joint] - positions[before][joint]) * FPS) / (after - before)).toFixed(
-          8,
-        ),
-      ),
-    );
+    return row.map((_, joint) => {
+      const speed = ((positions[after][joint] - positions[before][joint]) * FPS) / (after - before);
+      // Match the trajectory validator's tolerance for sampled position deltas.
+      return Math.abs(speed) <= speedLimit + 1e-4
+        ? Math.max(-speedLimit, Math.min(speedLimit, Number(speed.toFixed(8))))
+        : speed;
+    });
   });
   let trajectory;
   try {
@@ -299,7 +309,7 @@ export async function prepareOriginmanMotion(input: unknown) {
   } catch (error) {
     throw new OriginmanMotionError(error instanceof Error ? error.message : '编排轨迹无效。', 422);
   }
-  const trajectorySha256 = digest(JSON.stringify(trajectory));
+  const trajectorySha256 = originmanReferenceDigest(trajectory);
   const provenance: OriginmanMotionProvenance = {
     source: preset ? `preset:${preset.id}` : 'blocks',
     displayName: preset?.displayName ?? '动作组自由编排',
@@ -308,8 +318,16 @@ export async function prepareOriginmanMotion(input: unknown) {
     transitionSeconds: seconds,
     bpm: tempo,
     trajectorySha256,
+    trajectoryDigestVersion: REFERENCE_DIGEST_VERSION,
   };
   return { trajectory, provenance };
+}
+
+export async function preparePinnedOriginmanMotion(recipe: unknown, expectedDigest: unknown) {
+  const prepared = await prepareOriginmanMotion(recipe);
+  if (expectedDigest !== prepared.provenance.trajectorySha256)
+    throw new OriginmanMotionError('编排或动作库内容已变更，请重新预览。', 409);
+  return prepared;
 }
 
 export function summarizeOriginmanMotion(
@@ -336,6 +354,7 @@ export function summarizeOriginmanMotion(
     bpm: provenance.bpm,
     beats: ((frames / trajectory.fps) * provenance.bpm) / 60,
     trajectorySha256: provenance.trajectorySha256,
+    trajectoryDigestVersion: provenance.trajectoryDigestVersion,
     frameIndices: sampleFrames,
     joints,
     maxJointRad: originmanReferenceCalibration.trajectory.maxAbsRad,

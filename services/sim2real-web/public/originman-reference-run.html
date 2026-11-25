@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
-    <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./run-detail-page.mjs?v=6"></script>
+    <link rel="stylesheet" href="./experiment.css?v=reference-replay-2" />
+    <script type="module" src="./run-detail-page.mjs?v=7"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -72,6 +72,11 @@
             <span id="replay-status">尚未核验</span>
           </div>
           <video id="run-video" controls playsinline preload="none" hidden aria-label="本次 ONNX 策略的跟跳仿真视频"></video>
+          <div id="replay-segment-controls" hidden>
+            <label>舞段 <select id="replay-segment"></select></label>
+            <button id="replay-segment-seek" type="button">跳到舞段</button>
+            <span id="replay-segment-status" role="status" aria-live="polite"></span>
+          </div>
           <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
         </section>
 
@@ -105,6 +110,8 @@
           <dl>
             <dt>Run ID</dt><dd id="run-id-detail">—</dd>
             <dt>模型 ID</dt><dd id="run-model-id">—</dd>
+            <dt>训练轨迹 SHA-256</dt><dd id="run-trajectory-sha">—</dd>
+            <dt>Worker 轨迹文件 SHA-256</dt><dd id="run-reference-file-sha">—</dd>
             <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
           </dl>
         </details>

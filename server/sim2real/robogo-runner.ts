@@ -1,3 +1,4 @@
+import { originmanReferenceDigest } from './originman-reference-digest.js';
 import {
   isOriginmanWorkshopEngine,
   normalizeOriginmanWorkshopResult,
@@ -621,6 +622,9 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
     framesEvaluated,
     trackingMaeRad,
     trackingRmseRad,
+    zeroResidualRmseRad,
+    zeroResidualFramesEvaluated,
+    trajectorySha256,
     onnxMaxAbsError,
     sections: rawSections,
     maxTiltDeg,
@@ -668,6 +672,19 @@ function safeReferenceMetrics(value: unknown): Sim2RealRunMetrics['originmanRefe
       Number.isFinite(onnxMaxAbsError) &&
       onnxMaxAbsError >= 0 &&
       onnxMaxAbsError < 1e-6 && { onnxMaxAbsError }),
+    ...(typeof trajectorySha256 === 'string' &&
+      /^[a-f0-9]{64}$/.test(trajectorySha256) && { trajectorySha256 }),
+    ...(typeof zeroResidualRmseRad === 'number' &&
+      Number.isFinite(zeroResidualRmseRad) &&
+      zeroResidualRmseRad >= 0 &&
+      zeroResidualRmseRad <= 20 &&
+      typeof zeroResidualFramesEvaluated === 'number' &&
+      Number.isSafeInteger(zeroResidualFramesEvaluated) &&
+      zeroResidualFramesEvaluated > 0 &&
+      zeroResidualFramesEvaluated <= framesExpected && {
+        zeroResidualRmseRad,
+        zeroResidualFramesEvaluated,
+      }),
     ...(sections && { sections }),
     maxTiltDeg,
     finalYawDeg,
@@ -1134,11 +1151,41 @@ export async function screenOriginmanReferenceWithWorker(input: {
   const report = JSON.parse(await boundedResponseText(response));
   if (response.status === 409) return { busy: true } as const;
   if (!response.ok || report?.ok !== true) throw Error('reference screen unavailable');
-  if (typeof report.invalid === 'string') return { invalid: safeText(report.invalid, 300) };
   const referenceSha256 = createHash('sha256').update(serialized).digest('hex');
+  if (report.referenceSha256 !== referenceSha256) throw Error('invalid reference screen receipt');
+  if (typeof report.invalid === 'string') {
+    const violation = report.violation;
+    const validViolation =
+      violation &&
+      input.trajectory.joint_names.includes(violation.joint) &&
+      Number.isSafeInteger(violation.frame) &&
+      violation.frame >= 1 &&
+      violation.frame <= input.trajectory.joint_pos.length &&
+      Number.isSafeInteger(violation.framesOutside) &&
+      violation.framesOutside >= 1 &&
+      violation.framesOutside <= input.trajectory.joint_pos.length &&
+      [violation.targetRad, violation.minRad, violation.maxRad].every(
+        (value) => typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < 100,
+      ) &&
+      violation.minRad <= violation.maxRad;
+    return {
+      invalid: safeText(report.invalid, 300),
+      ...(validViolation && {
+        violation: {
+          joint: String(violation.joint),
+          frame: Number(violation.frame),
+          framesOutside: Number(violation.framesOutside),
+          targetRad: Number(violation.targetRad),
+          minRad: Number(violation.minRad),
+          maxRad: Number(violation.maxRad),
+        },
+      }),
+    };
+  }
+  const trajectorySha256 = originmanReferenceDigest(input.trajectory);
   const gate = report.gate;
   if (
-    report.referenceSha256 !== referenceSha256 ||
+    (report.trajectorySha256 !== undefined && report.trajectorySha256 !== trajectorySha256) ||
     !/^[a-f0-9]{64}$/.test(report.sceneSha256 ?? '') ||
     !/^[a-f0-9]{64}$/.test(report.calibrationSha256 ?? '') ||
     gate?.framesExpected !== input.trajectory.joint_pos.length ||
@@ -1158,6 +1205,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
   }
   return {
     referenceSha256,
+    trajectorySha256,
     sceneSha256: String(report.sceneSha256),
     calibrationSha256: String(report.calibrationSha256),
     framesExpected: Number(gate.framesExpected),

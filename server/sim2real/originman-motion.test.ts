@@ -84,3 +84,24 @@ describe('OriginMan reference choreography', () => {
     await expect(prepareOriginmanMotion({ presetId: 'full-dance' })).rejects.toThrow('摘要');
   });
 });
+
+it('hashes the same ordered samples after serialization and rejects stale previews', async () => {
+  const { originmanReferenceDigest } = await import('./originman-reference-digest.js');
+  const { preparePinnedOriginmanMotion } = await import('./originman-motion.js');
+  const value = originmanReferenceExample();
+  const expected = originmanReferenceDigest(value);
+  const roundTrip = JSON.parse(JSON.stringify(value));
+  roundTrip.joint_vel[0][0] = -0;
+  expect(originmanReferenceDigest(roundTrip)).toBe(expected);
+  roundTrip.joint_pos[0][2] += 1e-7;
+  expect(originmanReferenceDigest(roundTrip)).not.toBe(expected);
+  const recipe = { presetId: 'example-arms-preset' };
+  await expect(preparePinnedOriginmanMotion(recipe, 'a'.repeat(64))).rejects.toMatchObject({
+    status: 409,
+  });
+  const prepared = await prepareOriginmanMotion(recipe);
+  expect(prepared.provenance.trajectoryDigestVersion).toBe('originman-reference-f64be-v1');
+  expect(await preparePinnedOriginmanMotion(recipe, prepared.provenance.trajectorySha256)).toEqual(
+    prepared,
+  );
+});

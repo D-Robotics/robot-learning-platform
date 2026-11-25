@@ -52,6 +52,38 @@ describe('OriginMan trajectory following', () => {
     ).toThrow(/240 秒/);
   });
 
+  it('normalizes NPZ speed rounding and keeps sub-second clips composable', () => {
+    const { robot, trajectory } = originmanReferenceCalibration;
+    const value = originmanReferenceExample();
+    value.joint_vel[0][12] = Math.fround(6.000003);
+    const npz = { label: '动作.npz', value, float32: true };
+    const normalized = composeOriginmanReference([npz], 1, robot.jointOrder, trajectory);
+    expect(normalized.joint_vel[0][12]).toBe(6);
+    expect(normalized.joint_pos).toEqual(value.joint_pos);
+    expect(validateOriginmanReferenceTrajectory(normalized)).toEqual(normalized);
+    expect(() =>
+      composeOriginmanReference([{ ...npz, float32: false }], 1, robot.jointOrder, trajectory),
+    ).toThrow(/速度/);
+    value.joint_vel[0][12] = 6.001;
+    expect(() => composeOriginmanReference([npz], 1, robot.jointOrder, trajectory)).toThrow(/速度/);
+
+    const short = {
+      label: '短动作',
+      value: {
+        ...value,
+        joint_pos: value.joint_pos.slice(5, 35),
+        joint_vel: value.joint_vel.slice(5, 35),
+      },
+    };
+    expect(validateOriginmanReferenceTrajectory(short.value, 'motion-block')).toEqual(short.value);
+    expect(() => validateOriginmanReferenceTrajectory(short.value)).toThrow(/50–12,000/);
+    expect(() => composeOriginmanReference([short], 1, robot.jointOrder, trajectory)).toThrow(
+      /至少需要 1 秒/,
+    );
+    const joined = composeOriginmanReference([short, short], 1, robot.jointOrder, trajectory);
+    expect(validateOriginmanReferenceTrajectory(joined).joint_pos).toHaveLength(79);
+  });
+
   it('keeps relative positions, joint order and physical servo order distinct', () => {
     const example = originmanReferenceExample();
     expect(validateOriginmanReferenceTrajectory(example)).toEqual(example);

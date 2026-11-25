@@ -275,30 +275,7 @@ paths:
         required: true
         content:
           application/json:
-            schema:
-              oneOf:
-                - type: object
-                  additionalProperties: false
-                  required: [presetId]
-                  properties:
-                    presetId: { type: string }
-                - type: object
-                  additionalProperties: false
-                  required: [blocks]
-                  properties:
-                    blocks:
-                      type: array
-                      minItems: 1
-                      maxItems: 128
-                      items:
-                        type: object
-                        additionalProperties: false
-                        required: [id]
-                        properties:
-                          id: { type: string }
-                          repeats: { type: integer, minimum: 1, maximum: 8 }
-                    bpm: { type: number, minimum: 80, maximum: 140 }
-                    transitionSeconds: { type: number, minimum: 0, maximum: 2 }
+            schema: { $ref: "#/components/schemas/OriginmanMotionComposition" }
       responses:
         "200": { description: Frame count, duration, curve samples, and trajectory SHA-256 }
         "400": { description: Invalid or unknown composition }
@@ -342,15 +319,22 @@ paths:
           application/json:
             schema:
               type: object
-              required: [trajectory, computeResourceId]
+              required: [computeResourceId]
+              oneOf:
+                - required: [trajectory]
+                  not: { required: [composition] }
+                - required: [composition, expectedTrajectorySha256]
+                  not: { required: [trajectory] }
               properties:
                 trajectory: { $ref: "#/components/schemas/OriginmanReferenceTrajectory" }
+                composition: { $ref: "#/components/schemas/OriginmanMotionComposition" }
+                expectedTrajectorySha256: { type: string, pattern: "^[a-f0-9]{64}$" }
                 computeResourceId: { type: string }
       responses:
-        "200": { description: Screen result bound to the reference, scene and calibration digests }
+        "200": { description: Screen result or limit violation bound to the checked trajectory }
         "400": { description: Invalid trajectory }
         "401": { $ref: "#/components/responses/AuthRequired" }
-        "409": { description: Compatible Worker is unavailable or busy }
+        "409": { description: Compatible Worker is unavailable or busy, or preview has changed }
         "422": { description: Trajectory exceeds the calibrated scene's actuator limits }
         "503": { description: No verifiable screen result }
   /api/v1/duck/originman-reference/model:
@@ -3818,6 +3802,30 @@ components:
       description: Resource is not visible to this account.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
   schemas:
+    OriginmanMotionComposition:
+      oneOf:
+        - type: object
+          additionalProperties: false
+          required: [presetId]
+          properties:
+            presetId: { type: string }
+        - type: object
+          additionalProperties: false
+          required: [blocks]
+          properties:
+            blocks:
+              type: array
+              minItems: 1
+              maxItems: 128
+              items:
+                type: object
+                additionalProperties: false
+                required: [id]
+                properties:
+                  id: { type: string }
+                  repeats: { type: integer, minimum: 1, maximum: 8 }
+            bpm: { type: number, minimum: 80, maximum: 140 }
+            transitionSeconds: { type: number, minimum: 0, maximum: 2 }
     OriginmanReferenceTrajectory:
       type: object
       required: [schemaVersion, fps, joint_names, joint_pos, joint_vel]

@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-1"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-2"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -40,11 +40,12 @@
               <label>预置舞蹈 <select id="reference-motion-preset"></select></label>
             </p>
             <div id="reference-motion-blocks" hidden>
-              <p><label>搜索动作 <input id="reference-motion-search" type="search" /></label></p>
+              <p><label>搜索动作 <input id="reference-motion-search" type="search" /></label>
+              <label>分类 <select id="reference-motion-category"><option value="">全部分类</option></select></label></p>
               <p><label>动作 <select id="reference-motion-action"></select></label>
               <button id="reference-motion-add" type="button">添加到编排</button></p>
               <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
-              <p><label>节奏 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
+              <p><label>估算拍数用 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
               <label>过渡秒数 <input id="reference-motion-transition" type="number" min="0" max="2" step="0.02" value="0.4" /></label></p>
             </div>
             <p id="reference-motion-estimate"></p>
@@ -98,13 +99,13 @@
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
             <p id="reference-worker-hint" role="status"></p>
-            <details id="reference-screen-details" class="experiment-details">
+            <details id="reference-screen-details" class="experiment-details" open>
               <summary>训练前物理筛查</summary>
-              <p>由所选 Worker 用标定场景逐帧模拟。批量支持 8 个文件，逐项报告帧数、峰值倾角和首个失败帧。</p>
+              <p>用所选 Worker 检查关节限位和仿真稳定性。筛查与本次配方及所选 Worker 绑定。</p>
               <p><button id="reference-screen-current" type="button" disabled>筛查当前轨迹</button></p>
-              <p><label for="reference-screen-files">批量筛查轨迹</label>
-                <input id="reference-screen-files" type="file" accept=".npz,.json" multiple disabled />
-                <button id="reference-screen-cancel" type="button" hidden>取消后续筛查</button></p>
+              <p id="reference-screen-file-control"><label for="reference-screen-files">批量筛查轨迹（最多 8 个文件）</label>
+                <input id="reference-screen-files" type="file" accept=".npz,.json" multiple disabled /></p>
+              <p><button id="reference-screen-cancel" type="button" hidden>取消筛查</button></p>
               <p id="reference-screen-status" role="status" aria-live="polite"></p>
               <ul id="reference-screen-results" aria-label="物理筛查结果"></ul>
             </details>

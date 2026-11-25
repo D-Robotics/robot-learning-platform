@@ -584,3 +584,90 @@ test('changing a Worker inside the dance editor preserves the selection until ch
   resource.dispatchEvent(new f.window.Event('change', { bubbles: true }));
   assert.equal(selected, 'gpu');
 });
+
+test('reference playback seeks only to evaluated sections and handles old and mismatched digests', async (t) => {
+  const template = fs.readFileSync(
+    new URL('./public/originman-reference-run.html', import.meta.url),
+    'utf8',
+  );
+  const dom = new JSDOM(template, {
+    url: 'https://platform.test/robotics-learning/originman-reference-run.html?runId=run_ref',
+  });
+  t.after(() => dom.window.close());
+  dom.window.HTMLMediaElement.prototype.pause = () => {};
+  dom.window.HTMLMediaElement.prototype.load = () => {};
+  const { document, location } = dom.window;
+  const source = 'originmanReference';
+  const run = {
+    id: 'run_ref',
+    taskId: 'originman-reference-track',
+    status: 'completed',
+    training: {
+      originmanReferenceSummary: { trajectorySha256: digest('d') },
+      originmanReferenceComposition: {
+        ranges: [
+          { id: 'intro', from: 0, to: 50 },
+          { id: 'arms', from: 60, to: 110 },
+          { id: 'skipped', from: 120, to: 170 },
+        ],
+      },
+    },
+    artifact: { sha256: digest('a'), format: 'onnx' },
+    metrics: {
+      [source]: {
+        framesExpected: 170,
+        framesEvaluated: 105,
+        trackingMaeRad: 0.02,
+        trackingRmseRad: 0.03,
+        zeroResidualRmseRad: 0.03,
+        zeroResidualFramesEvaluated: 170,
+        maxTiltDeg: 12,
+        finalYawDeg: 2,
+        referenceSha256: digest('e'),
+        trajectorySha256: digest('d'),
+        replay: { sha256: digest('b') },
+        video: {
+          file: 'dance-replay.mp4',
+          sha256: digest('c'),
+          policySha256: digest('a'),
+          sourceReplaySha256: digest('b'),
+          fps: 50,
+        },
+      },
+    },
+  };
+  const open = () =>
+    startRunDetail({
+      document,
+      location,
+      fetchImpl: async () => Response.json({ ok: true, run }),
+    });
+  const initial = await open();
+  const control = document.getElementById('replay-segment-controls');
+  const select = document.getElementById('replay-segment');
+  assert.equal(control.hidden, false);
+  assert.equal(select.options.length, 2);
+  select.value = '1.2';
+  document.getElementById('replay-segment-seek').click();
+  assert.equal(document.getElementById('run-video').currentTime, 1.2);
+  assert.match(document.getElementById('run-trajectory-sha').textContent, /与 Worker 一致/);
+  assert.match(document.getElementById('quality-body').textContent, /纯参考关节跟踪 RMSE/);
+  assert.doesNotMatch(
+    document.getElementById('quality-body').textContent,
+    /相对纯参考的 RMSE 变化/,
+  );
+  initial.dispose();
+
+  run.metrics[source].trajectorySha256 = digest('f');
+  const mismatched = await open();
+  assert.equal(control.hidden, true);
+  assert.match(document.getElementById('replay-status').textContent, /摘要不一致/);
+  mismatched.dispose();
+
+  delete run.metrics[source].trajectorySha256;
+  delete run.training.originmanReferenceSummary.trajectorySha256;
+  const historical = await open();
+  assert.equal(document.getElementById('run-video').hidden, false);
+  assert.equal(document.getElementById('run-reference-file-sha').textContent, digest('e'));
+  historical.dispose();
+});

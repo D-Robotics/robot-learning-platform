@@ -14,6 +14,7 @@ PROFILE = Path(__file__).resolve().parents[1] / (
     "plugins/rdk-robot-learning-platform/references/originman-reference-calibration.json"
 )
 ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
+ROUNDING_TOLERANCE = 1e-4
 
 
 def load_trajectory(filename, profile):
@@ -34,16 +35,17 @@ def load_trajectory(filename, profile):
         raise ValueError("required schemaVersion 1, 50 Hz and the exact 20-joint order")
     pos = np.asarray(trajectory["joint_pos"], dtype=np.float64)
     vel = np.asarray(trajectory["joint_vel"], dtype=np.float64)
-    if pos.ndim != 2 or pos.shape[1] != 20 or not 50 <= len(pos) <= 4500 or vel.shape != pos.shape:
-        raise ValueError("joint arrays must have the same [50..4500, 20] shape")
+    if pos.ndim != 2 or pos.shape[1] != 20 or not 2 <= len(pos) <= 4500 or vel.shape != pos.shape:
+        raise ValueError("joint arrays must have the same [2..4500, 20] shape")
     limits = profile["trajectory"]
-    for values, limit in ((pos, limits["maxAbsRad"]), (vel, limits["maxSpeedRadPerS"])):
+    speed_limit = limits["maxSpeedRadPerS"]
+    velocity_tolerance = ROUNDING_TOLERANCE if filename.suffix == ".npz" else 0
+    for values, limit in ((pos, limits["maxAbsRad"]), (vel, speed_limit + velocity_tolerance)):
         if not np.isfinite(values).all() or np.any(np.abs(values) > limit) or np.any(values[:, :2]):
             raise ValueError("trajectory commands the head or exceeds the angle/speed envelope")
-    if np.max(np.abs(np.diff(pos, axis=0))) * 50 > limits["maxSpeedRadPerS"] + 1e-4:
+    if np.max(np.abs(np.diff(pos, axis=0))) * 50 > speed_limit + ROUNDING_TOLERANCE:
         raise ValueError("trajectory changes position faster than the speed envelope")
-    if np.max(np.abs(pos - pos[0])) < 0.05:
-        raise ValueError("trajectory contains no motion")
+    vel = np.clip(vel, -speed_limit, speed_limit)
     return {
         "schemaVersion": 1, "fps": 50, "joint_names": profile["robot"]["jointOrder"],
         "joint_pos": pos.tolist(), "joint_vel": vel.tolist(),
