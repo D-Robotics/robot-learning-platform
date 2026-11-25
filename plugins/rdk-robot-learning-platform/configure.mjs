@@ -16,6 +16,7 @@ export function createMcpConfiguration({
   platform = process.platform,
   courseResourceId,
   inheritStudioLogin = false,
+  studioPermissions = false,
 }) {
   const paths = platform === 'win32' ? path.win32 : path.posix;
   if (!paths.isAbsolute(root) || !paths.isAbsolute(nodePath))
@@ -39,6 +40,7 @@ export function createMcpConfiguration({
         type: 'stdio',
         command: nodePath,
         args: [paths.join(root, 'scripts', 'experience-mcp.mjs')],
+        ...(studioPermissions && { permissions: { tools: { rdk_workshop: 'readonly' } } }),
         env: {
           RDK_STUDIO_INHERIT_LOGIN: inheritStudioLogin ? '1' : '0',
           ...(courseResourceId ? { RDK_WORKSHOP_COMPUTE_RESOURCE_ID: courseResourceId } : {}),
@@ -56,6 +58,7 @@ export function configurePlugin({
   nodeVersion = process.versions.node,
   courseResourceId,
   inheritStudioLogin = false,
+  studioPermissions = false,
 } = {}) {
   const required = JSON.parse(
     fs.readFileSync(path.join(root, 'runtime-requirements.json'), 'utf8'),
@@ -70,6 +73,7 @@ export function configurePlugin({
     platform,
     courseResourceId,
     inheritStudioLogin,
+    studioPermissions,
   });
   const target = path.join(root, '.mcp.json');
   const temp = target + '.' + randomBytes(8).toString('hex') + '.tmp';

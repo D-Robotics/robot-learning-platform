@@ -1780,9 +1780,11 @@ export function experienceProxy(
               : await readRun(args.runId, signal);
             const run = value.run ?? value;
             const runId = run.id ?? run.runId;
-            const course = { 'originman-dance': 'dance', 'originman-recovery': 'recovery' }[
-              run.taskId
-            ];
+            const course = {
+              [REFERENCE_TRACKING_TASK]: 'dance',
+              'originman-dance': 'dance',
+              'originman-recovery': 'recovery',
+            }[run.taskId];
             if (
               !matchesRunIdentifier(args.runId, runId) ||
               !course ||
@@ -1998,7 +2000,18 @@ export function experienceProxy(
             danceFlow = null;
             confirmedDancePlans.clear();
           }
-          if (params.name === 'rdk_auth_switch_account') {
+          if (
+            ['rdk_auth_login', 'rdk_auth_switch_account', 'rdk_auth_status'].includes(
+              params.name,
+            ) &&
+            payload.verificationUrl &&
+            payload.userCode
+          ) {
+            const label =
+              params.name === 'rdk_auth_switch_account' ? '授权另一个账号' : '确认学习平台授权';
+            payload.studentReply = `[${label}](${payload.verificationUrl})。确认页面显示正确的账号后，输入连接码 **${payload.userCode}**，回来继续 Workshop。`;
+            payload.delivery = '把链接和连接码展示给学员。浏览器确认后，调用 rdk_auth_status。';
+          } else if (params.name === 'rdk_auth_switch_account') {
             const link = payload.verificationUrl;
             payload.studentReply = link
               ? `[授权另一个学习平台账号](${link})。在浏览器确认后，回来继续 Workshop。`
@@ -2147,11 +2160,12 @@ export function experienceProxy(
         }
         if (['rdk_originman_short_evaluate', 'rdk_originman_evaluate'].includes(params.name)) {
           const runId = payload.submission?.runId ?? payload.experiment?.evaluation?.runId;
-          workflow ??= {
-            contextId: params.arguments.contextId,
-            runId: payload.experiment?.training?.runId,
-          };
           if (runId) {
+            if (workflow?.contextId !== params.arguments.contextId)
+              workflow = {
+                contextId: params.arguments.contextId,
+                runId: payload.experiment?.training?.runId,
+              };
             workflow.evaluationRunId = runId;
             payload = {
               ...payload,

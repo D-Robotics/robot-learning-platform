@@ -322,10 +322,11 @@ describe('Sim2Real HTTP routes', () => {
     const originalFetch = globalThis.fetch;
     const calls: string[] = [];
     const lines = [{ n: 2, stream: 'stdout', text: 'Training completed' }];
+    let workerResponse = () => Response.json({ total: 2, retainedFrom: 1, lines });
     globalThis.fetch = (async (url, init) => {
       calls.push(String(url));
       expect(new Headers(init?.headers).get('x-sim2real-account')).toBe('local-dev');
-      return Response.json({ total: 2, retainedFrom: 1, lines });
+      return workerResponse();
     }) as typeof fetch;
     try {
       const logs = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
@@ -336,6 +337,31 @@ describe('Sim2Real HTTP routes', () => {
       expect(logs.body).toMatchObject({ status: 'completed', total: 2, lines });
       expect(calls).toEqual(['http://127.0.0.1:19091/runs/retained-worker-run/logs?after=1']);
 
+      for (const [response, reason] of [
+        [Response.json({ error: 'run_not_found' }, { status: 404 }), 'job-missing'],
+        [new Response('Missing route', { status: 404 }), 'route-unavailable'],
+        [new Response(null, { status: 401 }), 'worker-auth-rejected'],
+      ] as const) {
+        workerResponse = () => response;
+        const result = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
+          params: { id: run.id },
+        });
+        expect(result.statusCode).toBe(409);
+        expect(result.body).toMatchObject({
+          code: 'SIM2REAL_RUN_LOGS_NOT_AVAILABLE',
+          details: { runId: run.id, reason },
+        });
+      }
+      workerResponse = () => new Response(null, { status: 503 });
+      const outage = await invoke(router, 'get', '/api/sim2real/runs/:id/logs', {
+        params: { id: run.id },
+      });
+      expect(outage.statusCode).toBe(503);
+      expect(outage.body).toMatchObject({
+        code: 'SIM2REAL_RUN_LOGS_UNAVAILABLE',
+        retryable: true,
+      });
+
       await invoke(router, 'delete', '/api/sim2real/compute-resources/:id', {
         params: { id: computeResourceId },
       });
@@ -344,10 +370,27 @@ describe('Sim2Real HTTP routes', () => {
       });
       expect(missing.statusCode).toBe(409);
       expect(missing.body).toMatchObject({ code: 'SIM2REAL_RUN_LOGS_RESOURCE_UNAVAILABLE' });
-      expect(calls).toHaveLength(1);
+      expect(calls).toHaveLength(5);
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it('requires a trajectory screen for the current dance engine instead of a generic preflight', async () => {
+    const router = await fixture();
+    const response = await invoke(router, 'post', '/api/sim2real/compute-resources/:id/preflight', {
+      params: { id: 'fixture' },
+      body: {
+        taskId: 'originman-reference-track',
+        engine: 'originman-reference-ppo',
+        device: 'cuda',
+      },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.body).toMatchObject({
+      code: 'SIM2REAL_REFERENCE_SCREEN_REQUIRED',
+      trainingSubmitted: false,
+    });
   });
 
   it('does not send log requests to the server loopback for a relayed run', async () => {

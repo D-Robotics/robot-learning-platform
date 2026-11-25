@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-8"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-9"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -96,16 +96,18 @@
               <button id="reference-worker-check" type="button" disabled>检查连接</button>
               <button id="reference-worker-refresh" type="button" disabled>刷新负载</button></p>
             <p><label for="reference-steps">预算</label>
-              <select id="reference-steps">
+              <select id="reference-steps" aria-describedby="reference-budget-hint">
                 <option value="8192">快检 · 8,192 步</option>
                 <option value="65536">标准 · 65,536 步</option>
                 <option value="503808">长训 · 503,808 步</option>
+                <option value="1998848">整支长训 · 1,998,848 步</option>
               </select></p>
             <p><label for="reference-envs">并行环境</label>
-              <select id="reference-envs">
+              <select id="reference-envs" aria-describedby="reference-budget-hint">
                 <option>1</option><option>2</option><option>4</option><option>8</option>
                 <option>16</option><option>32</option><option>64</option>
               </select></p>
+            <p id="reference-budget-hint" role="status" hidden></p>
             <p id="reference-worker-hint" role="status"></p>
             <details id="reference-screen-details" class="experiment-details" open>
               <summary>训练前物理筛查</summary>

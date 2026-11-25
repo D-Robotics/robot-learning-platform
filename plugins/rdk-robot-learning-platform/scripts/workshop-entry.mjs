@@ -27,7 +27,7 @@ export const WORKSHOP_TOOLS = [
       },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
 ];
 const noSubmission = () => ({ training: false, evaluation: false });
@@ -183,10 +183,9 @@ export async function workshopEntry(
       throw Error('账号或平台已变化，请重新选择算力机。');
     return workshopPreview(base.toString(), 'choose-compute', resource);
   }
-  const list = await remote('list', {}, accountId);
   const session = args.contextId
-    ? (await remote('select', { contextId: args.contextId }, accountId)).session
-    : list.current;
+    ? (await remote('read', { contextId: args.contextId }, accountId)).session
+    : (await remote('list', {}, accountId)).current;
   const stage = session?.stage ?? 'choose';
   const result = stage === 'results' ? await readResult?.(session.contextId) : undefined;
   signal?.throwIfAborted();

@@ -65,6 +65,87 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+  /api/sso/plugin/start:
+    post:
+      tags: [sso]
+      summary: Begin learning plugin browser authorization
+      operationId: startPluginAuthorization
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [audience]
+              properties:
+                audience: { type: string, format: uri }
+      responses:
+        "200": { description: Private polling secret, short connection code, expiry and same-origin verification URL. }
+        "400": { description: Audience does not match the configured learning platform URL. }
+        "429": { description: Authorization capacity reached. }
+        "503": { description: Plugin authorization is not configured. }
+  /api/sso/plugin/authorize:
+    get:
+      tags: [sso]
+      summary: Show the account and connection code confirmation form
+      operationId: showPluginAuthorization
+      parameters:
+        - in: query
+          name: id
+          required: true
+          schema: { type: string, pattern: "^[a-f0-9]{32}$" }
+      responses:
+        "200": { description: Same-origin confirmation page. }
+        "401": { description: Login page link returning to the pending confirmation. }
+        "410": { description: Authorization request expired. }
+        "503": { description: Plugin authorization is not configured. }
+    post:
+      tags: [sso]
+      summary: Confirm an authorization with a verified browser session and connection code
+      operationId: confirmPluginAuthorization
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [id, code]
+              properties:
+                id: { type: string }
+                code: { type: string }
+      responses:
+        "200": { description: The plugin can now retrieve the approved account session. }
+        "401": { description: The browser session expired. }
+        "403": { description: Invalid connection code or request origin. }
+        "410": { description: Authorization request expired or failed too many times. }
+        "503": { description: Plugin authorization is not configured. }
+  /api/sso/plugin/poll:
+    post:
+      tags: [sso]
+      summary: Poll the matching authorization using its private bearer secret
+      operationId: pollPluginAuthorization
+      security: []
+      parameters:
+        - in: header
+          name: Authorization
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: string }
+      responses:
+        "200": { description: Approved browser session and its original expiry. }
+        "202": { description: Waiting for confirmation in the browser. }
+        "403": { description: Polling secret is invalid. }
+        "410": { description: Authorization request or session expired. }
+        "503": { description: Plugin authorization is not configured. }
   /api/sso/login:
     post:
       tags: [sso]
@@ -952,10 +1033,10 @@ paths:
         stdout/stderr, newest 600 lines / 64 KiB) for a local-backend run.
         Lines carry worker-assigned sequence numbers; the `after` query
         parameter is a cursor so a poll returns only the new tail. Any job
-        status may be read. Queued runs have no lines yet and terminal runs
-        keep their final log for post-mortem inspection. Runs with a compute
-        resource always query that resource, even after its health check
-        expires.
+        status may be read. Queued runs have no lines yet. A terminal Run
+        may return a retained stdout or stderr tail from the ledger when
+        the original worker cannot serve its line ring. Runs with a compute
+        resource always query that resource, even after its health check expires.
       parameters:
         - $ref: "#/components/parameters/RunId"
         - name: after
@@ -980,6 +1061,9 @@ paths:
                   total: { type: integer }
                   retainedFrom: { type: integer }
                   truncated: { type: boolean }
+                  source: { const: retained-tail }
+                  stdoutTail: { type: string }
+                  stderrTail: { type: string }
                   lines:
                     type: array
                     items:
@@ -994,7 +1078,9 @@ paths:
         "409":
           description: >-
             No log channel (remote runner, mock run, no external run id,
-            or browser-relayed run), or the run's compute resource is missing.
+            or browser-relayed run), the run's compute resource is missing,
+            or the original Worker reports a missing job, missing log
+            endpoint, or rejected Worker credentials.
         "503":
           description: Worker temporarily unreachable; retryable.
   /api/v1/duck/runs/{runId}/replay-video:
@@ -2816,6 +2902,7 @@ paths:
           application/json: { schema: { type: object } }
       responses:
         "200": { description: Validated environment checks. }
+        "409": { description: Worker preflight unavailable or reference trajectory screening required. }
         "429": { description: Worker is busy. }
         "503": { description: Worker could not verify its environment. }
   /api/v1/duck/compute-resources/{id}/preflight:
@@ -2827,6 +2914,9 @@ paths:
       responses:
         "200": { description: Environment report bound to the requested resource. }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: Worker preflight unavailable or reference trajectory screening required. }
+        "429": { description: Worker is busy. }
+        "503": { description: Worker could not verify its environment. }
   /api/v1/duck/runs/{runId}/cancel:
     parameters:
       - { name: runId, in: path, required: true, schema: { type: string } }

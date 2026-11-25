@@ -54,7 +54,7 @@ test('explicit selection belongs to the current authenticated platform; arbitrar
     },
   });
   assert.equal(r.contextId, 'chosen');
-  assert.deepEqual(ops[1], ['select', { contextId: 'chosen' }]);
+  assert.deepEqual(ops, [['read', { contextId: 'chosen' }]]);
   await assert.rejects(
     workshopEntry({ timesteps: 500000 }, async () => status),
     /开始/,
@@ -86,7 +86,7 @@ test('native text-only host gets short actionable entry and preserves expert too
   );
   const tools = await p('tools/list');
   assert.ok(tools.tools.some((t) => t.name === 'expert_tool'));
-  assert.ok(tools.tools.some((t) => t.name === 'rdk_workshop'));
+  assert.equal(tools.tools.find((t) => t.name === 'rdk_workshop').annotations.readOnlyHint, true);
   const r = await p('tools/call', { name: 'rdk_workshop', arguments: { intent: 'continue' } });
   assert.notEqual(r.isError, true);
   assert.equal(r.structuredContent.contextId, 'ws-current');
@@ -370,6 +370,7 @@ test('Workshop opens the exact authorized Run for either course and rejects cour
           taskId,
           artifact: { sha256: 'a'.repeat(64) },
           status: 'completed',
+          ...(taskId === 'originman-reference-track' && { metrics: { originmanReference: {} } }),
           workshopEvidenceIssue: 'worker-unavailable',
         };
       },
@@ -398,5 +399,12 @@ test('Workshop opens the exact authorized Run for either course and rejects cour
   const dance = await call({ intent: 'results', course: 'dance', runId: canonical });
   assert.equal(dance.structuredContent.course, 'dance');
   assert.equal(dance.structuredContent.run.id, canonical);
-  assert.deepEqual(reads, [canonical.slice(0, 8), canonical, canonical]);
+  taskId = 'originman-reference-track';
+  const reference = await call({ intent: 'results', course: 'dance', runId: canonical });
+  assert.equal(reference.structuredContent.course, 'dance');
+  assert.match(
+    reference.structuredContent.studioNavigation.arguments.url,
+    /originman-reference-run\.html\?runId=/,
+  );
+  assert.deepEqual(reads, [canonical.slice(0, 8), canonical, canonical, canonical]);
 });

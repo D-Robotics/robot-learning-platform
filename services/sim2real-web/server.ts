@@ -38,6 +38,7 @@ import {
   resolveDataDir,
 } from '../../server/sim2real/standalone-adapters.js';
 import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
+import { createStudioPluginAuthRouter } from '../../server/sim2real/studio-plugin-auth.js';
 import { createRateLimitMiddleware } from '../../server/sim2real/rate-limit.js';
 import { createMujocoApiBridge } from '../../server/sim2real/mujoco-bridge.js';
 import { createResponseCompressionMiddleware } from '../../server/sim2real/response-compression.js';
@@ -1122,6 +1123,21 @@ export function createSim2RealWebApp(): Express {
   // boundary so a cross-site page cannot post credentials through this
   // service. Same-origin browser posts carry an allowed Origin and pass.
   app.use(sim2RealCsrfMiddleware);
+  const pluginAuthOrigin = URL.parse(
+    process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ?? process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ?? '',
+  );
+  app.use(
+    createStudioPluginAuthRouter({
+      auth: studioSsoAuth,
+      enabled: studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured(),
+      basePath: configuredPublicBasePath(),
+      publicOrigin:
+        pluginAuthOrigin?.protocol === 'https:' &&
+        pluginAuthOrigin.href === pluginAuthOrigin.origin + '/'
+          ? pluginAuthOrigin.origin
+          : undefined,
+    }),
+  );
   // DSH is an authenticated execution surface.  Keep the capability catalog
   // public for discovery, but require a verified principal and the optional
   // `agent` permission before a prompt can create a session or invoke tools.

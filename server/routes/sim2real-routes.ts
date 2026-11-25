@@ -3221,6 +3221,16 @@ export function createSim2RealRouter(
     owner: string | undefined,
     input: { engine?: unknown; taskId?: unknown; computeResourceId?: unknown; device?: unknown },
   ): Promise<{ computeResourceId: string | null; report: Record<string, unknown> } | null> {
+    if (input.engine === ORIGINMAN_REFERENCE_ENGINE || input.taskId === ORIGINMAN_REFERENCE_TASK) {
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_REFERENCE_SCREEN_REQUIRED',
+        '舞蹈参考跟跳需要在所选 Worker 上筛查本次轨迹。请打开舞蹈 Workshop，选好动作和算力后点击筛查。',
+        { retryable: false, trainingSubmitted: false },
+      );
+      return null;
+    }
     const originman =
       input.taskId === 'originman-recovery' ||
       input.engine === 'originman-recovery-reflect' ||
@@ -4431,7 +4441,7 @@ export function createSim2RealRouter(
         );
         return;
       }
-      const logs = await fetchLocalRunLogs({
+      const workerLogs = await fetchLocalRunLogs({
         accountId: workerAccount,
         externalRunId: run.externalRunId,
         after,
@@ -4442,6 +4452,7 @@ export function createSim2RealRouter(
             }
           : {}),
       });
+      const logs = typeof workerLogs === 'object' ? workerLogs : null;
       // Terminal job status includes bounded, scrubbed tails even on older
       // workers without a cursor log endpoint. Preserve the live cursor.
       const tail = run.failureDetail;
@@ -4461,6 +4472,18 @@ export function createSim2RealRouter(
           lines: [],
           ...(tail.stdoutTail && { stdoutTail: tail.stdoutTail }),
           ...(tail.stderrTail && { stderrTail: tail.stderrTail }),
+        });
+        return;
+      }
+      if (typeof workerLogs === 'string') {
+        const message = {
+          'job-missing': '原 Worker 已找不到本次任务的日志。请核对原任务目录和当前资源连接。',
+          'route-unavailable': '原 Worker 未提供日志读取接口。请核对其版本与日志保留设置。',
+          'worker-auth-rejected': '原 Worker 的日志读取认证失败。请核对原算力资源的连接凭据。',
+        }[workerLogs];
+        sendApiError(response, 409, 'SIM2REAL_RUN_LOGS_NOT_AVAILABLE', message, {
+          retryable: false,
+          details: { runId: run.id, reason: workerLogs },
         });
         return;
       }

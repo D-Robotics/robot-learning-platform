@@ -322,7 +322,8 @@ def composition_ranges(training, frames):
     return ranges
 
 
-def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges):
+def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges,
+                     *, stop_when_passing):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
@@ -371,7 +372,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 best = (score, policy_sha, {**result, "selectedCheckpointSteps": learner.num_timesteps}, frames)
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
-            if result["qualityGatePassed"] and not ranges:
+            if stop_when_passing and result["qualityGatePassed"]:
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
@@ -424,7 +425,8 @@ def main():
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
-        bundle, output, trajectory, budget, num_envs, seed, env, ranges
+        bundle, output, trajectory, budget, num_envs, seed, env, ranges,
+        stop_when_passing=not provenance,
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"

@@ -40,6 +40,7 @@ try {
     platformUrl: options['--platform-url'],
     courseResourceId: options['--resource-id'],
     inheritStudioLogin,
+    studioPermissions: !options['--host'] || options['--host'] === 'studio',
   });
   const installed = ['other', 'qoder'].includes(options['--host'])
     ? { installed: false, needsHostImport: true }

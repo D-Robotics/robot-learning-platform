@@ -102,8 +102,9 @@ export function installStudioConnection(
       return {
         installed: false,
         needsHostImport: true,
+        importDirectory: path.resolve(pluginRoot),
         reason:
-          'Studio 已启用从插件中心导入的旧副本。请在插件中心更新这条插件，随后新建对话核对实际加载版本。',
+          '本次只完成了新版配置。请在 Studio 插件中心更新 RDK Robot Learning Platform，选择本次解压后的完整插件目录。若当前 Studio 只提供「导入本地插件」，先移除插件中心的旧条目，再导入这个目录。完成后新建对话，用 rdk_plugin_status 核对运行版本。',
       };
   }
   const target = path.join(directory, 'mcp.json');

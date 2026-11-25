@@ -8,6 +8,7 @@ from dance_env import (
     DEFAULT_REWARD_TUNING,
     REWARD_TUNING_LIMITS,
     alternating_arm_targets,
+    squat_height_match,
     squat_rise_phase,
     tracked_style,
     validate_dance_config,
@@ -52,6 +53,14 @@ class SquatRiseTests(unittest.TestCase):
         self.assertAlmostEqual(squat_rise_phase(0), 1)
         self.assertAlmostEqual(squat_rise_phase(0.5), -1)
         self.assertAlmostEqual(squat_rise_phase(1), 1)
+
+    def test_default_squat_height_reward_increases_when_starting_to_descend(self):
+        target = 0.6 - 0.009 - DEFAULT_REWARD_TUNING["squatDepthM"]
+        tolerance = DEFAULT_REWARD_TUNING["squatToleranceM"]
+        standing = squat_height_match(0.6, target, tolerance)
+        lower = squat_height_match(0.595, target, tolerance)
+        self.assertGreater(lower - standing, 0.03)
+        self.assertEqual(squat_height_match(target, target, tolerance), 1)
 
     def evaluate_height(self, height_at):
         class Rollout:

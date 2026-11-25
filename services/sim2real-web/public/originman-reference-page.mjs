@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=9';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=10';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
@@ -7,6 +7,8 @@ import {
 const byId = (id) => document.getElementById(id);
 const worker = byId('reference-worker');
 const envs = byId('reference-envs');
+const steps = byId('reference-steps');
+const budgetHint = byId('reference-budget-hint');
 const status = byId('reference-status');
 const error = byId('reference-error');
 const trainingError = byId('reference-training-error');
@@ -67,7 +69,7 @@ function showError(target, message = '') {
 
 const query = new URLSearchParams(location.search);
 const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
-if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
+if (query.get('budget') === 'formal') steps.value = '503808';
 byId('reference-mode').addEventListener('change', (event) => {
   const url = new URL(location.href);
   if (motion.isUpload()) url.searchParams.delete('mode');
@@ -87,6 +89,21 @@ function currentScreenKey() {
   if (motion.isUpload()) return screeningKey(worker.value, trajectoryDigest);
   const selected = motion.submission();
   return screeningKey(worker.value, selected?.expectedTrajectorySha256, selected?.expectedStanceProfile);
+}
+
+function showBudgetHint() {
+  const frames = motion.isUpload() ? trajectory?.joint_pos.length : motion.previewFrames();
+  budgetHint.hidden = !frames;
+  if (!frames) {
+    budgetHint.textContent = '';
+    return;
+  }
+  const stepsPerEnv = Number(steps.value) / Number(envs.value);
+  const repeats = Math.floor(stepsPerEnv / frames);
+  const estimate = repeats
+    ? `按每个并行环境折算，步数约够 ${repeats.toLocaleString('zh-CN')} 支完整轨迹。`
+    : '按每个并行环境折算，步数不足一支完整轨迹。增加预算或减少并行环境可延长每个环境的训练。';
+  budgetHint.textContent = estimate + '每次评测从第一帧开始，尝试跑完整支。';
 }
 
 function refresh() {
@@ -124,7 +141,8 @@ function refresh() {
   screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
   screenCancel.hidden = !screening;
   envs.disabled = submitting;
-  byId('reference-steps').disabled = submitting;
+  steps.disabled = submitting;
+  showBudgetHint();
 }
 
 function selectedWorkerReady() {
@@ -224,6 +242,8 @@ worker.addEventListener('change', () => {
   showWorkerHint();
   refresh();
 });
+steps.addEventListener('change', showBudgetHint);
+envs.addEventListener('change', showBudgetHint);
 async function updateWorkers(testConnection) {
   if (checking || submitting || screening || (testConnection && !worker.value)) return;
   const selection = worker.value;
@@ -383,7 +403,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
   refresh();
   showError(trainingError);
   const computeResourceId = worker.value;
-  const trainingSteps = Number(byId('reference-steps').value);
+  const trainingSteps = Number(steps.value);
   const numEnvs = Number(envs.value);
   const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
     reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest, reference.expectedStanceProfile]);

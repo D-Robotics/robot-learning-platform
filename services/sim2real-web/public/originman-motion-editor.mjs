@@ -319,6 +319,7 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
     },
     isUpload,
     submission: () => isUpload() ? undefined : submission,
+    previewFrames: () => submission ? preview.frames : undefined,
     setLocked(value) {
       if (locked === value) return;
       locked = value;
