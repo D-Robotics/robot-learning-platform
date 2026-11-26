@@ -8522,6 +8522,8 @@ body .section-heading-lean h2,
 
 [data-view-section='overview'] > .section-heading,
 [data-view-section='overview'] > .next-card,
+[data-view-section='overview'] > .first-run-path,
+[data-view-section='overview'] > #project-readiness,
 [data-view-section='overview'] > .project-workspace {
   grid-column: 1 / -1;
   margin-bottom: 0;
@@ -8631,6 +8633,11 @@ body [data-view-section='overview'] .next-badge {
   padding: 12px 12px 16px;
 }
 
+@media (min-width: 1081px) {
+  [data-view-section='overview'] .onboard-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 [data-view-section='overview'] .onboard-item {
   min-height: 62px;
   padding: 10px 12px;
@@ -8644,6 +8651,9 @@ body [data-view-section='overview'] .next-badge {
 
 body [data-view-section='overview'] .platform-scorecard {
   padding: 24px;
+}
+#project-readiness > .platform-scorecard {
+  margin-top: 12px;
 }
 
 [data-view-section='overview'] .platform-scorecard-heading {
@@ -9305,8 +9315,7 @@ canvas[tabindex="0"]:focus-visible {
 /* The page progress rail is the readable workflow control; the top-bar
    duplicate pipeline was removed (same states, second surface). */
 
-/* The recommendation card has four children. Explicit areas prevent the
-   heading from being squeezed into a one-character column by auto-placement. */
+/* Keep the headline and its actions aligned without squeezing the copy. */
 body [data-view-section='overview'] .next-card-main {
   grid-template-columns: auto minmax(260px, 1fr) auto;
   grid-template-areas:
@@ -9326,10 +9335,14 @@ body [data-view-section='overview'] .next-card-main p {
   grid-area: copy;
   min-width: 0;
 }
-body [data-view-section='overview'] .next-card-main .button {
+body [data-view-section='overview'] .next-card-actions {
   grid-area: action;
-  margin-left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
+body [data-view-section='overview'] .next-card-actions .button { margin-left: 0; }
 
 /* A quieter shell leaves the central visualization in charge. */
 .topbar {
@@ -10350,6 +10363,12 @@ body[data-flow-child='submit'] [data-view-section='train'] .model-actions {
   padding-top: 16px;
   border-top: 1px solid var(--ui-border-soft);
 }
+
+#training-config-submit-panel { margin-inline-start: auto; }
+#training-config-submit-panel .training-plans-actions { justify-content: flex-end; }
+#training-config-submit-hint { margin: 6px 0 0; text-align: end; }
+#training-config-submit-hint:empty { display: none; }
+#run-progress-card, #replay-player { scroll-margin-top: 88px; }
 
 body[data-flow-child='submit'] [data-view-section='train'] .action-block-hint {
   margin-top: 12px;

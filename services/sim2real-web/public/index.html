@@ -396,14 +396,17 @@
                 <span class="next-badge">下一步</span>
                 <h3 id="next-action-title">从一个动作任务开始</h3>
                 <p id="next-action-copy">选一个任务，先在仿真里跑起来。</p>
-                <button
-                  class="button button-primary"
-                  id="next-action-button"
-                  type="button"
-                  data-view-target="simulate"
-                >
-                  进入仿真与录制 →
-                </button>
+                <div class="next-card-actions">
+                  <button class="button button-ghost" id="overview-recent-run" type="button" hidden>打开最近运行</button>
+                  <button
+                    class="button button-primary"
+                    id="next-action-button"
+                    type="button"
+                    data-view-target="simulate"
+                  >
+                    进入仿真与录制 →
+                  </button>
+                </div>
               </div>
             </div>
             <section class="first-run-path panel" aria-labelledby="first-run-path-title" id="onboard-card">
@@ -435,21 +438,6 @@
                 </li>
               </ol>
             </section>
-            <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
-              <div class="platform-scorecard-heading">
-                <div><span class="eyebrow">平台健康度</span><h2 id="platform-scorecard-title">研发闭环评分</h2><p>把“能演示”与“能上真机”分开显示，下一步始终有据可依。</p></div>
-                <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10 软件门槛</span></div>
-              </div>
-              <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
-              <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
-            </section>
-            <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
-              <div class="platform-scorecard-heading">
-                <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
-              </div>
-              <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
-              <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
-            </section>
             <section class="project-workspace panel" id="project-workspace" aria-labelledby="project-workspace-title">
               <div class="panel-heading panel-heading-lean project-workspace-heading">
                 <div>
@@ -480,6 +468,24 @@
                 <div class="workspace-recent-list" id="workspace-recent-list" aria-live="polite"><span class="empty-inline">加载项目活动…</span></div>
               </div>
             </section>
+            <details class="model-details-fold panel" id="project-readiness">
+              <summary><span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span><span><strong>项目就绪度</strong><small>证据完成度与近 30 天的训练指标</small></span></summary>
+              <section class="platform-scorecard panel" aria-labelledby="platform-scorecard-title">
+                <div class="platform-scorecard-heading">
+                  <div><h2 id="platform-scorecard-title">证据完成度</h2><p>按当前工作区已保存的评测、制品和设备检查结果计算。</p></div>
+                  <div class="platform-scorecard-total"><strong id="platform-score-total">—</strong><span>/ 10</span></div>
+                </div>
+                <div class="platform-scorecard-grid" id="platform-scorecard-grid" aria-live="polite"><span class="empty-inline">正在检查契约、训练、评测和设备证据…</span></div>
+                <div class="platform-scorecard-foot"><span id="platform-scorecard-note">真实 X5 运动证据和签名制品会单独计入现场验收。</span><button type="button" class="button button-ghost button-small" data-view-target="records">查看证据记录 →</button></div>
+              </section>
+              <section class="platform-scorecard panel" aria-labelledby="research-loop-title">
+                <div class="platform-scorecard-heading">
+                  <div><span class="eyebrow">研究反馈回路</span><h2 id="research-loop-title">闭环指标</h2><p>发起、时延、自主度与边际收益——检验研究回路是否越转越快。</p></div>
+                </div>
+                <div class="platform-scorecard-grid" id="research-loop-grid" aria-live="polite"><span class="empty-inline">正在汇总近 30 天的闭环指标…</span></div>
+                <div class="platform-scorecard-foot"><span id="research-loop-note">口径：近 30 天；发起方未标记的记录不计入占比分母；免审批链长为会话内内存口径。</span></div>
+              </section>
+            </details>
             <details class="overview-environment" id="overview-environment">
               <summary>
                 <span class="overview-environment-icon" aria-hidden="true">⌘</span>
@@ -850,46 +856,7 @@
                     </button>
                   </div>
                 </div>
-                <details class="model-details-fold" id="model-details-fold">
-                  <summary>
-                    <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
-                    <span>
-                      <strong>契约与参考制品</strong>
-                      <small>查看输入输出和兼容性；训练权重在对应 Run 中查看</small>
-                    </span>
-                  </summary>
-                  <div class="model-details-body">
-                    <div class="model-summary" id="model-summary">
-                      <div class="empty-inline">等待模型台账加载</div>
-                    </div>
-                    <div class="artifact-list" id="artifact-list"></div>
-                    <div class="compatibility-list" id="compatibility-list"></div>
-                  </div>
-                </details>
-                <section id="originman-run-actions" aria-label="OriginMan 训练与运行记录" hidden>
-                  <div class="model-actions">
-                    <button class="button button-primary button-small" id="originman-configure-training" type="button">准备训练配置</button>
-                    <button class="button button-primary button-small" id="originman-submit-dance" type="button" hidden>提交本轮舞蹈训练</button>
-                  </div>
-                  <p class="small-note" id="originman-run-action-hint" role="status"></p>
-                  <div class="model-actions">
-                    <label class="field-label" for="originman-run-select">选择训练 Run</label>
-                    <select id="originman-run-select"><option value="">请选择 Run</option></select>
-                    <a class="button button-ghost button-small" id="originman-run-open" hidden>查看本轮评测、制品与回放</a>
-                  </div>
-                  <p class="small-note" id="originman-run-selection-hint" role="status"></p>
-                </section>
-                <div class="model-actions">
-                  <button class="button button-ghost" id="browser-run-button" type="button">
-                    浏览器回放</button
-                  ><button class="button button-primary" id="local-run-button" type="button">
-                    发起本地强化学习训练</button
-                  ><button class="button button-ghost" id="robogo-run-button" type="button">
-                    登记 RoboGo 训练
-                  </button>
-                </div>
-                <p class="action-block-hint" id="run-action-hint" role="status" aria-live="polite">选择模型后可提交训练或回放。</p>
-                <div class="run-progress-card" id="run-progress-card" hidden>
+                <div class="run-progress-card" id="run-progress-card" tabindex="-1" aria-labelledby="run-progress-title" hidden>
                   <div class="run-progress-heading">
                     <div>
                       <strong id="run-progress-title">等待训练任务</strong>
@@ -943,17 +910,63 @@
                   <div class="run-progress-warning" id="run-progress-warning" hidden>
                     Mock 只验证协议和台账，不会生成可部署模型。
                   </div>
-                  <button
-                    class="button button-ghost button-small"
-                    id="run-progress-detail"
-                    type="button"
-                  >
-                    查看运行详情 →
+                  <div class="training-plans-actions">
+                    <button class="button button-primary button-small" id="run-progress-replay" type="button" hidden>查看本次回放</button>
+                    <button class="button button-ghost button-small" id="run-progress-detail" type="button">运行详情与制品</button>
+                  </div>
+                  <p class="small-note" id="run-progress-replay-note" hidden></p>
+                </div>
+                <details class="model-details-fold" id="model-details-fold">
+                  <summary>
+                    <span class="overview-environment-toggle" aria-hidden="true"><i>⌄</i></span>
+                    <span>
+                      <strong>契约与参考制品</strong>
+                      <small>查看输入输出和兼容性；训练权重在对应 Run 中查看</small>
+                    </span>
+                  </summary>
+                  <div class="model-details-body">
+                    <div class="model-summary" id="model-summary">
+                      <div class="empty-inline">等待模型台账加载</div>
+                    </div>
+                    <div class="artifact-list" id="artifact-list"></div>
+                    <div class="compatibility-list" id="compatibility-list"></div>
+                  </div>
+                </details>
+                <section id="originman-run-actions" aria-label="OriginMan 训练与运行记录" hidden>
+                  <div class="model-actions">
+                    <button class="button button-primary button-small" id="originman-configure-training" type="button">准备训练配置</button>
+                    <button class="button button-primary button-small" id="originman-submit-dance" type="button" hidden>提交本轮舞蹈训练</button>
+                  </div>
+                  <p class="small-note" id="originman-run-action-hint" role="status"></p>
+                  <div class="model-actions">
+                    <label class="field-label" for="originman-run-select">选择训练 Run</label>
+                    <select id="originman-run-select"><option value="">请选择 Run</option></select>
+                    <a class="button button-ghost button-small" id="originman-run-open" hidden>查看本轮评测、制品与回放</a>
+                  </div>
+                  <p class="small-note" id="originman-run-selection-hint" role="status"></p>
+                </section>
+                <div class="model-actions">
+                  <button class="button button-ghost" id="browser-run-button" type="button">
+                    浏览器回放</button
+                  ><button class="button button-primary" id="local-run-button" type="button">
+                    发起本地强化学习训练</button
+                  ><button class="button button-ghost" id="robogo-run-button" type="button">
+                    登记 RoboGo 训练
                   </button>
                 </div>
+                <p class="action-block-hint" id="run-action-hint" role="status" aria-live="polite">选择模型后可提交训练或回放。</p>
                 <details class="training-controls" id="train-module-config" data-train-module="config" role="tabpanel" aria-labelledby="train-tab-config">
                   <summary>训练参数与续训</summary>
-                  <div class="panel-heading panel-heading-lean config-module-heading"><h2>训练配置</h2><small class="panel-tip">选算法、档位与算力；提交后在「Run 与进度」看曲线和日志</small></div>
+                  <div class="panel-heading panel-heading-lean config-module-heading">
+                    <div><h2>训练参数</h2><small class="panel-tip" id="training-config-context">正在读取模型和任务…</small></div>
+                    <div id="training-config-submit-panel">
+                      <div class="training-plans-actions">
+                        <button class="button button-primary" id="training-config-submit" type="button" disabled>检查并提交训练</button>
+                        <button class="button button-ghost button-small" id="training-config-options" type="button">更换模型或训练方式</button>
+                      </div>
+                      <p class="small-note" id="training-config-submit-hint" role="status"></p>
+                    </div>
+                  </div>
                   <section class="training-plans dance-goal" id="originman-goal-editor" aria-label="训练目标" hidden>
                     <nav class="training-plans-actions" aria-label="OriginMan 训练任务">
                       <strong aria-current="page">舞蹈训练</strong>
@@ -994,33 +1007,6 @@
                       </div>
                     </div>
                   </section>
-                  <section class="training-plans" id="training-plans" aria-label="训练方案">
-                    <div class="training-plans-actions">
-                      <div class="training-plans-picker">
-                        <label class="field-label" for="training-plan-select">训练方案</label>
-                        <select id="training-plan-select"><option value="">选择已保存方案</option></select>
-                      </div>
-                      <button class="button button-ghost button-small" id="training-plan-load" type="button" disabled>加载</button>
-                      <button class="button button-primary button-small" id="training-plan-save" type="button">保存为新方案</button>
-                      <button class="button button-ghost button-small" id="training-plan-copy" type="button" disabled>另存为</button>
-                      <button class="button button-ghost button-small" id="training-plan-new" type="button" hidden>取消选中</button>
-                    </div>
-                    <p class="small-note training-plans-status" id="training-plan-status" role="status">保存后可在工作台和 Studio 对话中加载。</p>
-                    <dialog class="training-plans-dialog" id="training-plan-dialog" aria-labelledby="training-plan-dialog-title">
-                      <form id="training-plan-form">
-                        <h2 id="training-plan-dialog-title">保存训练方案</h2>
-                        <label class="field-label" for="training-plan-name">方案名称</label>
-                        <input class="training-plans-name" id="training-plan-name" type="text" maxlength="64" required autofocus placeholder="例如 PPO 快检">
-                        <p class="small-note">只保存当前参数。开始训练需单独提交。</p>
-                        <p id="training-plan-form-error" role="alert"></p>
-                        <div class="training-plans-actions">
-                          <button class="button button-ghost button-small" id="training-plan-cancel" type="button">取消</button>
-                          <button class="button button-primary button-small" id="training-plan-confirm" type="submit">确认保存</button>
-                        </div>
-                      </form>
-                    </dialog>
-                  </section>
-
                   <div class="training-grid"><div class="training-field-group" id="training-basic-settings" role="group" aria-labelledby="training-group-basic">
                       <div class="training-group-title" id="training-group-basic">训练设置</div>
                       <label class="field-label" for="training-profile">训练档位<small class="profile-pref-note" data-training-profile-note hidden>已按你上次的选择预选</small></label
@@ -1100,6 +1086,32 @@
                     </div>
                     <p class="small-note task-engine-mismatch-note" id="task-engine-mismatch-note" hidden></p>
                   </div>
+                  <section class="training-plans" id="training-plans" aria-label="训练方案">
+                    <div class="training-plans-actions">
+                      <div class="training-plans-picker">
+                        <label class="field-label" for="training-plan-select">训练方案</label>
+                        <select id="training-plan-select"><option value="">选择已保存方案</option></select>
+                      </div>
+                      <button class="button button-ghost button-small" id="training-plan-load" type="button" disabled>加载</button>
+                      <button class="button button-ghost button-small" id="training-plan-save" type="button">保存为新方案</button>
+                      <button class="button button-ghost button-small" id="training-plan-copy" type="button" disabled>另存为</button>
+                      <button class="button button-ghost button-small" id="training-plan-new" type="button" hidden>取消选中</button>
+                    </div>
+                    <p class="small-note training-plans-status" id="training-plan-status" role="status">保存后可在工作台和 Studio 对话中加载。</p>
+                    <dialog class="training-plans-dialog" id="training-plan-dialog" aria-labelledby="training-plan-dialog-title">
+                      <form id="training-plan-form">
+                        <h2 id="training-plan-dialog-title">保存训练方案</h2>
+                        <label class="field-label" for="training-plan-name">方案名称</label>
+                        <input class="training-plans-name" id="training-plan-name" type="text" maxlength="64" required autofocus placeholder="例如 PPO 快检">
+                        <p class="small-note">只保存当前参数。开始训练需单独提交。</p>
+                        <p id="training-plan-form-error" role="alert"></p>
+                        <div class="training-plans-actions">
+                          <button class="button button-ghost button-small" id="training-plan-cancel" type="button">取消</button>
+                          <button class="button button-primary button-small" id="training-plan-confirm" type="submit">确认保存</button>
+                        </div>
+                      </form>
+                    </dialog>
+                  </section>
                 </details>
               </article>
 
@@ -1313,8 +1325,8 @@
                   ><span id="telemetry-timeline-end">0.00s</span>
                 </div>
               </div>
-              <div class="replay-player" id="replay-player" aria-label="逐帧回放播放器">
-                <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status">选择一个运行记录后加载</span></div>
+              <div class="replay-player" id="replay-player" tabindex="-1" role="region" aria-label="逐帧回放播放器">
+                <div class="replay-player-heading"><strong>逐帧回放</strong><span id="replay-status" role="status">选择一个运行记录后加载</span></div>
                 <div class="replay-player-controls">
                   <select id="replay-run-select" aria-label="选择要回放的运行"></select>
                   <button class="button button-primary button-small" id="replay-load-button" type="button">加载回放</button>
