@@ -695,6 +695,8 @@ export interface Sim2RealDeploymentRecord {
   runId?: string;
   /** Immutable registry artifact authorized by the release gate. */
   artifactId?: string;
+  /** Exact artifact digest selected for a read-only preflight. */
+  artifactSha256?: string;
   /** First-class evaluation evidence used for canary/live planning. */
   evaluationId?: string;
   deviceId: string;

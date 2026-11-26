@@ -44,6 +44,8 @@ import { fileURLToPath } from 'node:url';
 import { getRunPolicyRetention, resolveRunPolicyDownload } from '../sim2real/run-policy.js';
 import type { Device } from '../../shared/types.js';
 import type {
+  Sim2RealArtifact,
+  Sim2RealArtifactRecord,
   Sim2RealDeploymentMode,
   Sim2RealDeploymentRecord,
   Sim2RealDeploymentStep,
@@ -2054,6 +2056,46 @@ function deploymentSummary(mode: Sim2RealDeploymentMode, deployable: boolean): s
 
 function preflightCommand(): string {
   return buildBoardPreflightCommand();
+}
+
+function preflightArtifact(
+  run: Sim2RealRunRecord | null,
+  artifact: Sim2RealArtifactRecord | null,
+  modelId: string,
+  sha256: string,
+  registryId?: string,
+): Sim2RealArtifact | null {
+  if (
+    !run ||
+    run.modelId !== modelId ||
+    run.status !== 'completed' ||
+    run.mock === true ||
+    run.evaluation?.replay?.source === 'demo-fixture' ||
+    !/^[a-f0-9]{64}$/.test(sha256)
+  )
+    return null;
+  if (registryId) {
+    if (
+      !artifact ||
+      artifact.runId !== run.id ||
+      artifact.modelId !== modelId ||
+      artifact.id !== registryId ||
+      artifact.status === 'revoked' ||
+      artifact.sha256 !== sha256 ||
+      !['policy', 'compiled-policy'].includes(artifact.role)
+    )
+      return null;
+    return artifact;
+  }
+  const output = run.artifact;
+  if (!output || output.sha256 !== sha256) return null;
+  return {
+    ...output,
+    id: output.artifactId,
+    name: output.artifactId,
+    role: output.kind === 'compiled' ? 'compiled-policy' : 'policy',
+    ref: output.artifactRef,
+  };
 }
 
 const PREFLIGHT_BEGIN = '__STUDIO_SIM2REAL_PREFLIGHT_BEGIN__';
@@ -5457,14 +5499,49 @@ export function createSim2RealRouter(
         });
         return;
       }
-      const compatibility = compatibilityForManifest(model.manifest, targetPlatform);
       const releaseRun = runId ? await getSim2RealRun(runId, owner) : null;
+      const artifactSha256 = mode === 'preflight' ? String(body.artifactSha256 ?? '').trim() : '';
+      const pinnedArtifact = artifactSha256
+        ? preflightArtifact(
+            releaseRun,
+            requestedArtifactId ? await getSim2RealArtifact(requestedArtifactId, owner) : null,
+            model.id,
+            artifactSha256,
+            requestedArtifactId || undefined,
+          )
+        : null;
+      if (mode === 'preflight' && body.artifactSha256 != null && !pinnedArtifact) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_ARTIFACT_LINEAGE_INVALID',
+          '制品已变更、撤销或与这次运行不一致。请返回原运行详情重新选择。',
+          { retryable: false },
+        );
+        return;
+      }
+      const compatibility = compatibilityForManifest(
+        pinnedArtifact ? { ...model.manifest, artifacts: [pinnedArtifact] } : model.manifest,
+        targetPlatform,
+      );
+      if (
+        pinnedArtifact &&
+        !requestedArtifactId &&
+        releaseRun?.artifact?.deployable !== true &&
+        compatibility.deployable
+      ) {
+        compatibility.status = 'needs-validation';
+        compatibility.result.status = 'needs-validation';
+        compatibility.deployable = false;
+        compatibility.reason = '本次运行的制品尚未标记为可部署。请准备并登记经验证的板端制品。';
+        compatibility.result.reasons = [compatibility.reason];
+      }
       // When a run has first-class lineage, pin its latest published artifact
       // and passed evaluation automatically. Legacy runs may still rely on
       // embedded runner metadata, preserving the existing API contract.
       let artifactId = requestedArtifactId || undefined;
       let evaluationId = requestedEvaluationId || undefined;
-      if (releaseRun && !artifactId && releaseRun.artifactIds?.length) {
+      if (releaseRun && !artifactSha256 && !artifactId && releaseRun.artifactIds?.length) {
         const artifacts = await listSim2RealArtifacts(owner);
         const candidate = [...artifacts]
           .filter(
@@ -5595,6 +5672,7 @@ export function createSim2RealRouter(
         modelId: model.id,
         ...(releaseRun ? { runId: releaseRun.id } : {}),
         ...(artifactId ? { artifactId } : {}),
+        ...(artifactSha256 ? { artifactSha256 } : {}),
         ...(evaluationId ? { evaluationId } : {}),
         deviceId: device.id,
         targetPlatform,
@@ -5623,6 +5701,7 @@ export function createSim2RealRouter(
         mode,
         ...(runId ? { runId } : {}),
         ...(artifactId ? { artifactId } : {}),
+        ...(artifactSha256 ? { artifactSha256 } : {}),
         ...(evaluationId ? { evaluationId } : {}),
       });
       try {
@@ -5946,6 +6025,40 @@ export function createSim2RealRouter(
         });
         return;
       }
+      if (deployment.status === 'running' || deployment.status === 'completed') {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_PREFLIGHT_PLAN_BUSY',
+          '此计划正在检查或已完成。请刷新查看结果。',
+          { retryable: false },
+        );
+        return;
+      }
+      if (deployment.artifactSha256) {
+        const run = deployment.runId ? await getSim2RealRun(deployment.runId, owner) : null;
+        const artifact = deployment.artifactId
+          ? await getSim2RealArtifact(deployment.artifactId, owner)
+          : null;
+        if (
+          !preflightArtifact(
+            run,
+            artifact,
+            deployment.modelId,
+            deployment.artifactSha256,
+            deployment.artifactId,
+          )
+        ) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_ARTIFACT_LINEAGE_INVALID',
+            '原制品已变更或撤销。请返回运行详情重新生成计划。',
+            { retryable: false },
+          );
+          return;
+        }
+      }
       if (!deps.runOnDevice) {
         sendApiError(
           response,
@@ -5977,7 +6090,17 @@ export function createSim2RealRouter(
         return;
       }
       const runningSteps = markStep(deployment.steps, 'board-passport', 'running');
-      await updateSim2RealDeployment(
+      if (deployment.artifactSha256 && device.boardPlatform !== deployment.targetPlatform) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_BOARD_DETECTION_REQUIRED',
+          '目标板型已变更。请重新探测板型并生成预检计划。',
+          { retryable: false },
+        );
+        return;
+      }
+      const started = await updateSim2RealDeployment(
         id,
         {
           status: 'running',
@@ -5985,7 +6108,18 @@ export function createSim2RealRouter(
           steps: runningSteps,
         },
         owner,
+        { expectedStatus: deployment.status },
       );
+      if (!started) {
+        sendApiError(
+          response,
+          409,
+          'SIM2REAL_PREFLIGHT_PLAN_BUSY',
+          '计划状态已变更。请刷新查看当前结果。',
+          { retryable: true },
+        );
+        return;
+      }
       try {
         const executed = await deps.runOnDevice(
           request,
@@ -6093,7 +6227,7 @@ export function createSim2RealRouter(
         const finalStatus = deployment.compatibility.deployable ? 'ready' : 'blocked';
         const finalSummary = deployment.compatibility.deployable
           ? '板端只读预检通过；下一步仍需显式批准并由 board agent 执行 canary。'
-          : '板端只读预检通过，但模型仍缺少匹配的编译制品，不能进入 canary。';
+          : '板端只读检查通过，制品就绪仍有阻断。';
         const updated = await updateSim2RealDeployment(
           id,
           {

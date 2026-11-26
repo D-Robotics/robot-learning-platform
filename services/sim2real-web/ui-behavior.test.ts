@@ -957,11 +957,12 @@ describe('Sim2Real workbench DOM behavior', () => {
       name: 'Versioned policy',
       modelId: selectedModel.id,
       format: 'onnx',
+      role: 'policy',
       status: 'published',
       version: '1.2.0',
       sha256: 'a'.repeat(64),
     };
-    const { window, errors } = await boot({
+    const { window, errors, requests } = await boot({
       runs: [other, run],
       artifacts: [
         { ...artifact, id: 'other-artifact', runId: other.id, name: 'Wrong policy' },
@@ -998,6 +999,16 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(artifactSection?.textContent).toContain('1.2.0');
     expect(artifactSection?.textContent).not.toContain('Wrong policy');
     expect(artifactSection?.textContent).not.toContain('这次运行还没有制品');
+    artifactSection?.querySelector<HTMLButtonElement>('button')?.click();
+    expect(window.location.hash).toBe('#deploy/preflight');
+    expect(window.document.querySelector('#deploy-source-name')?.textContent).toContain(
+      'Versioned policy · 1.2.0',
+    );
+    expect(window.document.querySelector('#deploy-source-identity')?.textContent).toContain(
+      'Run older-start · SHA-256 ' + artifact.sha256,
+    );
+    expect(window.document.querySelector<HTMLButtonElement>('#plan-button')?.disabled).toBe(true);
+    expect(requests.filter((request) => request.method === 'POST')).toEqual([]);
     expect(errors).toEqual([]);
   });
 
@@ -1032,7 +1043,9 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(row).toBeTruthy();
     row?.click();
     const section = window.document.querySelector('[aria-labelledby="run-result-artifact"]');
-    const button = section?.querySelector<HTMLButtonElement>('button');
+    const button = [...(section?.querySelectorAll<HTMLButtonElement>('button') || [])].find(
+      (control) => control.textContent === '下载 ONNX',
+    );
     expect(button?.textContent).toBe('下载 ONNX');
     button?.click();
     await vi.waitFor(() => {
