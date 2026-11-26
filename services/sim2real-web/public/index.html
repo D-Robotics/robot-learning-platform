@@ -1128,7 +1128,7 @@
               <button class="submodule-tab is-active" type="button" role="tab" id="eval-tab-run" aria-controls="evaluation-run-panel" data-view-target="evaluate" data-flow-child="evaluation-run">发起评测<small>指标 · 仿真对照</small></button>
               <button class="submodule-tab" type="button" role="tab" id="eval-tab-comparison" aria-controls="evaluation-comparison-panel" data-view-target="evaluate" data-flow-child="comparison">结果对比<small>最近 Run 趋势</small></button>
             </div>
-            <div class="evaluation-banner">
+            <div class="evaluation-banner" id="evaluation-banner" hidden>
               <div class="evaluation-status-mark" id="eval-status-mark">○</div>
               <div>
                 <strong id="eval-run-status">尚未产生评测结果</strong>
@@ -1145,33 +1145,20 @@
                 查看运行记录 →
               </button>
             </div>
-            <div class="evaluation-empty" id="evaluation-empty" hidden>
-              <div class="evaluation-empty-card">
-                <div class="evaluation-empty-head">
-                  <strong>还没有可评测的数据</strong>
-                  <span>页面只展示真实结果，没有数据时不摆空面板占位。</span>
-                </div>
-                <ol class="evaluation-empty-steps">
-                  <li>
-                    <span class="evaluation-empty-step-index">01</span>
-                    <div><strong>发起一次训练或回放</strong><small>训练完成后，指标和运行记录会自动出现在这里</small></div>
-                  </li>
-                  <li>
-                    <span class="evaluation-empty-step-index">02</span>
-                    <div><strong>导入一段遥测证据</strong><small>X5 Agent 或浏览器录制的 JSONL，本地解析不上传</small></div>
-                  </li>
-                  <li>
-                    <span class="evaluation-empty-step-index">03</span>
-                    <div><strong>对比仿真与真机</strong><small>指标卡、效果对比和逐帧回放在有数据后展开</small></div>
-                  </li>
-                </ol>
-                <div class="evaluation-empty-actions">
-                  <button class="button button-ghost" id="evaluation-empty-import" type="button">导入遥测 JSONL</button>
-                  <button class="button button-ghost" data-view-target="train" type="button">去发起训练</button>
-                </div>
+            <section class="evaluation-empty-card" id="evaluation-empty" aria-labelledby="evaluation-empty-title" hidden>
+              <div class="evaluation-empty-head">
+                <h2 id="evaluation-empty-title">还没有评测记录</h2>
+                <p id="evaluation-empty-description">导入一段已有轨迹，或先用示例熟悉回放。</p>
               </div>
-            </div>
-            <div class="evaluation-grid" id="evaluation-run-panel" role="tabpanel" aria-labelledby="eval-tab-run">
+              <div class="evaluation-empty-actions">
+                <button class="button button-primary" id="evaluation-empty-import" type="button">导入轨迹</button>
+                <button class="button button-ghost" id="evaluation-empty-demo" type="button">看回放示例</button>
+                <button class="button button-ghost" id="evaluation-empty-run" type="button">去配置训练</button>
+              </div>
+              <p class="small-note">支持板卡或浏览器录制的 JSONL（≤32 MiB），文件在浏览器内解析。</p>
+              <p class="small-note" id="evaluation-empty-error" role="status" hidden></p>
+            </section>
+            <div class="evaluation-grid" id="evaluation-run-panel" hidden role="tabpanel" aria-labelledby="eval-tab-run">
               <article class="panel metrics-panel">
                 <div class="panel-heading panel-heading-lean"><h2>关键指标</h2>
                 </div>
@@ -1230,7 +1217,7 @@
               </details>
             </div>
             <div class="evaluation-evidence">
-            <article class="panel run-comparison-panel" id="evaluation-comparison-panel" role="tabpanel" aria-labelledby="eval-tab-comparison">
+            <article class="panel run-comparison-panel" id="evaluation-comparison-panel" hidden role="tabpanel" aria-labelledby="eval-tab-comparison">
               <div class="panel-heading panel-heading-lean">
                 <div><h2 id="run-comparison-title">最近实验对比</h2><p class="panel-subtitle">用同一模型的最近 Run 快速判断趋势</p></div>
                 <span class="panel-caption" id="run-comparison-caption">最近 5 次</span>
@@ -1287,10 +1274,10 @@
             </article>
 
             </div>
-            <section class="panel run-inspector-panel" aria-label="逐帧诊断与同步对照">
+            <section class="panel run-inspector-panel" id="evaluation-inspector" hidden aria-label="逐帧诊断与同步对照">
               <rdk-run-inspector id="run-inspector"></rdk-run-inspector>
             </section>
-            <details class="panel telemetry-panel workspace-inspector" aria-labelledby="telemetry-title" open>
+            <details class="panel telemetry-panel workspace-inspector" id="evaluation-telemetry" aria-labelledby="telemetry-title" hidden open>
               <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2 id="telemetry-title">遥测回放与证据</h2></span>
                 <span class="state-badge state-neutral" id="telemetry-state">尚未导入</span>
                 <span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span>
@@ -1468,7 +1455,7 @@
                 >
               </div>
             </details>
-            <div class="evaluation-next">
+            <div class="evaluation-next" id="evaluation-next" hidden>
               <span class="next-line" id="evaluation-next-line"></span>
               <strong id="evaluation-next-title">下一步：通过评测后生成 X5 预检计划</strong>
               <button
@@ -1735,65 +1722,63 @@
               <button id="station-tab-diagnostics" aria-controls="station-module-diagnostics-command" class="submodule-tab" type="button" role="tab" aria-selected="false" data-station-module-tab="diagnostics">诊断命令<small>TROS 与系统检查</small></button>
             </div>
             <div class="station-notice" id="station-notice" role="status" aria-live="polite" hidden>
-              上位机未就绪：未配置板端 agent 或板卡设备。
+              请先连接设备。
             </div>
             <article role="tabpanel" aria-labelledby="station-tab-devices" class="panel station-device-manager" id="station-device-manager" data-station-module="devices">
-              <div class="panel-heading panel-heading-lean"><h2>设备管理</h2>
-                <span class="panel-caption">平台内添加 · 受控连接 · 状态可追踪</span>
-              </div>
-              <p class="station-drive-note" id="station-device-manager-note">
-                在平台内登记板卡并建立受控连接：设备档案、连接状态、心跳、
-                能力检查和后续预检都在本页完成。
-              </p>
-              <div class="station-studio-connect">
-                <div><strong>原生连接设备</strong><small>填写板卡地址并添加，平台会建立受控隧道并读取设备状态。</small></div>
-              </div>
-              <p class="station-device-ssh-hint" id="station-device-ssh-path"><strong>路径 A · 网页内配对</strong>：SSH 可密码登录的板卡，填下表一次完成设备档案与受控隧道。</p>
-              <div class="station-device-add" id="station-device-add">
-                <label for="station-device-host">板卡 IP / 主机名
-                  <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" />
-                </label>
-                <label for="station-device-user" data-station-ssh-field>SSH 用户
-                  <input type="text" id="station-device-user" value="root" spellcheck="false" autocomplete="off" />
-                </label>
-                <label for="station-device-password" data-station-ssh-field>SSH 密码（仅本次配对）
-                  <input type="password" id="station-device-password" placeholder="不会保存" autocomplete="new-password" />
-                </label>
-                <label for="station-device-port" data-station-ssh-field>SSH 端口
-                  <input type="number" id="station-device-port" value="22" min="1" max="65535" />
-                </label>
-                <label for="station-device-label">备注（可选）
-                  <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
-                </label>
-                <label for="station-device-profile">设备档案
-                  <select id="station-device-profile"><option value="microduck-x5">MicroDuck · X5</option><option value="originbot-x5">OriginBot · X5</option><option value="custom">通用 RDK / 自定义设备</option></select>
-                  <small class="station-device-profile-note" id="station-device-profile-note">按当前产品线自动推荐，可手动改成板端实际档案。</small>
-                </label>
-                <label for="station-device-transport">连接方式
-                  <select id="station-device-transport"><option value="ssh">SSH 隧道</option><option value="bridge">Local Bridge（已配对设备）</option></select>
-                  <small class="station-device-transport-note" id="station-device-transport-note">服务器直连板卡时使用；密码只用于本次建档。</small>
-                </label>
-                <button class="button station-device-add-btn" type="button" id="station-device-add-btn">
-                  添加设备与能力档案
-                </button>
-                <button class="button button-primary station-device-script-btn" type="button" id="station-device-script-btn">生成一键配对脚本（路径 B）</button>
-              </div>
-              <div class="station-connect-script" id="station-connect-script" hidden>
-                <div><strong>首次配对脚本（路径 B）</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
-                <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
-                <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
-              </div>
-              <p class="station-device-ssh-hint" id="station-device-pairing-hint" hidden></p>
-              <div class="station-device-list" id="station-device-list">
-                <span class="station-topic-empty" id="station-device-list-empty">尚未添加设备。</span>
-              </div>
-              <p class="station-device-ssh-hint" id="station-bridge-hint">
-                如果已连接 RDK Studio Local Bridge，设备会在上方板卡选择器中直接出现；无需在这里重复添加 SSH。
-              </p>
-              <p class="station-device-ssh-hint" id="station-device-ssh-hint">
-                提示：RDK Studio 场景不需要填写 SSH。下方 SSH 仅用于服务器能直接访问板卡的独立部署，
-                需要服务器已有密钥或 ssh-agent。
-              </p>
+              <div class="panel-heading panel-heading-lean"><h2>连接设备</h2></div>
+              <p class="station-entry-status" id="station-device-manager-note" role="status">正在查找工作区设备…</p>
+              <details class="station-entry-option" id="station-studio-entry" name="station-connection-method">
+                <summary><strong>从 RDK Studio 连接</strong><small>板卡由 RDK Studio 管理</small></summary>
+                <div class="station-entry-body">
+                  <p>在 RDK Studio 的设备列表中连接板卡，再回到这里。设备出现后，可将它设为目标。</p>
+                  <button class="button button-ghost button-small" id="station-device-refresh" type="button">刷新设备列表</button>
+                </div>
+              </details>
+              <details class="station-entry-option" id="station-address-entry" name="station-connection-method">
+                <summary><strong>使用板卡地址</strong><small>平台服务器可访问板卡</small></summary>
+                <div class="station-entry-body">
+                  <p class="station-device-ssh-hint" id="station-device-ssh-path">输入板卡 IP 或主机名，添加后在设备列表中点击「连接」。配对脚本可在板卡终端执行。</p>
+                  <div class="station-device-add" id="station-device-add">
+                    <label for="station-device-host">板卡 IP / 主机名
+                      <input type="text" id="station-device-host" placeholder="例如 board-host.example.internal" spellcheck="false" autocomplete="off" aria-describedby="station-device-pairing-hint" />
+                    </label>
+                    <label for="station-device-user">SSH 用户
+                      <input type="text" id="station-device-user" value="root" spellcheck="false" autocomplete="off" />
+                    </label>
+                    <label for="station-device-password">SSH 密码（仅本次配对）
+                      <input type="password" id="station-device-password" placeholder="不会保存" autocomplete="new-password" />
+                    </label>
+                    <label for="station-device-port">SSH 端口
+                      <input type="number" id="station-device-port" value="22" min="1" max="65535" />
+                    </label>
+                    <label for="station-device-label">备注（可选）
+                      <input type="text" id="station-device-label" placeholder="OriginBot 演示机" maxlength="120" />
+                    </label>
+                    <label for="station-device-profile">设备档案
+                      <select id="station-device-profile"><option value="microduck-x5">MicroDuck · X5</option><option value="originbot-x5">OriginBot · X5</option><option value="custom">通用 RDK / 自定义设备</option></select>
+                      <small class="station-device-profile-note" id="station-device-profile-note">按当前产品线自动推荐，可手动改成板端实际档案。</small>
+                    </label>
+                    <button class="button button-primary station-device-add-btn" type="button" id="station-device-add-btn">
+                      添加设备
+                    </button>
+                    <button class="button button-ghost station-device-script-btn" type="button" id="station-device-script-btn">生成配对脚本</button>
+                  </div>
+                  <div class="station-connect-script" id="station-connect-script" hidden>
+                    <div><strong>首次配对脚本</strong><small>在可访问板卡的终端粘贴运行一次；运行后设备会自动出现在下方列表（本页约每 3 秒刷新），配对完成后的连接、检测和预检均在平台内完成。脚本含一次性配对凭据，请勿转发。</small></div>
+                    <textarea id="station-connect-script-text" readonly aria-label="设备连接脚本"></textarea>
+                    <button class="button button-ghost button-small" type="button" id="station-connect-script-copy">复制脚本</button>
+                  </div>
+                  <p class="station-device-ssh-hint" id="station-device-pairing-hint" role="status" hidden></p>
+                </div>
+              </details>
+              <div class="station-device-list" id="station-device-list" hidden></div>
+              <details class="station-entry-option station-entry-diagnostics" id="station-connection-diagnostics" hidden>
+                <summary><strong>连接诊断</strong></summary>
+                <div class="station-entry-body">
+                  <p id="station-board-diagnostic" hidden></p>
+                  <p id="station-discovery-diagnostic" hidden></p>
+                </div>
+              </details>
             </article>
             <div class="station-layout">
               <article id="station-module-telemetry-status" role="tabpanel" aria-labelledby="station-tab-telemetry" class="panel station-status-panel" data-station-module="telemetry">
