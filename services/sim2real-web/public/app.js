@@ -407,6 +407,9 @@ const state = {
   selectedComputeResourceId: '',
   computeResourceEditingId: '',
   activeDeployment: null,
+  deploymentSource: null,
+  deploymentIssue: null,
+  deploymentRequest: null,
   loading: false,
   serviceError: false,
   authRequired: false,
@@ -694,7 +697,8 @@ function renderDeploymentTimeline() {
   if (!root) return;
   const model = selectedModel();
   const device = selectedDevice();
-  const deployment = state.activeDeployment || deploymentsForCurrentModel().find((item) => item.modelId === model?.id && item.deviceId === device?.id);
+  const deployment = state.deploymentSource ? preflightContext().plan
+    : state.activeDeployment || deploymentsForCurrentModel().find((item) => item.modelId === model?.id && item.deviceId === device?.id);
   const latest = latestRun();
   const evidence = currentTelemetry();
   const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
@@ -842,15 +846,25 @@ function promotionChainLinks() {
 function renderPromotionFlow() {
   const root = $('promotion-chain');
   if (!root) return;
-  const links = promotionChainLinks();
+  const source = state.deploymentSource;
   const { artifacts, evaluations, deployments } = promotionRecordsForCurrentModel();
-  renderPromotionStages(artifacts, evaluations, deployments);
+  const artifact = findPreflightArtifact(source);
+  const run = findPreflightRun(source);
+  const linkedEvaluations = source ? evaluations.filter((item) =>
+    item.runId === source.runId && (!item.artifactId || item.artifactId === artifact?.id)) : evaluations;
+  const deployment = source ? preflightContext().plan : null;
+  const links = source ? artifact ? [{
+    run, artifact, evaluation: linkedEvaluations.find((item) => item.id === run?.evaluationId) || linkedEvaluations[0], deployment,
+  }] : [] : promotionChainLinks();
+  renderPromotionStages(source ? (artifact ? [artifact] : []) : artifacts,
+    linkedEvaluations, source ? (deployment ? [deployment] : []) : deployments);
   root.replaceChildren();
   if (!links.length) {
     const empty = document.createElement('li');
     empty.className = 'promotion-chain-empty';
-    empty.textContent =
-      '当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 产物 → 评测 → 制品 → 部署 展示证据。';
+    empty.textContent = source
+      ? '发布前需登记并验证该 Run 的制品版本，同时补齐可追溯的评测证据。'
+      : '当前模型还没有可展示的晋级链：完成一次真实训练并发布制品后，这里会按 产物 → 评测 → 制品 → 部署 展示证据。';
     root.append(empty);
     return;
   }
@@ -1787,6 +1801,7 @@ function setAuthGate(payload) {
   const enteringGuestMode = !state.authRequired;
   state.authRequired = true;
   if (enteringGuestMode) {
+    clearPreflightSource();
     stationDiscovery = null;
     stationDiscoveryGeneration += 1;
     state.station.ready = false;
@@ -2926,12 +2941,13 @@ function renderSelects() {
     // more recently verified device exists is a stale registration the
     // operator replaced; it must not keep the default away from the live board.
     const selectionStale =
+      !state.deploymentSource &&
       selectedDevice?.status === 'disconnected' &&
       Boolean(newestCheckedAt) &&
       String(selectedDevice.lastCheckedAt ?? '') < String(newestCheckedAt);
     if (!devices.length) {
       selectStationDevice('');
-    } else if (!selectedDevice || selectionStale) {
+    } else if ((!selectedDevice && !state.deploymentSource) || selectionStale) {
       // Default to the most recently verified board so a newly attached
       // device outranks a stale registration that was never reconnected.
       const byRecency = [...devices].sort((a, b) =>
@@ -2940,11 +2956,16 @@ function renderSelects() {
         ),
       );
       selectStationDevice(byRecency[0]?.id || '');
+    } else if (!selectedDevice) {
+      selectStationDevice('');
     }
     syncSelect(
       deviceSelect,
       devices.length
-        ? devices.map((device) => ({ value: device.id, textContent: device.name || device.id }))
+        ? [
+            ...(state.deploymentSource ? [{ value: '', textContent: '请选择目标板卡' }] : []),
+            ...devices.map((device) => ({ value: device.id, textContent: device.name || device.id })),
+          ]
         : [{ value: '', textContent: '没有已登记的板卡' }],
       state.selectedDeviceId,
     );
@@ -3190,19 +3211,12 @@ function renderIntegrations() {
   const local = integrations.simulator?.local || {};
   const storage = integrations.storage || {};
   const simulator = integrations.simulator || {};
-  const boardAgent = simulator.boardAgent || {};
   const profile = selectedProductProfile();
   const originbotProduct = profile.id === 'originbot';
   const model = selectedModel();
   const device = selectedDevice();
-  const targetDeployment =
-    state.activeDeployment ||
-    deploymentsForCurrentModel().find(
-      (item) => item.modelId === model?.id && item.deviceId === device?.id,
-    );
-  const targetReady = Boolean(
-    targetDeployment && ['ready', 'completed'].includes(String(targetDeployment.status || '')),
-  );
+  const targetPlan = preflightContext().plan;
+  const targetReady = targetPlan?.status === 'ready' && targetPlan.verification?.passed === true;
   const latest = latestRun();
   const currentEvidence = currentTelemetry();
   const latestRealEvidence = hasReleaseGradeEvidence(currentEvidence, latest);
@@ -3471,24 +3485,6 @@ function renderIntegrations() {
             robogoReady ? 'RoboGo 训练' : '',
           ].filter(Boolean).join('、') + '可用。'];
   setActionHint('run-action-hint', actionHint[0], actionHint[1]);
-  const deployHint = !overviewReady
-    ? '正在读取设备和 BoardAgent 状态…'
-    : !model
-    ? '先在训练页登记模型契约。'
-    : !device
-      ? '先到设备控制台登记并选择目标板卡。'
-      : !targetDeployment
-        ? '模型和板卡已选择；点击“生成预检计划”开始只读检查。'
-        : boardAgent.available !== true
-          ? `预检计划已生成，但当前 BoardAgent 不可用：${boardAgent.reason || '请在部署环境接入 agent'}`
-          : targetReady
-            ? '只读预检已通过；Canary / Live 仍需要人工批准和安全开关。'
-            : '预检计划已生成；点击“执行只读预检”查看兼容性结果。';
-  setActionHint(
-    'deploy-action-hint',
-    !overviewReady ? 'waiting' : targetReady ? 'ready' : !model || !device ? 'blocked' : 'waiting',
-    deployHint,
-  );
   $('browser-run-button')?.toggleAttribute('disabled', state.runSubmitting || !browserRunnable);
   $('browser-run-button')?.setAttribute(
     'title',
@@ -3500,21 +3496,7 @@ function renderIntegrations() {
           ? '浏览器仿真只运行官方参考策略；登记模型请使用本地 worker 或 RoboGo'
           : '',
   );
-  const detectButton = $('detect-button');
-  if (detectButton) {
-    const canDetect = Boolean(selectedDevice()) && boardAgent.available === true;
-    detectButton.disabled = !canDetect;
-    detectButton.title = canDetect
-      ? '通过受控 BoardAgent 读取板型'
-      : boardAgent.reason || '当前部署未接入 BoardAgent';
-  }
-  const preflightButton = $('preflight-button');
-  if (preflightButton) {
-    preflightButton.disabled =
-      state.deploymentSubmitting || !targetDeployment || boardAgent.available !== true;
-    preflightButton.title =
-      boardAgent.reason || '先生成预检计划，并在部署环境接入 BoardAgent';
-  }
+  renderBoard();
   $('contract-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model);
   $('local-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !storageReady || (!localConfigured && !selectedComputeResource));
   const configSubmit = $('training-config-submit');
@@ -4039,87 +4021,176 @@ function artifactPresentation(artifact) {
   return { key: 'registered', label: '已登记', detail: '源制品已纳入模型版本' };
 }
 
-function renderBoard() {
+function findPreflightRun(source = state.deploymentSource) {
+  return source && runsForCurrentModel().find((run) => run.id === source.runId);
+}
+
+function findPreflightArtifact(source = state.deploymentSource) {
+  if (!source?.artifactId) return null;
+  return (state.overview?.artifacts || []).find((item) =>
+    item.id === source.artifactId && item.runId === source.runId &&
+    item.modelId === source.modelId && item.sha256 === source.artifactSha256);
+}
+
+function canPreflightArtifact(run, artifact, registered = false) {
+  return run?.status === 'completed' && run.mock !== true &&
+    run.evaluation?.replay?.source !== 'demo-fixture' &&
+    /^[a-f0-9]{64}$/.test(artifact?.sha256 || '') &&
+    (!registered || (artifact.status !== 'revoked' && ['policy', 'compiled-policy'].includes(artifact.role)));
+}
+
+function preflightContext() {
+  const source = state.deploymentSource;
+  const model = selectedModel();
   const device = selectedDevice();
-  const summary = $('board-summary');
-  if (!summary) return;
-  if (!device) {
-    summary.innerHTML =
-      '<div class="empty-state board-empty"><strong>还没有目标板卡</strong><span>部署只会读取设备状态；先登记一块板卡，再生成只读预检计划。</span><button type="button" class="button button-ghost button-small" data-workspace-view="station">去设备管理登记 →</button></div>';
-    return;
+  const run = findPreflightRun(source);
+  const artifact = source?.artifactId ? findPreflightArtifact(source) : run?.artifact;
+  const sourceValid = !source || (run?.modelId === model?.id && source.modelId === model?.id &&
+    artifact?.sha256 === source.artifactSha256 && canPreflightArtifact(run, artifact, Boolean(source.artifactId)));
+  const agent = state.overview?.integrations?.simulator?.boardAgent;
+  const matches = (plan) => Boolean(plan && model && device &&
+    plan.mode === 'preflight' && plan.status !== 'cancelled' && plan.modelId === model.id &&
+    plan.deviceId === device.id && plan.targetPlatform === device.boardPlatform &&
+    (source ? plan.runId === source.runId && plan.artifactSha256 === source.artifactSha256 &&
+      (plan.artifactId || '') === (source.artifactId || '') : !plan.artifactSha256));
+  const deployments = deploymentsForCurrentModel();
+  const current = matches(state.activeDeployment) ? state.activeDeployment : null;
+  const stored = current && deployments.find((item) => item.id === current.id && matches(item) &&
+    String(item.updatedAt || '') > String(current.updatedAt || ''));
+  const plan = sourceValid ? stored || current || deployments.find(matches) : null;
+  const key = JSON.stringify([state.productId, state.projectId, model?.id, device?.id, device?.boardPlatform,
+    source?.runId, source?.artifactId, source?.artifactSha256]);
+  return { source, sourceValid, model, device, agent, plan, key, matches };
+}
+
+function startRunPreflight(run, artifact, registered = false) {
+  if (!canPreflightArtifact(run, artifact, registered) || !findPreflightRun({ runId: run.id })) return;
+  state.selectedModelId = run.modelId;
+  state.model = null;
+  state.compatibility = [];
+  state.activeDeployment = null;
+  state.deploymentIssue = null;
+  state.deploymentSource = {
+    modelId: run.modelId,
+    runId: run.id,
+    runTitle: runRecordTitle(run),
+    artifactId: registered ? artifact.id : undefined,
+    artifactSha256: artifact.sha256,
+    artifactLabel: registered ? [artifact.name || artifact.artifactId, artifact.version].filter(Boolean).join(' · ')
+      : String(artifact.format || '策略').toUpperCase() + ' 策略',
+  };
+  $('run-detail-dialog')?.close();
+  setView('deploy');
+  applyFlowChildDestination(FLOW_CHILD_CONTEXTS.preflight);
+  setFlowChild('preflight', { focus: false });
+  saveWorkspaceContext();
+  renderAll();
+  $('preflight-panel')?.scrollIntoView({ block: 'start' });
+  $('deploy-preflight-title')?.focus({ preventScroll: true });
+  void loadModelDetails(run.modelId);
+}
+
+function preflightArtifactReason(compatibility) {
+  if (!compatibility) return '';
+  if (compatibility.deployable) return '该制品的声明与目标板型匹配。运行时仍须校验实际制品。';
+  if (compatibility.status === 'requires-conversion') return '此制品需要为目标板型编译。请登记编译后的版本，从该版本重新预检。';
+  if (!compatibility.reason || !/[\u3400-\u9fff]/.test(compatibility.reason)) {
+    return '当前制品的运行时或目标板型信息不满足部署条件。请核对制品登记和目标板型。';
   }
-  const platform = device.boardPlatform || '待探测';
-  const reachable = device.sshReachability || device.status || 'unknown';
-  const deployment =
-    state.activeDeployment ||
-    deploymentsForCurrentModel().find(
-      (item) => item.modelId === selectedModel()?.id && item.deviceId === device.id,
-    );
-  // 预检状态的单一来源。以前 chip 只看 preflightReady 布尔值（status 是
-  // ready/completed 吗），正文却直接打印 deployment.status，于是"预检失败"
-  // 的设备会同时显示「待预检」和「当前预检状态：失败。」——同一张卡片上
-  // 两句话互相矛盾。现在 chip、样式和正文都从这一份映射里取。
-  const preflightState = (() => {
-    if (!device.boardPlatform) return { key: 'undetected', label: '待探测', stateClass: 'is-waiting' };
-    if (!deployment) return { key: 'unplanned', label: '待预检', stateClass: 'is-waiting' };
-    const status = String(deployment.status || '').toLowerCase();
-    if (['ready', 'completed'].includes(status)) return { key: 'passed', label: '预检通过', stateClass: 'is-ready' };
-    if (status === 'failed') return { key: 'failed', label: '预检失败', stateClass: 'is-failed' };
-    // blocked 是门禁的诚实阻断（如 requires-conversion），不是执行出错；
-    // 与 failed 分开呈现，避免把预期行为渲染成故障。
-    if (status === 'blocked') return { key: 'blocked', label: '预检阻断', stateClass: 'is-waiting' };
-    if (status === 'running') return { key: 'running', label: '预检中', stateClass: 'is-detected' };
-    if (['planned', 'pending', 'queued'].includes(status)) return { key: 'planned', label: '待执行预检', stateClass: 'is-detected' };
-    return { key: 'other', label: statusLabel(deployment.status), stateClass: 'is-detected' };
-  })();
-  const preflightReady = preflightState.key === 'passed';
-  const boardStateClass = preflightState.stateClass;
-  const deviceStatus = statusLabel(device.status || 'unknown');
-  const preflightLabel = preflightState.label;
-  // 预检卡上最具体的阻断原因：优先后端错误字段，其次被门禁挡住的步骤
-  // 详情（artifact/checksum 等），再退到兼容性结论。没有它，"未通过兼容性
-  // 检查"就是一句死胡同——用户不知道挂在哪一步、要去补什么。
-  const preflightDetail = (() => {
-    const steps = Array.isArray(deployment?.steps) ? deployment.steps : [];
-    const blocker = steps.find((item) => item && item.status === 'blocked');
-    return (
-      deployment?.lastError ||
-      deployment?.reason ||
-      blocker?.detail ||
-      (String(deployment?.compatibility?.status || '') === 'requires-conversion'
-        ? '源策略是 ONNX 中间表示，目标板卡需要编译后的运行时制品'
-        : '')
-    );
-  })();
-  const blockedReason = preflightReady
-    ? '只读预检已通过；执行动作仍由受控 BoardAgent 和人工批准保护。'
-    : preflightState.key === 'undetected'
-      ? '先点击“探测板型”，确认目标设备与契约匹配。'
-      : preflightState.key === 'unplanned'
-        ? '先生成预检计划，再执行只读检查。'
-        : preflightState.key === 'blocked'
-          ? `预检被门禁阻断（${preflightDetail || '发布门禁未放行'}）。补齐对应制品或证据后重新执行只读预检；平台不会伪造通过。`
-          : preflightState.key === 'failed'
-            ? `预检失败：${String(preflightDetail || '未通过兼容性检查').replace(/。+$/, '')}。修正后重新执行只读预检。`
-            : `当前预检状态：${preflightLabel}。`;
-  summary.innerHTML =
-    '<div class="board-summary-row"><strong>' +
-    escapeHtml(device.name || device.id) +
-    '</strong><span class="board-chip ' +
-    boardStateClass +
-    '">' +
-    escapeHtml(platform + ' · ' + preflightLabel) +
-    '</span></div><div class="board-details"><span>状态：' +
-    escapeHtml(deviceStatus) +
-    '</span><span>连接：' +
-    escapeHtml(device.connectionMode || 'ssh') +
-    '</span><span>可达性：' +
-    escapeHtml(statusLabel(reachable)) +
-    '</span></div><p class="board-block-reason" data-state="' +
-    (preflightReady ? 'ready' : 'blocked') +
-    '">' +
-    escapeHtml(blockedReason) +
-    '</p>';
+  return compatibility.reason;
+}
+
+function renderBoard() {
+  const summary = $('board-summary');
+  const steps = $('deploy-checks');
+  if (!summary || !steps) return;
+  const { source, sourceValid, model, device, agent, plan, key } = preflightContext();
+  const issue = state.deploymentIssue?.key === key ? state.deploymentIssue.message : '';
+  const busy = state.deploymentSubmitting;
+  const platform = device?.boardPlatform;
+  const boardStep = plan?.steps?.find((step) => step.id === 'board-passport');
+  const boardPassed = plan?.status !== 'running' && plan?.verification?.passed === true &&
+    plan.verification.mock !== true;
+  const deviceConnected = device?.status === 'connected';
+  const anyDevice = Boolean(state.overview?.devices?.length);
+  const canWrite = Boolean(state.overview && !state.authRequired && state.overview.integrations?.storage?.writable !== false);
+  $('deploy-source').hidden = !source && !model;
+  setText('deploy-source-title', source ? '本次制品' : '默认模型制品');
+  setText('deploy-source-name', source ? source.runTitle + ' · ' + source.artifactLabel : model ? modelLabel(model) : '');
+  setText('deploy-source-identity', source ? 'Run ' + source.runId + ' · SHA-256 ' + source.artifactSha256
+    : '从运行详情进入预检可指定某个制品版本。');
+  $('deploy-open-run').textContent = source ? '返回运行详情' : '选择运行制品';
+  $('deploy-open-run').disabled = Boolean(source && !findPreflightRun(source));
+  $('device-select').disabled = busy || !anyDevice;
+  const deviceText = !state.overview ? '正在读取板卡状态' : !device
+    ? anyDevice ? '请选择目标板卡' : '还没有目标板卡'
+    : deviceConnected ? '设备在线' : '未检测到实时连接';
+  summary.replaceChildren(retrainingElement('strong', '', deviceText));
+  if (device) {
+    summary.append(retrainingElement('p', 'small-note',
+      [platform || '板型待探测', device.lastCheckedAt ? '最近检查 ' + formatDate(device.lastCheckedAt) : '尚无连接检查'].join(' · ')));
+  }
+  if ((!device && !anyDevice && state.overview) || (device && !deviceConnected)) {
+    const manage = retrainingElement('button', 'button button-ghost button-small', device ? '检查设备连接' : '去设备管理登记');
+    manage.type = 'button';
+    manage.dataset.workspaceView = 'station';
+    summary.append(manage);
+  }
+  const check = (label, status, detail, stateName) => {
+    const row = retrainingElement('li', 'deploy-check');
+    row.dataset.state = stateName;
+    const title = retrainingElement('div', 'deploy-check-heading');
+    title.append(retrainingElement('strong', '', label), retrainingElement('span', '', status));
+    row.append(title, retrainingElement('p', 'small-note', detail));
+    return row;
+  };
+  const boardBlocked = boardStep?.status === 'blocked' || boardStep?.status === 'failed';
+  const result = plan?.compatibility;
+  steps.replaceChildren(
+    check('目标设备', !device ? '待选择' : !platform ? '待探测' : deviceConnected ? '已识别' : '连接待确认',
+      !device ? '选择或登记用于这次预检的板卡。' : !platform ? '先探测板型，获取实际硬件目标。'
+        : deviceConnected ? '已读取板型和近期连接状态。' : '登记信息仍可用。执行预检时会重新尝试连接。',
+      deviceConnected && platform ? 'ready' : 'waiting'),
+    check('板端环境', busy === 'probe' || plan?.status === 'running' ? '检查中' : boardPassed ? '已通过'
+        : boardBlocked ? '受阻' : agent?.available === true ? '待执行' : '未就绪',
+      boardPassed ? '架构、Python、TROS 和磁盘检查通过 · ' + formatDate(plan.verification.checkedAt)
+        : boardBlocked ? boardStep.detail || plan.summary
+          : agent?.available !== true ? '板端检查通道不可用。请在设备管理确认连接与 BoardAgent。'
+            : '读取架构、Python、TROS 和可用磁盘。',
+      boardPassed ? 'ready' : boardBlocked ? 'blocked' : 'waiting'),
+    check('制品兼容性', !sourceValid ? '受阻' : !result ? '待检查' : result.deployable ? '匹配' : '受阻',
+      !sourceValid ? '原制品已变更或不可用。请返回运行详情重新选择。'
+        : preflightArtifactReason(result) || '生成计划后核对该制品与目标板型。',
+      !sourceValid || (result && !result.deployable) ? 'blocked' : result?.deployable ? 'ready' : 'waiting'),
+  );
+  const hint = busy === 'plan' ? '正在生成预检计划…' : busy === 'probe' ? '正在执行板端只读检查…'
+    : busy === 'detect' ? '正在探测板型…'
+    : issue || (state.authRequired ? '请登录后选择设备并生成预检计划。'
+      : !state.overview ? '正在读取模型和设备状态…'
+      : !canWrite ? '工作区台账暂不可写，恢复后才能保存预检计划。'
+      : !sourceValid ? '返回原运行详情重新选择制品。'
+      : !model ? '先在训练页登记模型契约。'
+      : !device ? deviceText
+      : !platform ? '先探测板型，再生成预检计划。'
+      : boardPassed ? plan.summary
+      : boardBlocked ? '板端检查受阻，请查看上方原因后重试。'
+      : !plan ? '确认目标板卡后，生成预检计划。'
+      : agent?.available !== true ? '已生成计划，板端检查通道就绪后可执行。'
+      : '已生成计划，可以执行板端只读检查。');
+  setActionHint('deploy-action-hint', issue || !sourceValid || boardBlocked || result?.deployable === false
+    ? 'blocked' : boardPassed ? 'ready' : 'waiting', hint);
+  const detect = $('detect-button');
+  const create = $('plan-button');
+  const execute = $('preflight-button');
+  detect.disabled = Boolean(busy || !device || agent?.available !== true);
+  create.disabled = Boolean(busy || !canWrite || !model || !platform || !sourceValid || plan?.status === 'running');
+  create.textContent = plan ? '重新生成计划' : '生成预检计划';
+  execute.disabled = Boolean(busy || !canWrite || !plan || ['running', 'completed'].includes(plan.status) || agent?.available !== true);
+  create.classList.toggle('button-primary', !plan);
+  create.classList.toggle('button-ghost', Boolean(plan));
+  execute.classList.toggle('button-primary', Boolean(plan));
+  execute.classList.toggle('button-ghost', !plan);
+  execute.textContent = boardPassed || boardBlocked ? '重新执行板端检查' : '执行只读预检';
 }
 
 const RECORD_TYPE_LABELS = Object.freeze({
@@ -4166,15 +4237,43 @@ function recordKindLabel(record) {
   return mode ? `${type} · ${mode}` : type;
 }
 
+function runRecordTitle(run) {
+  return run.training?.originmanDance?.title || ACTION_TASKS[run.taskId]?.label ||
+    runTaskLabel(run) || run.summary || run.modelId || '运行';
+}
+
+function runRecordTime(run) {
+  return run.finishedAt || run.createdAt || '';
+}
+
 function renderHistory() {
   const root = $('history-list');
   if (!root) return;
   const query = state.recordsQuery.trim().toLowerCase();
-  const records = recordCollection()
+  const collection = recordCollection();
+  const latest = !query && ['all', 'run'].includes(state.recordsTab)
+    ? collection.reduce((recent, record) => {
+        if (record.recordType !== 'run' || record.status !== 'completed') return recent;
+        return !recent || String(runRecordTime(record)) > String(runRecordTime(recent)) ? record : recent;
+      }, null)
+    : null;
+  const recent = $('records-recent');
+  if (recent) recent.hidden = !latest;
+  if (latest) {
+    setText('records-recent-title', runRecordTitle(latest));
+    setText('records-recent-meta', [latest.modelId, formatDate(runRecordTime(latest)),
+      'Run ' + latest.id.slice(0, 8), latest.mock ? '协议演示' :
+        latest.evaluation?.replay?.source === 'demo-fixture' ? '演示样例' : ''].filter(Boolean).join(' · '));
+    $('records-recent-open').onclick = () => openRecordDetails(latest);
+  }
+  const records = collection
     .filter((record) => state.recordsTab === 'all' || record.recordType === state.recordsTab)
     .filter((record) => {
       if (!query) return true;
       return [
+        record.id,
+        record.recordType === 'run' && 'Run ' + record.id,
+        record.runId,
         record.kind,
         recordKindLabel(record),
         record.recordType === 'run' && runTaskLabel(record),
@@ -4191,6 +4290,8 @@ function renderHistory() {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     })
+    .sort((a, b) => String(b.recordType === 'run' ? runRecordTime(b) : b.createdAt || '')
+      .localeCompare(String(a.recordType === 'run' ? runRecordTime(a) : a.createdAt || '')))
     .slice(0, 30);
   setText(
     'records-count',
@@ -4212,7 +4313,7 @@ function renderHistory() {
         ? '还没有运行记录。先校验契约或打开浏览器仿真。'
         : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
-      ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试模型名、状态或后端，或清空筛选查看全部。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
+      ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试任务名、运行编号、模型或状态，或清空搜索查看当前分类。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
       : `<div class="empty-state records-empty"><strong>${escapeHtml(emptyHint)}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去发起训练</button></div></div>`; // escape-audit:allow emptyHint has been escaped via escapeHtml above
     root.querySelectorAll('[data-empty-action]').forEach((button) => button.addEventListener('click', () => {
       const action = button.dataset.emptyAction;
@@ -4228,6 +4329,7 @@ function renderHistory() {
     row.dataset.recordId = record.id;
     row.dataset.recordType = record.recordType;
     const status = String(record.status || 'unknown');
+    const isRun = record.recordType === 'run';
     const mockRun = record.recordType === 'run' && record.mock === true;
     const syntheticRun =
       record.recordType === 'run' && record.evaluation?.replay?.source === 'demo-fixture';
@@ -4245,19 +4347,20 @@ function renderHistory() {
         : '';
     row.innerHTML =
       '<span class="history-time">' +
-      escapeHtml(formatDate(record.createdAt)) +
+      escapeHtml(formatDate(isRun ? runRecordTime(record) : record.createdAt)) +
       '</span><span class="history-kind">' +
       escapeHtml(
         recordKindLabel(record),
       ) +
       '</span><span class="history-summary">' +
-      escapeHtml((record.recordType === 'run' && runTaskLabel(record)) || record.summary || record.modelId || '') +
+      escapeHtml(isRun ? runRecordTitle(record) : record.summary || record.modelId || '') +
       (physicsChip
         ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
         : '') +
       (sceneChip
         ? '<span class="history-physics">' + escapeHtml(sceneChip) + '</span>'
         : '') +
+      (isRun ? '<span class="history-run-id">Run ' + escapeHtml(record.id.slice(0, 8)) + '</span>' : '') +
       '</span><span class="history-status history-status-' +
       escapeHtml(status) +
       '">' +
@@ -4382,9 +4485,8 @@ function formatMetricNumber(value, digits) {
   return SimTelemetryCore.formatMetricNumber(value, digits);
 }
 
-function renderRunMetricCards(record) {
-  const metrics = record.metrics || {};
-  const cards = RUN_METRIC_CARDS.filter(([key]) => metrics[key] != null).map(
+function renderRunMetricCards(metrics, definitions = RUN_METRIC_CARDS) {
+  const cards = definitions.filter(([key]) => metrics[key] != null).map(
     ([key, label, format]) =>
       '<div class="run-metric-card' +
       (key === 'fallRate' && Number(metrics.fallRate) > 0.2 ? ' is-warn' : '') +
@@ -4397,9 +4499,9 @@ function renderRunMetricCards(record) {
   );
   if (!cards.length) return '';
   return (
-    '<div><strong class="run-detail-block-title">指标</strong><div class="run-metric-grid">' +
+    '<div class="run-metric-grid">' +
     cards.join('') +
-    '</div></div>'
+    '</div>'
   );
 }
 
@@ -4416,10 +4518,246 @@ function renderRunMetricsRaw(record) {
   );
 }
 
+const RUN_RESULT_METRIC_KEYS = new Set([
+  'contractValid', 'successRate', 'evaluationEpisodes', 'meanReturn', 'fallRate',
+  'reward', 'episodeLength', 'controlLatencyMs', 'validationChunkMse',
+]);
+const RUN_RESULT_METRICS = RUN_METRIC_CARDS.filter(([key]) => RUN_RESULT_METRIC_KEYS.has(key));
+const RUN_DIAGNOSTIC_METRICS = RUN_METRIC_CARDS.filter(([key]) => !RUN_RESULT_METRIC_KEYS.has(key));
+const RECORDED_VIDEO_TASKS = new Set(['originman-reference-track', 'originman-dance', 'originman-recovery']);
+const RUN_EVALUATION_STATUS = {
+  pending: '评测待处理', running: '评测进行中', passed: '评测已完成',
+  failed: '评测失败', invalid: '评测证据无效',
+};
+
+function runResultSection(id, title) {
+  const section = retrainingElement('section', 'run-result-section');
+  const heading = retrainingElement('h3', 'run-detail-block-title', title);
+  heading.id = id;
+  heading.tabIndex = -1;
+  section.setAttribute('aria-labelledby', id);
+  section.append(heading);
+  return section;
+}
+
+function renderRecordEvaluation(section, run, linked) {
+  const current = linked?.stale ? null : linked;
+  const evaluation = current?.report ?? run.evaluation;
+  const demo = run.mock || evaluation?.replay?.source === 'demo-fixture';
+  const metrics = demo
+    ? { contractValid: run.metrics?.contractValid }
+    : run.metrics || {};
+  const cards = renderRunMetricCards(metrics, RUN_RESULT_METRICS);
+  const gate = !demo && (current?.taskEvaluation?.qualityGate ?? run.taskEvaluation?.qualityGate);
+  if (linked) {
+    const status = linked.stale ? '历史评测 · 已被更新遥测取代'
+      : RUN_EVALUATION_STATUS[linked.status] || '已登记评测';
+    section.append(retrainingElement('strong', '', status));
+    if (linked.summary) section.append(retrainingElement('p', 'small-note', linked.summary));
+  }
+  if (typeof gate?.passed === 'boolean') {
+    section.append(retrainingElement('strong', gate.passed ? 'run-result-pass' : 'run-result-fail',
+      gate.passed ? '评测质量门通过' : '评测质量门未通过'));
+    for (const reason of gate.errors || []) section.append(retrainingElement('p', 'small-note', reason));
+  }
+  if (cards) {
+    section.insertAdjacentHTML('beforeend', cards); // escape-audit:allow renderRunMetricCards escapes all fields
+    if (demo) section.append(retrainingElement('p', 'small-note', '演示运行，仅展示契约状态。'));
+  }
+  if (evaluation?.evaluatedAt) {
+    const source = demo ? '演示遥测' : evaluation.replay?.attested ? '来源已验证' : '来源未验证';
+    section.append(retrainingElement('p', 'small-note',
+      `遥测评测 · ${evaluation.sampleCount ?? 0} 条样本 · ${source} · ${formatDate(evaluation.evaluatedAt)}`));
+  }
+  if (!linked && !cards && !evaluation?.evaluatedAt && typeof gate?.passed !== 'boolean') {
+    section.append(retrainingElement('p', 'small-note', '这次运行还没有评测结果。'));
+  }
+}
+
+function renderRecordReplay(section, run, signal) {
+  const available = canOpenRunReplay(run) || (run.status === 'completed' && !run.mock);
+  const hasVideoPage = RECORDED_VIDEO_TASKS.has(run.taskId);
+  const note = retrainingElement('p', 'small-note',
+    available ? '查看这次运行保存的仿真画面或遥测采样。' : '这次运行还没有可加载的回放。');
+  note.setAttribute('role', 'status');
+  section.append(note);
+  if (hasVideoPage) {
+    const link = retrainingElement('a', 'button button-ghost button-small', '打开本次任务报告');
+    link.href = recordedRunLink(run);
+    section.append(link);
+  }
+  if (!available) return;
+
+  const button = retrainingElement('button', 'button button-ghost button-small', '加载本次回放');
+  button.type = 'button';
+  section.append(button);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    note.textContent = '正在读取本次回放…';
+    const path = '/runs/' + encodeURIComponent(run.id);
+    try {
+      const detail = await request('/sim2real' + path, { signal });
+        if (signal.aborted) return;
+      if (detail?.run?.id !== run.id) throw new Error('响应的运行编号与当前记录不一致');
+      if (hasVideoPage && detail.run.links?.danceVideo) {
+        const video = document.createElement('video');
+        video.controls = true;
+        video.preload = 'metadata';
+        video.setAttribute('aria-label', '本次仿真回放');
+        video.addEventListener('error', () => {
+          video.remove();
+          note.textContent = '仿真视频暂时无法播放，请重试或打开本次任务报告。';
+          button.hidden = false;
+        });
+        section.append(video);
+        video.src = apiPath('/sim2real' + path + '/dance-video');
+        note.textContent = '本次仿真回放';
+        button.hidden = true;
+        return;
+      }
+      const inspector = document.createElement('rdk-run-inspector');
+      section.append(inspector);
+      inspector.configure({
+        fixedRun: true,
+        runs: [run],
+        manifests: Object.fromEntries((state.overview?.models || []).map((model) => [model.id, model.manifest])),
+        requestJson: (url, options) => url === path ? detail : request('/sim2real' + url, options),
+      });
+      const loaded = await inspector.load(run.id);
+      if (signal.aborted) return;
+      if (!loaded) {
+        const message = inspector.status.textContent;
+        inspector.remove();
+        note.textContent = message;
+        return;
+      }
+      note.textContent = '本次遥测回放';
+      button.hidden = true;
+    } catch (error) {
+      if (!signal.aborted) note.textContent = friendlyError(error, '暂时无法加载回放，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function renderRecordArtifact(section, run, signal, registered) {
+  const artifact = run.artifact;
+  const addPreflight = (container, item, fromRegistry) => {
+    if (!canPreflightArtifact(run, item, fromRegistry)) return;
+    const control = retrainingElement('button', 'button button-primary button-small', '用此制品预检');
+    control.type = 'button';
+    control.addEventListener('click', () => startRunPreflight(run, item, fromRegistry));
+    container.append(control);
+  };
+  for (const item of registered) {
+    const row = retrainingElement('div', 'run-result-registry');
+    row.append(retrainingElement('strong', '', item.name || item.artifactId),
+      retrainingElement('p', 'small-note run-result-metadata',
+        [item.version, ARTIFACT_STATUS_LABELS[item.status], String(item.format || '').toUpperCase(),
+          item.sizeBytes == null ? '' : formatBytes(item.sizeBytes),
+          item.sha256 && 'SHA-256 ' + item.sha256].filter(Boolean).join(' · ')));
+    section.append(row);
+    addPreflight(row, item, true);
+  }
+  if (!artifact) {
+    if (!registered.length) section.append(retrainingElement('p', 'small-note', '这次运行还没有制品。'));
+    return;
+  }
+  const format = String(artifact.format || '').toUpperCase();
+  const meta = [format, artifact.sizeBytes == null ? '' : formatBytes(artifact.sizeBytes),
+    artifact.sha256 && 'SHA-256 ' + artifact.sha256].filter(Boolean);
+  section.append(retrainingElement('strong', '', format === 'ONNX' ? '策略模型' : '运行制品'),
+    retrainingElement('p', 'run-result-metadata small-note', meta.join(' · ')));
+  if (artifact.artifactRef) section.append(retrainingElement('p', 'run-result-metadata small-note', artifact.artifactRef));
+  addPreflight(section, artifact, false);
+  const note = retrainingElement('p', 'small-note');
+  note.setAttribute('role', 'status');
+  if (run.status !== 'completed' || run.mock || run.backend !== 'local' || !run.externalRunId ||
+      format !== 'ONNX' || !/^[a-f0-9]{64}$/.test(artifact.sha256 || '')) {
+    note.textContent = '当前制品仅提供元数据。';
+    section.append(note);
+    return;
+  }
+  const button = retrainingElement('button', 'button button-ghost button-small', '下载 ONNX');
+  button.type = 'button';
+  section.append(button, note);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    note.textContent = '正在读取本次策略文件…';
+    try {
+      const response = await fetch(apiPath('/sim2real/runs/' + encodeURIComponent(run.id) + '/artifact'), {
+        credentials: 'same-origin', signal,
+      });
+      if (response.status === 401 || (response.headers.get('content-type') || '').includes('text/html')) {
+        setAuthGate(null);
+        throw new Error('登录已过期，请重新登录。');
+      }
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || '暂时无法下载制品，请重试。');
+      }
+      if (response.headers.get('X-Artifact-Sha256') !== artifact.sha256) {
+        throw new Error('制品摘要与本次运行不一致。');
+      }
+      const blob = await response.blob();
+      if (signal.aborted) return;
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = 'policy-' + run.id + '.onnx';
+      section.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+      note.textContent = '已开始下载本次策略文件。';
+    } catch (error) {
+      if (!signal.aborted) note.textContent = friendlyError(error, '暂时无法下载制品，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+let recordDetailController;
+
+function mountRunResult(body, run, signal) {
+  const metadata = retrainingElement('p', 'run-result-metadata small-note',
+    [run.modelId, run.finishedAt ? '完成于 ' + formatDate(run.finishedAt) : '创建于 ' + formatDate(run.createdAt),
+      'Run ' + run.id].filter(Boolean).join(' · '));
+  const nav = retrainingElement('div', 'run-result-nav');
+  nav.setAttribute('role', 'group');
+  nav.setAttribute('aria-label', '运行结果');
+  const evaluation = runResultSection('run-result-evaluation', '评测');
+  const replay = runResultSection('run-result-replay', '回放');
+  const artifact = runResultSection('run-result-artifact', '制品');
+  for (const section of [evaluation, replay, artifact]) {
+    const heading = section.firstElementChild;
+    const button = retrainingElement('button', 'button button-ghost button-small', heading.textContent);
+    button.type = 'button';
+    button.addEventListener('click', () => heading.focus());
+    nav.append(button);
+  }
+  const { artifacts, evaluations } = promotionRecordsForCurrentModel();
+  const linked = evaluations.filter((item) => item.runId === run.id && item.modelId === run.modelId);
+  const runEvaluation = linked.find((item) => item.id === run.evaluationId) || linked[0];
+  renderRecordEvaluation(evaluation, run, runEvaluation);
+  renderRecordReplay(replay, run, signal);
+  renderRecordArtifact(artifact, run, signal,
+    artifacts.filter((item) => item.runId === run.id && item.modelId === run.modelId));
+  const details = retrainingElement('details', 'run-result-technical');
+  const technical = retrainingElement('div', 'run-result-technical-body');
+  technical.append(...body.childNodes);
+  details.append(retrainingElement('summary', '', '运行参数与诊断'), technical);
+  body.append(metadata, nav, evaluation, replay, artifact, details);
+}
+
 function openRecordDetails(record) {
   const dialog = $('run-detail-dialog');
   const body = $('run-detail-body');
   if (!dialog || !body) return;
+  recordDetailController?.abort();
+  recordDetailController = new AbortController();
   const isRun = record.recordType === 'run';
   const isArtifact = record.recordType === 'artifact';
   const isTelemetry = record.recordType === 'telemetry';
@@ -4499,7 +4837,7 @@ function openRecordDetails(record) {
   setText(
     'run-detail-title',
     isRun
-      ? '运行详情'
+      ? runRecordTitle(record)
       : isArtifact
         ? '制品详情'
         : isTelemetry
@@ -4539,7 +4877,7 @@ function openRecordDetails(record) {
     escapeHtml(record.placeholder ? record.detail : record.summary || '没有附加说明。') +
     '</div>' +
     (isRun && record.metrics && !syntheticRun
-      ? renderRunMetricCards(record) + renderRunMetricsRaw(record)
+      ? renderRunMetricCards(record.metrics, RUN_DIAGNOSTIC_METRICS) + renderRunMetricsRaw(record)
       : '') +
     (isRun && runProgressPoints(record).length
       ? '<div class="run-detail-live-chart"><strong class="run-detail-block-title">训练曲线（引擎回报）</strong>' +
@@ -4550,23 +4888,6 @@ function openRecordDetails(record) {
       ? '<div><strong class="run-detail-block-title">Checkpoint</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.checkpoint, null, 2)) +
         '</pre></div>'
-      : '') +
-    (isRun && record.artifact
-      ? '<div><strong class="run-detail-block-title">平台导出制品</strong>' +
-        '<div class="run-artifact-summary"><span class="artifact-state is-ready">' +
-        escapeHtml(String(record.artifact.format || 'model').toUpperCase()) +
-        '</span><span>' +
-        escapeHtml(record.artifact.artifactRef || 'artifact:// 未提供') +
-        '</span>' +
-        (record.artifact.sizeBytes != null
-          ? '<span>' + escapeHtml(formatBytes(record.artifact.sizeBytes)) + '</span>'
-          : '') +
-        (record.artifact.sha256
-          ? '<span>SHA-256 ' + escapeHtml(shortDigest(record.artifact.sha256)) + '</span>'
-          : '') +
-        '<a class="button button-ghost button-small" href="' +
-        apiPath('/sim2real/runs/' + encodeURIComponent(record.id) + '/policy.onnx') +
-        '" download="policy.onnx">下载 ONNX</a></div></div>'
       : '') +
     (isArtifact
       ? '<div><strong class="run-detail-block-title">制品元数据</strong><pre class="run-detail-code">' +
@@ -4640,14 +4961,12 @@ function openRecordDetails(record) {
         '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
         '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
-  const replayId = isRun && canOpenRunReplay(record)
-    ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
-  if ((isRun && ['originman-reference-track', 'originman-dance', 'originman-recovery'].includes(record.taskId)) ||
-      (isArtifact && record.runId)) {
+  const replayId = (isTelemetry || isEvaluation) ? record.runId : '';
+  if (isArtifact && record.runId) {
     const result = document.createElement('a');
     result.className = 'button button-primary button-small';
-    result.textContent = isArtifact ? '打开产出该策略的 Run →' : '查看本轮结果 →';
-    result.href = recordedRunLink({ id: isArtifact ? record.runId : record.id, taskId: record.taskId });
+    result.textContent = '打开产出该策略的 Run →';
+    result.href = recordedRunLink({ id: record.runId, taskId: record.taskId });
     body.prepend(result);
   }
   if (replayId) {
@@ -4656,10 +4975,17 @@ function openRecordDetails(record) {
     inspect.addEventListener('click', () => { dialog.close(); openRunReplay(replayId); });
     body.prepend(inspect);
   }
+  dialog.classList.toggle('run-result-dialog', isRun);
+  if (isRun) mountRunResult(body, record, recordDetailController.signal);
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
+  dialog.scrollTop = 0;
   const detailCanvas = $('run-detail-progress-canvas');
-  if (detailCanvas) drawRunProgressChart(detailCanvas, runProgressPoints(record));
+  if (detailCanvas) {
+    body.querySelector('.run-result-technical').addEventListener('toggle', (event) => {
+      if (event.currentTarget.open) drawRunProgressChart(detailCanvas, runProgressPoints(record));
+    }, { once: true });
+  }
   if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
   if ($('run-board-sessions')) wireRunBoardSessions(record);
   wireRunRecordFeedback(record);
@@ -7811,17 +8137,23 @@ function renderEvaluationNext() {
 
 function renderReleaseGate() {
   const model = selectedModel();
-  const latest = [...runsForCurrentModel()].sort((a, b) =>
+  const source = state.deploymentSource;
+  const latest = source ? findPreflightRun(source) : [...runsForCurrentModel()].sort((a, b) =>
     String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
   )[0];
   const mockRun = latest?.mock === true;
-  const evidence = currentTelemetry();
+  const telemetry = currentTelemetry();
+  const evidence = !source || telemetry?.publishedRunId === source.runId ? telemetry : null;
   const demoEvidence = isSyntheticEvidence(evidence, latest);
-  const deployment =
-    state.activeDeployment ||
+  const deployment = source ? preflightContext().plan : state.activeDeployment ||
     deploymentsForCurrentModel().find(
       (item) => item.modelId === model?.id && item.deviceId === state.selectedDeviceId,
     );
+  const identity = $('deploy-release-identity');
+  if (identity) {
+    identity.hidden = !source;
+    if (source) identity.textContent = source.artifactLabel + ' · Run ' + source.runId + ' · SHA-256 ' + source.artifactSha256;
+  }
   const contractReady = Boolean(
     model &&
     (model.builtin ||
@@ -7829,14 +8161,22 @@ function renderReleaseGate() {
       state.compatibility?.some((item) => item.deployable)),
   );
   const evaluationExists = hasRealEvaluation(evidence, latest);
-  const evidenceReady = hasReleaseGradeEvidence(evidence, latest);
+  const registryArtifact = source ? findPreflightArtifact(source) : null;
+  const registeredEvaluation = source && (state.overview?.evaluations || []).find((item) =>
+    item.id === latest?.evaluationId && item.runId === source.runId && item.modelId === source.modelId &&
+    (!item.artifactId || item.artifactId === source.artifactId) &&
+    item.status === 'passed' && !item.stale && item.attested === true && item.report?.replay?.attested === true);
+  const evidenceReady = source ? Boolean(registeredEvaluation &&
+    hasReleaseGradeEvidence(null, { ...latest, evaluation: registeredEvaluation.report }))
+    : hasReleaseGradeEvidence(evidence, latest);
   const preflightReady = Boolean(
     !mockRun &&
       !demoEvidence &&
       deployment &&
-      ['ready', 'completed'].includes(deployment.status),
+      ['ready', 'completed'].includes(deployment.status) &&
+      (!source || (deployment.verification?.passed === true && !deployment.verification.mock)),
   );
-  const releaseReady = preflightReady && evidenceReady;
+  const releaseReady = preflightReady && evidenceReady && (!source || registryArtifact?.status === 'published');
   const update = (key, stateName, detail) => {
     const node = document.querySelector('[data-release-step="' + key + '"]');
     if (!node) return;
@@ -7880,8 +8220,12 @@ function renderReleaseGate() {
             : evidenceReady
               ? 'current'
               : 'blocked',
-    releaseReady
-      ? '预检已通过'
+    source && !evidenceReady
+      ? '为当前 Run 补齐通过且来源受信的评测记录'
+      : source && registryArtifact?.status !== 'published'
+        ? '评测已具备，仍需验证并发布所选制品版本'
+      : releaseReady
+      ? '评测和预检已通过'
       : mockRun
         ? 'Mock 不可部署；需要真实评测'
           : demoEvidence
@@ -7897,6 +8241,10 @@ function renderReleaseGate() {
     preflightReady ? 'ready' : deployment ? 'current' : 'locked',
     preflightReady
       ? '设备、工具链和制品预检通过'
+      : deployment?.verification?.passed === true && deployment.compatibility?.deployable === false
+        ? '板端检查已通过；制品兼容性仍受阻'
+      : ['failed', 'blocked'].includes(deployment?.status) && deployment.verification?.passed === false
+        ? '板端检查受阻；返回预检查看具体原因'
       : deployment
         ? '计划已生成；执行只读检查查看结果'
         : '先生成只读预检计划',
@@ -9163,7 +9511,6 @@ function renderAll() {
   renderContextLive();
   renderModel();
   renderActionLibrary();
-  renderBoard();
   renderEvaluation();
   renderReplayPlayer();
   renderRunInspector();
@@ -9898,11 +10245,11 @@ async function runModel(backend, { showProgress = false, computeResourceId } = {
 }
 
 async function detectBoard() {
-  const device = selectedDevice();
-  if (!device) {
-    showToast('请先选择板卡', 'error');
-    return;
-  }
+  const { device, agent, key } = preflightContext();
+  if (state.deploymentSubmitting || !device || agent?.available !== true) return;
+  state.deploymentSubmitting = 'detect';
+  state.deploymentIssue = null;
+  renderBoard();
   try {
     const payload = await request(
       '/devices/' + encodeURIComponent(device.id) + '/board/detect?persist=true',
@@ -9915,74 +10262,86 @@ async function detectBoard() {
     await loadOverview({ quiet: true });
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '板型探测失败', 'error');
+      state.deploymentIssue = { key, message: friendlyError(error, '板型探测失败，请重试。') };
+  } finally {
+    state.deploymentSubmitting = false;
+    renderBoard();
   }
 }
 
+function clearPreflightSource() {
+  state.deploymentSource = null;
+  state.deploymentIssue = null;
+  state.deploymentRequest = null;
+  state.activeDeployment = null;
+}
+
 async function createPlan() {
-  if (state.deploymentSubmitting) return;
-  const model = selectedModel();
-  const device = selectedDevice();
-  if (!model || !device) {
-    showToast('请先选择模型和板卡', 'error');
-    return;
-  }
-  state.deploymentSubmitting = true;
-  renderIntegrations();
+  const context = preflightContext();
+  const { model, device, source, sourceValid, plan, key } = context;
+  if (state.deploymentSubmitting || !model || !device?.boardPlatform || !sourceValid ||
+      plan?.status === 'running') return;
+  state.deploymentSubmitting = 'plan';
+  state.deploymentIssue = null;
+  renderBoard();
   try {
-    const requestKey =
-      globalThis.crypto?.randomUUID?.() ||
-      `deployment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    if (state.deploymentRequest?.contextKey !== key) {
+      state.deploymentRequest = {
+        contextKey: key,
+        requestKey: globalThis.crypto?.randomUUID?.() ||
+          `deployment-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      };
+    }
     const payload = await request('/sim2real/deployments', {
       method: 'POST',
-      headers: { 'Idempotency-Key': requestKey },
-      body: JSON.stringify({ modelId: model.id, deviceId: device.id, mode: 'preflight' }),
+      headers: { 'Idempotency-Key': state.deploymentRequest.requestKey },
+      body: JSON.stringify({
+        modelId: model.id, deviceId: device.id, mode: 'preflight',
+        ...(source ? { runId: source.runId, artifactSha256: source.artifactSha256,
+          ...(source.artifactId ? { artifactId: source.artifactId } : {}) } : {}),
+      }),
     });
-    state.activeDeployment = payload.deployment || null;
-    showToast(state.activeDeployment?.summary || '只读预检计划已生成', 'success');
+    if (!context.matches(payload?.deployment)) throw new Error('计划响应与选中的设备或制品不一致。');
+    state.deploymentRequest = null;
+    if (preflightContext().key === key) state.activeDeployment = payload.deployment;
     await loadOverview({ quiet: true });
   } catch (error) {
     if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '计划生成失败', 'error');
+      state.deploymentIssue = { key, message: friendlyError(error, '生成计划失败，请重试。') };
   } finally {
     state.deploymentSubmitting = false;
-    renderIntegrations();
+    renderBoard();
+    renderReleaseGate();
   }
 }
 
 async function executePreflight() {
-  const model = selectedModel();
-  const device = selectedDevice();
-  const deployment =
-    state.activeDeployment ||
-    state.overview?.deployments?.find(
-      (item) => item.modelId === model?.id && item.deviceId === device?.id,
-    );
-  if (
-    !deployment ||
-    !model ||
-    !device ||
-    deployment.modelId !== model.id ||
-    deployment.deviceId !== device.id
-  ) {
-    state.activeDeployment = null;
-    showToast('请先生成预检计划', 'error');
-    return;
-  }
+  const context = preflightContext();
+  const { plan, agent, key } = context;
+  if (state.deploymentSubmitting || !plan || ['running', 'completed'].includes(plan.status) ||
+      agent?.available !== true) return;
+  const path = '/sim2real/deployments/' + encodeURIComponent(plan.id);
+  state.deploymentSubmitting = 'probe';
+  state.deploymentIssue = null;
+  renderBoard();
+  const keepPlan = (result) => {
+    if (result?.id !== plan.id || !context.matches(result)) return false;
+    if (preflightContext().key === key) state.activeDeployment = result;
+    return true;
+  };
   try {
-    const payload = await request(
-      '/sim2real/deployments/' + encodeURIComponent(deployment.id) + '/preflight',
-      { method: 'POST' },
-    );
-    state.activeDeployment = payload.deployment || deployment;
-    showToast(
-      state.activeDeployment.summary || '只读预检完成',
-      payload.preflight?.passed ? 'success' : 'normal',
-    );
-    await loadOverview({ quiet: true });
+    const payload = await request(path + '/preflight', { method: 'POST' });
+    if (!keepPlan(payload?.deployment)) throw new Error('预检响应与本次计划不一致。');
   } catch (error) {
-    if (!(error instanceof ApiError && error.status === 401))
-      showToast(error instanceof Error ? error.message : '预检失败', 'error');
+    if (!(error instanceof ApiError && error.status === 401)) {
+      state.deploymentIssue = { key, message: friendlyError(error, '板端检查失败，请检查设备连接后重试。') };
+      await request(path).then((payload) => keepPlan(payload?.deployment)).catch(() => {});
+    }
+  } finally {
+    await loadOverview({ quiet: true });
+    state.deploymentSubmitting = false;
+    renderBoard();
+    renderReleaseGate();
   }
 }
 
@@ -12073,7 +12432,7 @@ function wireEvents() {
       const ids = projectModelIds();
       if (ids && state.selectedModelId && !ids.has(String(state.selectedModelId))) state.selectedModelId = '';
     }
-    state.activeDeployment = null;
+    clearPreflightSource();
     state.telemetry = null;
     saveWorkspaceContext();
     renderAll();
@@ -12384,6 +12743,14 @@ function wireEvents() {
     if (dialog?.open && typeof dialog.close === 'function') dialog.close();
     else dialog?.removeAttribute('open');
   });
+  $('run-detail-dialog')?.addEventListener('close', (event) => {
+    if (event.target.open) return;
+    recordDetailController?.abort();
+    $('run-result-replay')?.parentElement.querySelectorAll('rdk-run-inspector, video').forEach((player) => {
+      if (player instanceof HTMLVideoElement) player.pause();
+      player.remove();
+    });
+  });
   $('product-select')?.addEventListener('change', async (event) => {
     const next = event.target.value;
     if (!PRODUCT_PROFILES[next]) return;
@@ -12415,7 +12782,7 @@ function wireEvents() {
     }
     state.model = null;
     state.compatibility = [];
-    state.activeDeployment = null;
+    clearPreflightSource();
     state.telemetry = null;
     stopReplay();
     state.replay = { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false };
@@ -12442,7 +12809,7 @@ function wireEvents() {
     state.selectedModelId = event.target.value;
     state.model = null;
     state.compatibility = [];
-    state.activeDeployment = null;
+    clearPreflightSource();
     state.telemetry = state.telemetry?.modelId === state.selectedModelId ? state.telemetry : null;
     saveWorkspaceContext();
     renderAll();
@@ -12521,17 +12888,20 @@ function wireEvents() {
   confirmActionDialog?.addEventListener('close', () => {
     if (state.confirmActionResolve) settleConfirmAction(false);
   });
-  $('detect-button')?.addEventListener('click', () => {
-    setView('deploy');
-    detectBoard();
+  $('detect-button')?.addEventListener('click', () => { void detectBoard(); });
+  $('plan-button')?.addEventListener('click', () => { void createPlan(); });
+  $('preflight-button')?.addEventListener('click', () => { void executePreflight(); });
+  $('deploy-open-run')?.addEventListener('click', () => {
+    if (!state.deploymentSource) { setView('records'); setRecordsTab('run'); return; }
+    const run = findPreflightRun();
+    if (run) openRecordDetails({ ...run, recordType: 'run' });
   });
-  $('plan-button')?.addEventListener('click', () => {
-    setView('deploy');
-    createPlan();
-  });
-  $('preflight-button')?.addEventListener('click', () => {
-    setView('deploy');
-    executePreflight();
+  $('deploy-release-entry')?.addEventListener('click', () => {
+    applyFlowChildDestination(FLOW_CHILD_CONTEXTS.feedback);
+    setFlowChild('feedback', { focus: false });
+    $('feedback-panel')?.querySelector('.deploy-detail-fold:has(#promotion-chain)')?.setAttribute('open', '');
+    $('feedback-panel')?.scrollIntoView({ block: 'start' });
+    $('feedback-panel')?.querySelector('summary')?.focus({ preventScroll: true });
   });
   wireStationEvents();
 }

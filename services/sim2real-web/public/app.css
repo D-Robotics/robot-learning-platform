@@ -1652,6 +1652,70 @@ h2 {
   color: var(--muted);
   font-size: var(--fs-body);
 }
+.deploy-target-grid,
+.deploy-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 12px;
+}
+.deploy-target-grid {
+  align-items: start;
+}
+#preflight-panel,
+#feedback-panel {
+  scroll-margin-top: 88px;
+}
+.deploy-device-select .board-summary > .button {
+  display: flex;
+  width: fit-content;
+  margin-top: 8px;
+}
+.deploy-source,
+.deploy-check {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-radius-md);
+  background: var(--panel-soft);
+}
+.deploy-source[hidden] {
+  display: none;
+}
+.deploy-source h3 {
+  margin: 0;
+  font-size: var(--fs-body);
+}
+.deploy-source p,
+.deploy-check p,
+.deploy-device-select .board-summary p {
+  margin: 4px 0 8px;
+}
+.deploy-source-meta {
+  overflow-wrap: anywhere;
+}
+.deploy-checks {
+  list-style: none;
+  margin: 16px 0 12px;
+  padding: 0;
+}
+.deploy-check-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 8px;
+}
+.deploy-check-heading span {
+  color: var(--muted-strong);
+}
+.deploy-check[data-state='ready'] .deploy-check-heading span {
+  color: var(--green-text);
+}
+.deploy-check[data-state='blocked'] .deploy-check-heading span {
+  color: var(--red-text);
+}
+.deploy-preflight-actions {
+  flex-wrap: wrap;
+}
 .release-steps {
   display: grid;
   gap: 0;
@@ -2543,6 +2607,83 @@ h2 {
   display: grid;
   gap: 12px;
   margin-top: 16px;
+}
+.run-result-dialog {
+  width: min(820px, calc(100vw - 30px));
+  max-height: min(860px, calc(100vh - 40px));
+  padding: 24px;
+}
+.run-result-dialog .run-dialog-heading h2 {
+  overflow-wrap: anywhere;
+}
+.run-result-metadata {
+  overflow-wrap: anywhere;
+}
+.run-result-nav {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
+  background: var(--panel-raised);
+}
+.run-result-section,
+.run-result-technical {
+  min-width: 0;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-radius-md);
+  background: var(--panel-soft);
+}
+.run-result-section > * {
+  margin: 0;
+}
+.run-result-section > * + * {
+  margin-top: 8px;
+}
+.run-result-section > h3 {
+  color: var(--text);
+  font-size: var(--fs-body);
+  scroll-margin-top: 48px;
+}
+.run-result-section > .button {
+  margin-right: 8px;
+}
+.run-result-registry {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.run-result-registry p {
+  margin: 4px 0 0;
+}
+.run-result-section video {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  border-radius: 8px;
+  background: var(--bg-deep);
+}
+.run-result-pass { color: var(--green-text); }
+.run-result-fail { color: var(--red-text); }
+.run-result-technical > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.run-result-technical-body {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+.run-result-technical:not([open]) > .run-result-technical-body {
+  display: none;
+}
+.run-result-section .run-inspector-toolbar[hidden] {
+  display: none;
+}
+.run-result-section .run-inspector-toolbar select {
+  width: auto;
 }
 .run-detail-grid {
   display: grid;
@@ -9956,6 +10097,32 @@ body [data-view-section='records'] #record-search {
 body [data-view-section='records'] .history-list {
   gap: 0;
   padding: 4px 24px 16px;
+}
+.records-recent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 16px 24px 8px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-surface-tint);
+}
+.records-recent[hidden] { display: none; }
+.records-recent-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.history-run-id {
+  display: inline-block;
+  margin-inline-start: 8px;
+  color: var(--muted);
+  font-family: var(--font-label);
+  font-size: var(--fs-meta);
 }
 body [data-view-section='records'] .history-row {
   min-height: 58px;

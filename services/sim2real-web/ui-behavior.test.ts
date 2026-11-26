@@ -932,14 +932,95 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
-  it('keeps the ONNX download link under the configured /sim2real mount', async () => {
+  it('shows independent evaluations and registered artifacts for the exact Run', async () => {
     const selectedModel = model();
-    const { window, errors } = await boot({
+    const run = {
+      id: 'older-start',
+      modelId: selectedModel.id,
+      backend: 'local',
+      status: 'completed',
+      summary: 'latest-finish',
+      evaluationId: 'current-evaluation',
+      createdAt: '2026-09-14T09:00:00.000Z',
+      finishedAt: '2026-09-14T09:30:00.000Z',
+    };
+    const other = {
+      ...run,
+      id: 'newer-start',
+      evaluationId: 'other-evaluation',
+      createdAt: '2026-09-14T09:15:00.000Z',
+      finishedAt: '2026-09-14T09:20:00.000Z',
+    };
+    const artifact = {
+      id: 'run-artifact',
+      runId: run.id,
+      name: 'Versioned policy',
+      modelId: selectedModel.id,
+      format: 'onnx',
+      role: 'policy',
+      status: 'published',
+      version: '1.2.0',
+      sha256: 'a'.repeat(64),
+    };
+    const { window, errors, requests } = await boot({
+      runs: [other, run],
+      artifacts: [
+        { ...artifact, id: 'other-artifact', runId: other.id, name: 'Wrong policy' },
+        artifact,
+      ],
+      evaluations: [
+        {
+          id: 'other-evaluation',
+          runId: other.id,
+          modelId: selectedModel.id,
+          status: 'passed',
+          summary: 'Wrong evaluation',
+        },
+        {
+          id: 'current-evaluation',
+          runId: run.id,
+          modelId: selectedModel.id,
+          artifactId: artifact.id,
+          status: 'passed',
+          stale: true,
+          summary: 'Stored evaluation',
+        },
+      ],
+    });
+    window.document.querySelector<HTMLButtonElement>('#records-recent-open')?.click();
+    const evaluation = window.document.querySelector('[aria-labelledby="run-result-evaluation"]');
+    expect(evaluation?.textContent).toContain('已被更新遥测取代');
+    expect(evaluation?.textContent).toContain('Stored evaluation');
+    expect(evaluation?.textContent).not.toContain('Wrong evaluation');
+    const artifactSection = window.document.querySelector(
+      '[aria-labelledby="run-result-artifact"]',
+    );
+    expect(artifactSection?.textContent).toContain('Versioned policy');
+    expect(artifactSection?.textContent).toContain('1.2.0');
+    expect(artifactSection?.textContent).not.toContain('Wrong policy');
+    expect(artifactSection?.textContent).not.toContain('这次运行还没有制品');
+    artifactSection?.querySelector<HTMLButtonElement>('button')?.click();
+    expect(window.location.hash).toBe('#deploy/preflight');
+    expect(window.document.querySelector('#deploy-source-name')?.textContent).toContain(
+      'Versioned policy · 1.2.0',
+    );
+    expect(window.document.querySelector('#deploy-source-identity')?.textContent).toContain(
+      'Run older-start · SHA-256 ' + artifact.sha256,
+    );
+    expect(window.document.querySelector<HTMLButtonElement>('#plan-button')?.disabled).toBe(true);
+    expect(requests.filter((request) => request.method === 'POST')).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('requests the exact ONNX under the configured /sim2real mount and rejects an unverified response', async () => {
+    const selectedModel = model();
+    const { window, errors, requests } = await boot({
       runs: [
         {
           id: 'real-onnx-run',
           modelId: selectedModel.id,
           backend: 'local',
+          externalRunId: 'worker-onnx-run',
           status: 'completed',
           summary: 'real ONNX run',
           mock: false,
@@ -961,12 +1042,24 @@ describe('Sim2Real workbench DOM behavior', () => {
     const row = window.document.querySelector<HTMLButtonElement>('.history-row');
     expect(row).toBeTruthy();
     row?.click();
-    const link = window.document.querySelector<HTMLAnchorElement>(
-      '#run-detail-body a[download="policy.onnx"]',
+    const section = window.document.querySelector('[aria-labelledby="run-result-artifact"]');
+    const button = [...(section?.querySelectorAll<HTMLButtonElement>('button') || [])].find(
+      (control) => control.textContent === '下载 ONNX',
     );
-    expect(link?.getAttribute('href')).toBe(
-      '/sim2real/api/sim2real/runs/real-onnx-run/policy.onnx',
-    );
+    expect(button?.textContent).toBe('下载 ONNX');
+    button?.click();
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual(
+        expect.objectContaining({
+          method: 'GET',
+          url: '/sim2real/api/sim2real/runs/real-onnx-run/artifact',
+        }),
+      );
+      expect(section?.querySelector('[role="status"]')?.textContent).toContain(
+        '制品摘要与本次运行不一致',
+      );
+      expect(button?.disabled).toBe(false);
+    });
     expect(errors).toEqual([]);
   });
 

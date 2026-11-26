@@ -481,6 +481,14 @@ assert.doesNotMatch(
   'the overview duplicate command bar (context/quick-actions/agent card) must stay removed',
 );
 assert.match(html, /id="run-detail-dialog"/, 'runs must have a detail surface');
+assert.match(
+  html,
+  /id="records-recent" hidden[\s\S]*?id="records-recent-open"[\s\S]*?id="history-list"/,
+);
+assert.match(
+  app,
+  /runResultSection\('run-result-evaluation'[\s\S]*?runResultSection\('run-result-replay'[\s\S]*?runResultSection\('run-result-artifact'/,
+);
 assert.match(html, /id="sim-action-list"/, 'simulation must show the manifest action library');
 assert.equal(
   (html.match(/data-record-tab="(?:all|run|deploy|artifact|telemetry)"/g) || []).length,
@@ -650,7 +658,7 @@ assert.match(
 );
 assert.match(
   app,
-  /headers: \{ 'Idempotency-Key': requestKey \}/,
+  /headers: \{ 'Idempotency-Key': state\.deploymentRequest\.requestKey \}/,
   'deployment plans must be idempotent',
 );
 assert.match(
@@ -662,6 +670,11 @@ assert.match(app, /function refreshActiveRuns\(\)/, 'active runs must refresh fr
 assert.match(app, /sim2real\/runs\/.*encodeURIComponent\(run\.id\)/, 'run status must be polled');
 assert.match(app, /dataset\.action === 'import-telemetry'/);
 assert.match(app, /data-release-step/);
+assert.match(
+  html,
+  /id="deploy-source"[\s\S]*?id="device-select"[\s\S]*?id="deploy-checks"[\s\S]*?id="deploy-release-entry"/,
+);
+assert.match(app, /runId: source\.runId, artifactSha256: source\.artifactSha256/);
 assert.match(app, /sim2real\/overview\?productId=/, 'overview must be product-aware');
 assert.match(app, /taskId: state\.taskId/);
 assert.doesNotMatch(
@@ -733,7 +746,7 @@ assert.match(
 );
 assert.match(
   app,
-  /function renderRunMetricCards\(record\)/,
+  /function renderRunMetricCards\(metrics, definitions = RUN_METRIC_CARDS\)/,
   'run detail must render readable metric cards',
 );
 assert.match(
