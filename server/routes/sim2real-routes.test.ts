@@ -10,10 +10,12 @@ import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../share
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
   appendSim2RealTelemetry,
+  createSim2RealArtifact,
   createSim2RealRun,
   reserveSim2RealRun,
   storeSim2RealRelayArtifact,
   updateSim2RealComputeResource,
+  updateSim2RealRun,
 } from '../sim2real/sim2real-store.js';
 import { readDevices } from '../sim2real/standalone-adapters.js';
 import { createSim2RealRouter, workspacePackageVersion } from './sim2real-routes.js';
@@ -1861,6 +1863,115 @@ describe('Sim2Real HTTP routes', () => {
 
     expect(response.statusCode).toBe(400);
     expect(response.body).toMatchObject({ code: 'SIM2REAL_INVALID_DEPLOYMENT' });
+  });
+
+  it('binds a preflight to the exact Run artifact without borrowing model compatibility', async () => {
+    await fixture();
+    const root = process.env.RDK_SIM2REAL_STORAGE_DIR as string;
+    await fs.mkdir(root, { recursive: true });
+    await fs.writeFile(
+      path.join(root, 'devices.json'),
+      JSON.stringify([
+        {
+          id: 'target-x5',
+          host: '127.0.0.1',
+          username: 'sim2real',
+          status: 'connected',
+          lastCheckedAt: new Date().toISOString(),
+          boardPlatform: 'rdk-x5',
+        },
+      ]),
+    );
+    const modelId = BUILTIN_MICRODUCK_MODEL.id;
+    const run = await createSim2RealRun({
+      modelId,
+      backend: 'local',
+      status: 'completed',
+      summary: 'retained policy',
+      mock: false,
+      artifact: {
+        artifactId: 'retained-policy',
+        artifactRef: 'artifact://tests/retained-policy.onnx',
+        kind: 'source',
+        format: 'onnx',
+        runtime: 'cpu-onnx',
+        workload: 'locomotion',
+        threads: 1,
+        sha256: 'a'.repeat(64),
+        deployable: false,
+      },
+    });
+    const registered = await createSim2RealArtifact(
+      {
+        modelId,
+        runId: run.id,
+        artifactId: 'registered-policy',
+        version: '1',
+        name: 'Registered policy',
+        role: 'policy',
+        kind: 'source',
+        format: 'onnx',
+        ref: 'artifact://tests/registered-policy.onnx',
+        sha256: 'b'.repeat(64),
+        datasetIds: [],
+        evaluationIds: [],
+        status: 'draft',
+      },
+      undefined,
+    );
+    const adapter = vi.fn(async () => null);
+    const router = createSim2RealRouter({ runOnDevice: adapter });
+    const create = (patch = {}, requestKey = 'exact-preflight') =>
+      invoke(router, 'post', '/api/sim2real/deployments', {
+        headers: { 'idempotency-key': requestKey },
+        body: {
+          modelId,
+          deviceId: 'target-x5',
+          mode: 'preflight',
+          runId: run.id,
+          artifactSha256: run.artifact?.sha256,
+          ...patch,
+        },
+      });
+    const rejected = await create({ artifactSha256: registered.sha256 });
+    expect(rejected.statusCode).toBe(409);
+    const plan = await create();
+    expect(plan.statusCode).toBe(201);
+    expect(plan.body.deployment).toMatchObject({
+      runId: run.id,
+      artifactSha256: run.artifact?.sha256,
+      status: 'blocked',
+      compatibility: {
+        artifactId: 'retained-policy',
+        deployable: false,
+        status: 'needs-validation',
+      },
+    });
+    const retried = await create();
+    expect(retried.statusCode).toBe(200);
+    expect(retried.body.deployment.id).toBe(plan.body.deployment.id);
+    const registryPlan = await create(
+      { artifactId: registered.id, artifactSha256: registered.sha256 },
+      'registry-preflight',
+    );
+    expect(registryPlan.statusCode).toBe(201);
+    expect(registryPlan.body.deployment).toMatchObject({
+      artifactId: registered.id,
+      artifactSha256: registered.sha256,
+      compatibility: { deployable: false },
+    });
+    const execute = () =>
+      invoke(router, 'post', '/api/sim2real/deployments/:id/preflight', {
+        params: { id: plan.body.deployment.id },
+      });
+    expect((await execute()).statusCode).toBe(503);
+    expect((await execute()).statusCode).toBe(503);
+    expect(adapter).toHaveBeenCalledTimes(2);
+    await updateSim2RealRun(run.id, {
+      artifact: { ...run.artifact!, sha256: 'c'.repeat(64) },
+    });
+    expect((await execute()).body).toMatchObject({ code: 'SIM2REAL_ARTIFACT_LINEAGE_INVALID' });
+    expect(adapter).toHaveBeenCalledTimes(2);
   });
 
   it('keeps a mock BoardAgent preflight blocked instead of reporting hardware readiness', async () => {

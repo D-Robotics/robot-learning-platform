@@ -4794,8 +4794,9 @@ components:
         modelId: { type: string }
         deviceId: { type: string }
         mode: { type: string, enum: [preflight, canary, live], default: preflight }
-        runId: { type: string, description: Completed non-mock local/RoboGo run whose artifact and metrics authorize canary/live planning. }
-        artifactId: { type: string, description: Immutable published artifact authorized by the release gate. }
+        runId: { type: string, description: Completed non-mock run. Required with a preflight artifactSha256 and for canary/live planning. }
+        artifactId: { type: string, description: Exact registry version for a digest-bound preflight or an immutable published artifact for canary/live. Omit for the embedded Run output in a digest-bound preflight. }
+        artifactSha256: { type: string, pattern: '^[a-f0-9]{64}$', description: Preflight-only digest of the exact artifact to evaluate against the target device. }
         evaluationId: { type: string, description: Passed evaluation evidence associated with the run. }
         idempotencyKey: { type: string, maxLength: 128 }
     Deployment:
@@ -4806,6 +4807,7 @@ components:
         modelId: { type: string }
         runId: { type: string }
         artifactId: { type: string }
+        artifactSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
         evaluationId: { type: string }
         deviceId: { type: string }
         targetPlatform: { type: string }
