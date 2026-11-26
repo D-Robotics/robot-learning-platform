@@ -1816,76 +1816,25 @@ h2 {
   margin-top: 0;
   min-width: 0;
 }
-/* 2026-09-17 空态优先：没有任何 Run 和遥测时，data-empty="true" 收起
-   全部空数据面板（双栏 grid、六个面板的空文案墙），只显示一张
-   三步引导卡。有数据即恢复正常仪表盘。 */
-[data-view-section='evaluate'][data-empty='true'] .evaluation-grid,
-[data-view-section='evaluate'][data-empty='true'] .evaluation-evidence {
-  display: none;
-}
 .evaluation-empty-card {
   display: grid;
   gap: 16px;
-  margin-top: 16px;
   padding: 24px;
   border: 1px solid var(--line);
   border-radius: 14px;
   background: var(--panel);
-  max-width: 640px;
 }
 .evaluation-empty-head {
   display: grid;
   gap: 4px;
 }
-.evaluation-empty-head strong {
-  font-size: 16px;
-}
-.evaluation-empty-head span {
-  color: var(--muted);
-  font-size:var(--fs-body);
-}
-.evaluation-empty-steps {
-  display: grid;
-  gap: 10px;
+.evaluation-empty-head h2,
+.evaluation-empty-head p,
+.evaluation-empty-card > p {
   margin: 0;
-  padding: 0;
-  list-style: none;
 }
-.evaluation-empty-steps li {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  border-radius: 10px;
-  background: var(--panel-soft);
-}
-.evaluation-empty-steps strong {
-  display: block;
-  font-size:var(--fs-body);
-}
-.evaluation-empty-steps small {
-  display: block;
-  margin-top: 2px;
+.evaluation-empty-head p {
   color: var(--muted);
-  font-size:var(--fs-meta);
-  line-height: 1.5;
-}
-.evaluation-empty-step-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-  width: 24px;
-  height: 24px;
-  border-radius: 999px;
-  color: var(--accent-text, var(--muted-strong));
-  font:
-    10.5px ui-monospace,
-    SFMono-Regular,
-    Menlo,
-    monospace;
-  background: var(--panel);
-  border: 1px solid var(--line-strong);
 }
 .evaluation-empty-actions {
   display: flex;
@@ -3881,7 +3830,7 @@ body.is-loading .app-shell {
   padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid var(--line);
-  background: var(--bg-inset, rgba(9, 15, 26, 0.55));
+  background: var(--panel);
   color: var(--text);
   font-size:var(--fs-body);
 }
@@ -6171,10 +6120,6 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 .station-metric-grid, .station-tele-grid, .station-command-grid { min-width: 0; }
 .station-metric-card { min-width: 0; }
 .station-metric-label, .station-metric-sub, .station-device-line { overflow-wrap: anywhere; }
-.station-studio-connect { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 12px 0 16px; padding: 12px 12px; border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent); border-radius: 10px; background: color-mix(in srgb, var(--accent) 7%, transparent); }
-.station-studio-connect strong, .station-studio-connect small { display: block; }
-.station-studio-connect strong { font-size:var(--fs-body); }
-.station-studio-connect small { margin-top: 2px; color: var(--muted); font-size:var(--fs-meta); }
 .station-connect-script { margin: 0 0 16px; padding: 12px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--panel-soft); }
 .station-connect-script strong, .station-connect-script small { display: block; }
 .station-connect-script small { margin: 2px 0 8px; color: var(--muted); font-size:var(--fs-meta); }
@@ -6182,7 +6127,6 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 
 .train-onboarding-step[role="button"]:hover,
 .train-onboarding-step[role="button"]:focus-visible { border-color: var(--accent); outline: none; transform: translateY(-1px); }
-@media (max-width: 560px) { .station-studio-connect { align-items: flex-start; flex-direction: column; } }
 
 @media (max-width: 720px) {
   .app-shell { width: min(100% - 32px, 720px); }
@@ -9204,17 +9148,6 @@ body .app-shell .workspace-summary-card strong {
   white-space: nowrap;
 }
 
-[data-view-section='evaluate'][data-empty='true'] .evaluation-empty-card {
-  width: min(100%, 760px);
-  max-width: none;
-  border-color: var(--accent-ring);
-  background: linear-gradient(135deg, var(--accent-soft), var(--panel));
-}
-
-[data-view-section='evaluate'][data-empty='true'] .evaluation-empty-head strong {
-  font-size: 18px;
-}
-
 @media (max-width: 720px) {
   body .app-shell .main-content .view-section {
     width: 100%;
@@ -10043,6 +9976,10 @@ body [data-view-section='records'] .history-status {
 
 /* Device console: separate connection form, device inventory and status so
    the first screen reads like a control center rather than a long form. */
+.view-section[data-active-station-module='devices'] .station-notice {
+  display: none;
+}
+#evaluation-telemetry { scroll-margin-top: 88px; }
 body [data-view-section='station'] .station-notice {
   border-width: 1px;
   border-left-width: 4px;
@@ -10055,7 +9992,6 @@ body [data-view-section='station'] .station-device-manager {
 }
 body [data-view-section='station'] .station-device-manager > .panel-heading,
 body [data-view-section='station'] .station-device-manager > .station-drive-note,
-body [data-view-section='station'] .station-device-manager > .station-studio-connect,
 body [data-view-section='station'] .station-device-manager > .station-device-add,
 body [data-view-section='station'] .station-device-manager > .station-connect-script,
 body [data-view-section='station'] .station-device-manager > .station-device-list,
@@ -10066,6 +10002,32 @@ body [data-view-section='station'] .station-device-manager > .station-device-ssh
 body [data-view-section='station'] .station-device-manager > .panel-heading {
   margin-top: 0;
   padding-top: 24px;
+}
+.station-entry-status {
+  margin: 12px 24px;
+  color: var(--muted);
+}
+.station-entry-option {
+  margin: 0 24px 12px;
+  border: 1px solid var(--ui-border-soft);
+  border-radius: var(--ui-radius-md);
+  background: var(--panel-soft);
+}
+.station-entry-option > summary {
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.station-entry-option > summary small {
+  margin-inline-start: 12px;
+  color: var(--muted);
+}
+.station-entry-body {
+  padding: 0 16px 16px;
+}
+.station-entry-body > p {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 body [data-view-section='station'] .station-device-add {
   display: grid;
@@ -10368,11 +10330,6 @@ body[data-flow-child='submit'] [data-view-section='train'] .action-block-hint {
   margin-top: 12px;
 }
 
-body[data-flow-child='evaluation-run'] [data-view-section='evaluate'] .evaluation-empty,
-body[data-flow-child='comparison'] [data-view-section='evaluate'] .evaluation-empty {
-  display: none;
-}
-
 body[data-flow-child='comparison'] [data-view-section='evaluate'] .evaluation-banner {
   border-color: var(--accent-ring);
 }
@@ -10400,7 +10357,6 @@ body [data-view-section='deploy'] .promotion-stage {
 @media (max-width: 720px) {
   body [data-view-section='station'] .station-device-manager > .panel-heading,
   body [data-view-section='station'] .station-device-manager > .station-drive-note,
-  body [data-view-section='station'] .station-device-manager > .station-studio-connect,
   body [data-view-section='station'] .station-device-manager > .station-device-add,
   body [data-view-section='station'] .station-device-manager > .station-connect-script,
   body [data-view-section='station'] .station-device-manager > .station-device-list,
