@@ -15,7 +15,17 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import {
   accessSync,
   constants,
@@ -2098,6 +2108,154 @@ async function handleArtifact(request, response) {
   stream.pipe(response);
 }
 
+// A recovery renders the already recorded simulation, using the original engine environment.
+const recoveredReplayDir = 'reference-replay-recovery';
+let replayRecovery;
+let replayRecoveryFailure;
+
+async function handleReferenceReplay(request, response, runId) {
+  await ensureJobsLoaded();
+  const job = await readWorkerJob(runId, accountId(request, {}));
+  const evidence = job?.metrics?.originmanReference;
+  const validDigest = (value) => /^[a-f0-9]{64}$/.test(value ?? '');
+  if (
+    !job ||
+    job.engine !== REFERENCE_ENGINE ||
+    job.status !== 'completed' ||
+    job.mock !== false ||
+    !validDigest(job.artifact?.sha256) ||
+    !validDigest(evidence?.replay?.sha256) ||
+    !validDigest(evidence?.sceneSha256) ||
+    evidence.video
+  ) {
+    json(response, 404, { ok: false, error: 'reference_replay_unavailable' });
+    return;
+  }
+  const completedDir = path.join(job.dir, recoveredReplayDir);
+  const video = await readBoundedJson(path.join(completedDir, 'video.json'));
+  if (video) {
+    json(response, 200, { ok: true, state: 'completed', video });
+    return;
+  }
+  if (replayRecovery?.runId === runId) {
+    json(response, 202, { ok: true, state: 'rendering' });
+    return;
+  }
+  if (request.method === 'GET') {
+    json(response, 200, { ok: true, state: replayRecoveryFailure === runId ? 'failed' : 'idle' });
+    return;
+  }
+  if (replayRecovery) {
+    json(response, 409, { ok: false, error: 'reference_replay_busy' });
+    return;
+  }
+  const config = workerEngines().get(REFERENCE_ENGINE);
+  const environment = childEnvironment(job);
+  const assignment = 'RDK_ORIGINMAN_DANCE_BUNDLE_DIR=';
+  const wrapped =
+    config?.executable === '/usr/bin/env' &&
+    config.args.length === 3 &&
+    config.args[0].startsWith(assignment);
+  const python = wrapped ? config.args[1] : config?.executable;
+  const adapter = wrapped ? config.args[2] : config?.args[0];
+  const bundle = wrapped
+    ? config.args[0].slice(assignment.length)
+    : environment.RDK_ORIGINMAN_DANCE_BUNDLE_DIR;
+  if (
+    !python ||
+    !adapter?.endsWith('/engines/originman-reference-ppo/adapter.py') ||
+    !bundle ||
+    !path.isAbsolute(python) ||
+    !path.isAbsolute(adapter) ||
+    (!wrapped && config.args.length !== 1)
+  ) {
+    json(response, 409, { ok: false, error: 'reference_replay_renderer_unavailable' });
+    return;
+  }
+  const source = path.join(job.dir, 'reference-replay.npz');
+  const scene = path.resolve(bundle, 'model/scene.xml');
+  const renderer = path.resolve(path.dirname(adapter), '../originman-dance-ppo/render_replay.py');
+  replayRecovery = { runId };
+  if (replayRecoveryFailure === runId) replayRecoveryFailure = undefined;
+  json(response, 202, { ok: true, state: 'rendering' });
+  void (async () => {
+    let output;
+    try {
+      // Verify the retained inputs before allowing the renderer to consume them.
+      const hashInput = async (file, maxBytes) => {
+        const info = await stat(file);
+        if (!info.isFile() || info.size < 1 || info.size > maxBytes)
+          throw Error('invalid retained file');
+        const hash = createHash('sha256');
+        for await (const chunk of createReadStream(file)) hash.update(chunk);
+        return hash.digest('hex');
+      };
+      const [sourceSha, sceneSha] = await Promise.all([
+        hashInput(source, 32 * 1024 * 1024),
+        hashInput(scene, 8 * 1024 * 1024),
+      ]);
+      if (sourceSha !== evidence.replay.sha256 || sceneSha !== evidence.sceneSha256)
+        throw Error('stored replay or scene does not match this run');
+      output = await mkdtemp(path.join(job.dir, '.replay-'));
+      const filename = 'dance-replay.mp4';
+      const target = path.join(output, filename);
+      await new Promise((resolve, reject) => {
+        const child = spawn(
+          python,
+          [renderer, '--scene', scene, '--replay', source, '--output', target],
+          {
+            env: environment,
+            stdio: 'ignore',
+            signal: AbortSignal.timeout(1_200_000),
+          },
+        );
+        child.once('error', reject);
+        child.once('close', (code) => {
+          if (code === 0) resolve();
+          else reject(Error('renderer exited without a video'));
+        });
+      });
+      const receipt = await readBoundedJson(path.join(output, 'dance-replay.receipt.json'));
+      const sha256 = await hashInput(target, MAX_DANCE_VIDEO_BYTES);
+      const sizeBytes = (await stat(target)).size;
+      if (
+        receipt?.replaySha256 !== sourceSha ||
+        receipt.sceneSha256 !== sceneSha ||
+        receipt.videoSha256 !== sha256 ||
+        receipt.fps !== 50 ||
+        !Number.isFinite(receipt.durationSeconds) ||
+        receipt.durationSeconds <= 0 ||
+        receipt.durationSeconds > 241
+      )
+        throw Error('invalid recovered video receipt');
+      await writeFile(
+        path.join(output, 'video.json'),
+        JSON.stringify({
+          file: filename,
+          sha256,
+          sizeBytes,
+          policySha256: job.artifact.sha256,
+          sourceReplaySha256: sourceSha,
+          fps: receipt.fps,
+          durationSeconds: receipt.durationSeconds,
+        }),
+        { mode: 0o600 },
+      );
+      await rename(output, completedDir);
+      output = undefined;
+    } catch (error) {
+      replayRecoveryFailure = runId;
+      console.warn(
+        '[sim2real-local] reference replay recovery failed:',
+        error?.code ?? error?.message,
+      );
+    } finally {
+      if (output) await rm(output, { recursive: true, force: true }).catch(() => {});
+      replayRecovery = undefined;
+    }
+  })();
+}
+
 async function handleRunVideo(request, response, kind) {
   await ensureJobsLoaded();
   const runId = decodeURIComponent(request.url.slice('/runs/'.length, -(kind.length + 1)));
@@ -2118,7 +2276,11 @@ async function handleRunVideo(request, response, kind) {
         : taskId === 'originman-dance'
           ? job.metrics?.originmanDance
           : undefined;
-  const video = evidence?.video;
+  const recovered =
+    !evidence?.video && taskId === REFERENCE_TASK && kind === 'dance-video'
+      ? await readBoundedJson(path.join(job.dir, recoveredReplayDir, 'video.json'))
+      : null;
+  const video = evidence?.video ?? recovered;
   const size = workshop ? video?.bytes : video?.sizeBytes;
   const validSha = (value) => /^[a-f0-9]{64}$/.test(value ?? '');
   const authentic = workshop
@@ -2143,7 +2305,8 @@ async function handleRunVideo(request, response, kind) {
     return;
   }
   const file = workshop ? 'comparison.mp4' : 'dance-replay.mp4';
-  const handle = await open(path.join(job.dir, file), 'r').catch(() => null);
+  const directory = recovered ? path.join(job.dir, recoveredReplayDir) : job.dir;
+  const handle = await open(path.join(directory, file), 'r').catch(() => null);
   if (!handle) {
     json(response, 404, { ok: false, error: errorPrefix + '_missing' });
     return;
@@ -2387,6 +2550,13 @@ export function createLocalTrainingWorkerServer() {
       }
       if (request.method === 'POST' && request.url === '/originman-reference/screen') {
         await handleReferenceScreen(request, response);
+        return;
+      }
+      const replayRoute = /^\/runs\/([a-zA-Z0-9][a-zA-Z0-9._-]{0,119})\/reference-replay$/.exec(
+        request.url ?? '',
+      );
+      if (replayRoute && (request.method === 'GET' || request.method === 'POST')) {
+        await handleReferenceReplay(request, response, replayRoute[1]);
         return;
       }
       const videoRoute = /^\/runs\/[^/]+\/(dance-video|workshop-video)$/.exec(request.url ?? '');

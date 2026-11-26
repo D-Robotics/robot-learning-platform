@@ -232,7 +232,11 @@ def write_studio_entries(add, studio):
         'command': next(iter(commands.values())),
         'commandByPlatform': commands,
         'args': ['./scripts/experience-mcp.mjs'],
-        'permissions': {'tools': {'rdk_workshop': 'readonly', 'rdk_originman_reference_track': 'readonly'}},
+        'requestTimeoutMs': 150000,
+        'permissions': {'tools': {tool: 'readonly' for tool in (
+            'rdk_workshop', 'rdk_originman_reference_track', 'rdk_originman_motion_preview',
+            'rdk_originman_motion_library', 'rdk_training_status',
+        )}},
         'env': {'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning'},
     }}}), 0o100644)
     if studio['universal']:

@@ -173,7 +173,11 @@ with zipfile.ZipFile(portable) as archive:
         'win32-x64': './mcp/runtime/win32-x64/node.exe',
     }
     assert config['args'] == ['./scripts/experience-mcp.mjs']
-    assert config['permissions'] == {'tools': {'rdk_workshop': 'readonly', 'rdk_originman_reference_track': 'readonly'}}
+    assert config['requestTimeoutMs'] == 150000
+    assert config['permissions']['tools'] == dict.fromkeys([
+        'rdk_workshop', 'rdk_originman_reference_track', 'rdk_originman_motion_library',
+        'rdk_originman_motion_preview', 'rdk_training_status',
+    ], 'readonly')
     guide = archive.read(root + 'STUDIO-SETUP.md').decode()
     for launcher in ['setup-studio-windows.cmd', 'setup-studio-macos.command']:
         assert root + launcher in archive.namelist()

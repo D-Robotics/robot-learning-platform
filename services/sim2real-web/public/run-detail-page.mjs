@@ -664,6 +664,58 @@ export async function startRunDetail({
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
+  const replayRetry = document.getElementById('reference-replay-retry');
+  const replayFeedback = document.getElementById('reference-replay-feedback');
+  let replayTimer = null;
+  let checkingReplay = false;
+  const replayRecoverable = (run) => run?.taskId === REFERENCE_TASK && run.status === 'completed' &&
+    run.mock === false && run.training?.video !== false && !run.links?.danceVideo &&
+    Boolean(run.metrics?.originmanReference?.replay?.sha256) && !referenceStanceMismatch(run);
+  const updateReplayRecovery = async (start = false) => {
+    if (disposed || checkingReplay || replayTimer !== null || !replayRetry || !replayRecoverable(lastRun)) return;
+    checkingReplay = true;
+    replayRetry.disabled = true;
+    const show = (message) => {
+      replayFeedback.textContent = message;
+      replayFeedback.hidden = !message;
+    };
+    if (start) show('正在请求生成原回放…');
+    try {
+      const url = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}/reference-replay`, location.href);
+      const response = await fetchImpl(url.href, {
+        method: start ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
+        headers: { accept: 'application/json' },
+      });
+      const result = await response.json();
+      if (disposed) return;
+      if (!response.ok || !result?.ok) throw Error(result?.message);
+      if (result.state === 'completed') {
+        show('');
+        await loadRun(true);
+      } else if (result.state === 'rendering') {
+        show('正在用本次训练留下的轨迹生成回放。可以离开，回来后会继续显示进度。');
+        replayTimer = setTimeoutImpl(() => {
+          replayTimer = null;
+          void updateReplayRecovery();
+        }, 8000);
+      } else {
+        replayRetry.hidden = result.state === 'unavailable';
+        show({
+          idle: '',
+          failed: '回放生成失败。你可以重试，原训练和评测结果会保留。',
+          busy: '原训练 Worker 正在生成另一段回放，请稍后重试。',
+          unavailable: '原训练 Worker 暂时无法重新生成这条回放。',
+        }[result.state] ?? '');
+      }
+    } catch (error) {
+      if (!disposed) show(error.message || '回放状态暂不可读，请稍后重试。');
+    } finally {
+      checkingReplay = false;
+      replayRetry.disabled = replayTimer !== null;
+    }
+  };
+  const retryReplay = () => void updateReplayRecovery(true);
+  replayRetry?.addEventListener('click', retryReplay);
   const queueButton = document.getElementById('run-queue-check-workers');
   const queueWorkerStatus = document.getElementById('run-queue-worker-status');
   const queueAlternative = document.getElementById('run-queue-alternative');
@@ -761,6 +813,7 @@ export async function startRunDetail({
         throw new Error('平台返回的运行记录与链接中的 Run ID 不一致。');
       }
       if (run.status !== 'queued' || run.computeResourceId !== lastRun?.computeResourceId) clearQueueAlternative();
+      const previousRun = lastRun;
       lastRun = run;
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
@@ -768,6 +821,12 @@ export async function startRunDetail({
       renderReferenceQueue(document, run, payload.queue, now());
       if (queueButton) queueButton.hidden = !run.computeResourceId;
       void showResimulatedReplay(document, location, fetchImpl, run);
+      if (replayRetry) {
+        const recoverable = replayRecoverable(run);
+        replayRetry.hidden = !recoverable;
+        if (!recoverable) replayFeedback.hidden = true;
+        if (recoverable && (!replayRecoverable(previousRun) || !quiet)) void updateReplayRecovery();
+      }
     } catch (cause) {
       if (lastRun) renderReferenceQueue(document, lastRun, undefined, now());
       if (!active) {
@@ -807,6 +866,8 @@ export async function startRunDetail({
       refreshButton?.removeEventListener('click', refreshRun);
       queueButton?.removeEventListener('click', checkQueueWorkers);
       logsButton?.removeEventListener('click', loadLogs);
+      replayRetry?.removeEventListener('click', retryReplay);
+      if (replayTimer !== null) clearTimeoutImpl(replayTimer);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },
   };

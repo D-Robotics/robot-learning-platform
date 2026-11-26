@@ -103,6 +103,7 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
   const originalFetch = globalThis.fetch;
   const screened: { owner: string | null; resource: string | null; body: string }[] = [];
   let launches = 0;
+  let rejected = false;
   let statusReads = 0;
   const queuedAt = new Date().toISOString();
   globalThis.fetch = (async (input, init) => {
@@ -125,11 +126,11 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
         sceneSha256: '1'.repeat(64),
         calibrationSha256: '2'.repeat(64),
         gate: {
-          completed: true,
+          completed: !rejected,
           framesExpected: frames,
-          framesEvaluated: frames,
-          firstFailedFrame: null,
-          maxTiltDeg: 1,
+          framesEvaluated: rejected ? 15 : frames,
+          firstFailedFrame: rejected ? 15 : null,
+          maxTiltDeg: rejected ? 40 : 1,
         },
       });
     }
@@ -148,14 +149,14 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
     launches++;
     return Response.json({ status: 'queued', runId: 'reference-run-1' }, { status: 202 });
   }) as typeof fetch;
-  const submit = () =>
+  const submit = (key = 'reference-screen-retry') =>
     invoke(router, 'post', '/api/sim2real/runs', {
       body: {
         modelId: model.body.modelId,
         backend: 'local',
         taskId: 'originman-reference-track',
         computeResourceId: resource.id,
-        idempotencyKey: 'reference-screen-retry',
+        idempotencyKey: key,
         training: {
           profile: 'smoke',
           engine: 'originman-reference-ppo',
@@ -182,6 +183,22 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
     expect(retry.statusCode).toBe(200);
     expect(retry.body).toMatchObject({ idempotentReplay: true, run: { id: run.body.run.id } });
     expect(screened).toHaveLength(2);
+    expect(launches).toBe(1);
+    rejected = true;
+    const failed = await submit('reference-screen-rejected');
+    expect(failed.statusCode).toBe(409);
+    expect(failed.body).toMatchObject({
+      code: 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED',
+      retryable: false,
+      screening: {
+        passed: false,
+        trajectorySha256: pinned.expectedTrajectorySha256,
+        firstFailedFrame: 15,
+        framesEvaluated: 15,
+        maxTiltDeg: 40,
+      },
+    });
+    expect(screened).toHaveLength(3);
     expect(launches).toBe(1);
     const runPath = '/api/sim2real/runs/:id';
     const params = { id: run.body.run.id };
@@ -661,6 +678,137 @@ describe('Sim2Real HTTP routes', () => {
       globalThis.fetch = originalFetch;
     }
   });
+  it('retains a recovered reference video only for the original owning Run', async () => {
+    const owner = 'reference-recovery-owner';
+    const makeRouter = (accountId: string) =>
+      createSim2RealRouter({
+        auth: {
+          isMultiUserDeployment: () => true,
+          resolvePrincipal: () => ({ accountId }),
+          resolveAccount: () => accountId,
+        },
+      });
+    await fixture();
+    const router = makeRouter(owner);
+    const r = await createSim2RealComputeResource(
+      {
+        name: 'Original worker',
+        source: 'server-runner',
+        runnerUrl: 'http://127.0.0.1:18203/train',
+        status: 'online',
+        mock: false,
+      },
+      owner,
+    );
+    const bytes = new Uint8Array(Buffer.from('isolated recovered mp4'));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const policySha = 'a'.repeat(64);
+    const replaySha = 'b'.repeat(64);
+    const run = await createSim2RealRun(
+      {
+        modelId: BUILTIN_MICRODUCK_MODEL.id,
+        taskId: 'originman-reference-track',
+        backend: 'local',
+        externalRunId: 'reference-worker-run',
+        computeResourceId: r.id,
+        status: 'completed',
+        mock: false,
+        summary: 'Retained trajectory',
+        artifact: {
+          artifactId: 'policy',
+          artifactRef: 'artifact://fixture/policy.onnx',
+          kind: 'compiled',
+          format: 'onnx',
+          runtime: 'cpu-onnx',
+          workload: 'dance',
+          threads: 1,
+          sha256: policySha,
+        },
+        metrics: {
+          contractValid: true,
+          observationSize: 96,
+          actionSize: 18,
+          originmanReference: {
+            framesExpected: 200,
+            framesEvaluated: 200,
+            trackingMaeRad: 0.1,
+            maxTiltDeg: 10,
+            finalYawDeg: 1,
+            qualityGatePassed: true,
+            referenceSha256: 'c'.repeat(64),
+            sceneSha256: 'd'.repeat(64),
+            replay: { sha256: replaySha },
+          },
+        },
+      },
+      owner,
+    );
+    const params = { id: run.id };
+    const originalFetch = globalThis.fetch;
+    let invalid = true;
+    const methods: string[] = [];
+    globalThis.fetch = (async (url, options) => {
+      expect(new Headers(options?.headers).get('x-sim2real-account')).toBe(owner);
+      const path = new URL(url as string).pathname;
+      methods.push(options?.method ?? 'GET');
+      if (path.endsWith('/dance-video'))
+        return new Response(bytes, {
+          headers: {
+            'content-type': 'video/mp4',
+            'content-length': String(bytes.length),
+            'x-artifact-sha256': sha256,
+          },
+        });
+      expect(path).toBe('/runs/reference-worker-run/reference-replay');
+      if (options?.method === 'POST')
+        return Response.json({ ok: true, state: 'rendering' }, { status: 202 });
+      return Response.json({
+        ok: true,
+        state: 'completed',
+        video: {
+          file: 'dance-replay.mp4',
+          sha256,
+          sizeBytes: bytes.length,
+          fps: 50,
+          durationSeconds: 4,
+          policySha256: policySha,
+          sourceReplaySha256: invalid ? 'e'.repeat(64) : replaySha,
+        },
+      });
+    }) as typeof fetch;
+    try {
+      const route = '/api/sim2real/runs/:id/reference-replay';
+      expect((await invoke(makeRouter('foreign'), 'post', route, { params })).statusCode).toBe(404);
+      expect(methods).toEqual([]);
+      expect((await invoke(router, 'post', route, { params, method: 'POST' })).statusCode).toBe(
+        202,
+      );
+      expect((await invoke(router, 'get', route, { params })).statusCode).toBe(503);
+      invalid = false;
+      expect((await invoke(router, 'get', route, { params })).body).toMatchObject({
+        state: 'completed',
+      });
+      expect(
+        (await invoke(router, 'get', '/api/sim2real/runs/:id', { params })).body,
+      ).toMatchObject({
+        run: {
+          id: run.id,
+          artifact: { sha256: policySha },
+          metrics: {
+            originmanReference: {
+              qualityGatePassed: true,
+              video: { sha256, sourceReplaySha256: replaySha },
+            },
+          },
+          links: { danceVideo: `./api/v1/duck/runs/${run.id}/dance-video` },
+        },
+      });
+      expect(methods).toEqual(['POST', 'GET', 'GET', 'GET']);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('persists dataset version, digest and validated run lineage', async () => {
     const router = await fixture();
     const run = await invoke(router, 'post', '/api/sim2real/runs', {

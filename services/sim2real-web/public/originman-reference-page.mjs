@@ -40,7 +40,45 @@ let trajectory;
 let trajectoryDigest;
 const screenings = new Map();
 let displayedScreenKey;
-let attempt;
+const pendingSubmissions = new Map();
+let draftScope;
+
+function submissionId(key) {
+  const existing = pendingSubmissions.get(key);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  pendingSubmissions.set(key, id);
+  savePendingSubmissions();
+  return id;
+}
+
+function submissionStorage() {
+  const window = document.defaultView;
+  if (draftScope && window) return window.sessionStorage;
+}
+
+function savePendingSubmissions() {
+  try {
+    submissionStorage()?.setItem(
+      'rdk-originman-reference-submissions-v1:' + draftScope,
+      JSON.stringify([...pendingSubmissions].slice(-30)),
+    );
+  } catch {
+    // Storage can be unavailable in a private or restricted browser session.
+  }
+}
+
+function restorePendingSubmissions() {
+  try {
+    const items = JSON.parse(submissionStorage()?.getItem(
+      'rdk-originman-reference-submissions-v1:' + draftScope,
+    ) ?? '[]');
+    for (const [key, id] of items)
+      if (typeof key === 'string' && /^[a-f0-9-]{36}$/.test(id)) pendingSubmissions.set(key, id);
+  } catch {
+    // The in-memory request key still protects ordinary retries.
+  }
+}
 let preparing = false;
 let checking = false;
 let submitting = false;
@@ -65,7 +103,7 @@ async function api(path, body, idempotencyKey, signal) {
     if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
     throw Object.assign(
       Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。'),
-      { code: value?.code ?? value?.error?.code, retryable: value?.retryable },
+      { code: value?.code ?? value?.error?.code, retryable: value?.retryable, screening: value?.screening },
     );
   }
   return value;
@@ -241,7 +279,6 @@ async function selectTrajectory(load, nextSpeed) {
     speed = nextSpeed;
     trajectory = value;
     trajectoryDigest = receipt.trajectorySha256 ?? receipt.referenceSha256;
-    attempt = undefined;
     const list = byId('reference-clips');
     list.replaceChildren(...clips.map(({ label }) => {
       const item = document.createElement('li');
@@ -341,6 +378,36 @@ function downloadReference(value, name) {
 exampleDownload.addEventListener('click', () => downloadReference(example, 'originman-reference-example.json'));
 exportButton.addEventListener('click', () => downloadReference(trajectory, 'originman-reference-prepared.json'));
 
+function createScreenResult(label, result, digest) {
+  const row = document.createElement('li');
+  const location = result.failureLocation;
+  const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
+    : location?.fromBlockNumber
+      ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
+      : location?.betweenBlocks ? '，发生在两段过渡处' : '';
+  const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
+  const violation = result.limitViolation;
+  if (violation) {
+    row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
+  } else {
+    row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
+    const reasons = result.failure;
+    if (reasons?.nonFootContacts?.length) {
+      row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
+    }
+    if (reasons?.tilt) {
+      row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
+    }
+    if (reasons?.height) {
+      row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
+    }
+  }
+  const detail = document.createElement('small');
+  detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
+  row.append(detail);
+  return row;
+}
+
 async function screenBatch(entries) {
   if (screening || preparing || submitting || checking || !selectedWorkerReady()) return;
   if (entries.length > MAX_REFERENCE_CLIPS) {
@@ -372,31 +439,7 @@ async function screenBatch(entries) {
           throw Error('筛查站姿与当前预览不一致，请重新预览。');
         screenings.set(screeningKey(computeResourceId, digest, result.stanceProfile), result.passed);
         if (result.passed) passed++;
-        const location = result.failureLocation;
-        const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
-          : location?.fromBlockNumber
-            ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
-            : location?.betweenBlocks ? '，发生在两段过渡处' : '';
-        const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
-        const violation = result.limitViolation;
-        if (violation) {
-          row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
-        } else {
-          row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
-          const reasons = result.failure;
-          if (reasons?.nonFootContacts?.length) {
-            row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
-          }
-          if (reasons?.tilt) {
-            row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
-          }
-          if (reasons?.height) {
-            row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
-          }
-        }
-        const detail = document.createElement('small');
-        detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
-        row.append(detail);
+        row.append(...createScreenResult(label, result, digest).childNodes);
       } catch (cause) {
         if (controller.signal.aborted) break;
         row.textContent = `${label} · ${cause.message}`;
@@ -442,7 +485,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
   const numEnvs = Number(envs.value);
   const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
     reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest, reference.expectedStanceProfile]);
-  if (!attempt || attempt.key !== key) attempt = { key, id: crypto.randomUUID() };
+  const id = submissionId(key);
   try {
     const { modelId } = await api('originman-reference/model', { computeResourceId });
     const result = await api('runs', {
@@ -453,27 +496,39 @@ byId('reference-form').addEventListener('submit', async (event) => {
         engine: 'originman-reference-ppo', video: true, maxIterations: trainingSteps / 4096, numEnvs,
         originmanReference: { ...reference, trainingSteps, seed: 7 },
       },
-    }, attempt.id);
+    }, id);
     const runId = result.run?.id;
     if (!/^[\w.-]{1,120}$/.test(runId ?? '')) throw Error('平台未返回 Run ID。请保留本页再试。');
+    pendingSubmissions.delete(key);
+    savePendingSubmissions();
     const url = new URL('./originman-reference-run.html', location.href);
     url.searchParams.set('runId', runId);
     location.assign(url.href);
   } catch (cause) {
-    if (cause.code === 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED' && cause.retryable === false) {
+    const diagnosis = cause.screening;
+    const digest = reference.expectedTrajectorySha256 ?? trajectoryDigest;
+    if (diagnosis?.passed === false && diagnosis.trajectorySha256 === digest &&
+        diagnosis.stanceProfile === reference.expectedStanceProfile) {
+      const screenKey = currentScreenKey();
+      screenings.set(screenKey, false);
+      displayedScreenKey = screenKey;
+      screenResults.replaceChildren(createScreenResult('当前轨迹', diagnosis, digest));
+      screenStatus.textContent = '本次提交的筛查结果';
       screenDetails.open = true;
     }
-    showError(trainingError, cause.message);
+    showError(trainingError, cause instanceof TypeError
+      ? '连接中断，暂未确认是否提交成功。用当前配置再次提交会找回同一任务。'
+      : cause.message);
   } finally {
     submitting = false;
     refresh();
   }
 });
 
-let draftScope;
 try {
   const setup = await api('originman-reference');
   draftScope = setup.draftScope;
+  restorePendingSubmissions();
   example = setup.example;
   calibration = setup.calibration;
   showCalibration(calibration);

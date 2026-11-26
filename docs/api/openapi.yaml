@@ -801,6 +801,29 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { description: The run cannot provide a verified artifact. }
         "502": { description: The worker cannot return the artifact bytes. }
+  /api/v1/duck/runs/{runId}/reference-replay:
+    parameters:
+      - $ref: "#/components/parameters/RunId"
+    get:
+      tags: [runs]
+      summary: Read recovery status for the current account's recorded OriginMan reference replay
+      operationId: getOriginmanReferenceReplayStatus
+      responses:
+        "200": { description: Recovery status for the original Run. }
+        "202": { description: The worker is rendering the recorded simulation. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: The original Worker or retained video is temporarily unavailable. }
+    post:
+      tags: [runs]
+      summary: Render the original simulation trajectory from a completed OriginMan reference Run
+      operationId: recoverOriginmanReferenceReplay
+      responses:
+        "200": { description: Existing replay status or worker availability. }
+        "202": { description: The original replay is rendering. Repeated requests reuse this work. }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { description: The original Worker or retained video is temporarily unavailable. }
   /api/v1/duck/runs/{runId}/dance-video:
     parameters:
       - $ref: "#/components/parameters/RunId"

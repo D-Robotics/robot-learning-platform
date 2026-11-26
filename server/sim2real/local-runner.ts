@@ -4,6 +4,7 @@ import type {
   Sim2RealCheckpointRef,
   Sim2RealModelManifest,
   Sim2RealTrainingSpec,
+  Sim2RealRunMetrics,
   Sim2RealDemonstrations,
 } from '../../shared/sim2real.js';
 import {
@@ -174,6 +175,48 @@ export async function requestLocalTrainingStatus(input: {
  * Returns null for any transport failure, non-2xx, size anomaly, or digest
  * mismatch — staging must fail closed, never fall back to a guess.
  */
+type ReferenceVideo = NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['video']>;
+
+export async function requestLocalReferenceReplay(input: {
+  runnerUrl: string;
+  runnerToken: string;
+  accountId: string;
+  externalRunId: string;
+  start: boolean;
+}) {
+  const url = new URL(normalizeRunnerUrl(input.runnerUrl, { localHttp: true }));
+  const runnerPath = url.pathname.replace(/\/+$/, '').replace(/\/train$/, '');
+  url.pathname =
+    runnerPath + '/runs/' + encodeURIComponent(input.externalRunId) + '/reference-replay';
+  assertLocalRunnerToken(input.runnerUrl, input.runnerToken);
+  const response = await fetch(url, {
+    method: input.start ? 'POST' : 'GET',
+    redirect: 'error',
+    signal: AbortSignal.timeout(8_000),
+    headers: {
+      accept: 'application/json',
+      'x-sim2real-account': safeAccountId(input.accountId),
+      ...(input.runnerToken && { authorization: 'Bearer ' + input.runnerToken }),
+    },
+  });
+  if (response.status === 404) return { state: 'unavailable' } as const;
+  const value = (await response.json()) as {
+    ok?: boolean;
+    state?: string;
+    error?: string;
+    video?: ReferenceVideo;
+  };
+  if (response.status === 409 && value.error === 'reference_replay_busy')
+    return { state: 'busy' } as const;
+  if (response.status === 409) return { state: 'unavailable' } as const;
+  if (!response.ok || value.ok !== true) throw new Error('reference replay status unavailable');
+  if (value.state === 'completed' && value.video)
+    return { state: 'completed', video: value.video } as const;
+  if (value.state === 'idle' || value.state === 'rendering' || value.state === 'failed')
+    return { state: value.state } as const;
+  throw new Error('invalid reference replay status');
+}
+
 export async function fetchLocalRunArtifact(input: {
   /** The worker gates every /runs/:id route on the owning account. */
   accountId: string;

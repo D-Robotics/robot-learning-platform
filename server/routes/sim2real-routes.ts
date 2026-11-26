@@ -160,6 +160,7 @@ import {
   requestLocalTraining,
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
+  requestLocalReferenceReplay,
   isLocalRunnerConfigured,
   requestLocalTrainingCancel,
   requestLocalEnginePreflight,
@@ -197,7 +198,10 @@ import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-rou
 import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
 import { registerSim2RealExperimentRoutes } from './sim2real-experiment-routes.js';
-import { registerSim2RealWorkshopRoutes } from './sim2real-workshop-routes.js';
+import {
+  referenceScreenDiagnosis,
+  registerSim2RealWorkshopRoutes,
+} from './sim2real-workshop-routes.js';
 import { registerSim2RealAuditRoutes } from './sim2real-audit-routes.js';
 import { deviceConnectionAgentUrl } from '../sim2real/board-tunnel-manager.js';
 import {
@@ -4050,6 +4054,107 @@ export function createSim2RealRouter(
     getRun: getSim2RealRun,
   });
 
+  const referenceReplay = wrapAsync(async (request, response) => {
+    const owner = requestOwner(request, response, auth);
+    if (owner === null) return;
+    noStore(response);
+    const run = await getSim2RealRun(String(request.params.id || ''), owner);
+    const originalMetrics = run?.metrics;
+    const evidence = originalMetrics?.originmanReference;
+    const accountId =
+      auth.resolvePrincipal(request)?.accountId ??
+      owner ??
+      (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+    if (
+      !accountId ||
+      !run?.externalRunId ||
+      run.relayAgentUrl ||
+      run.backend !== 'local' ||
+      run.taskId !== ORIGINMAN_REFERENCE_TASK ||
+      run.status !== 'completed' ||
+      run.mock !== false ||
+      run.training?.video === false ||
+      !originalMetrics ||
+      !evidence?.replay?.sha256 ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(run.externalRunId)
+    ) {
+      sendApiError(
+        response,
+        404,
+        'SIM2REAL_REFERENCE_REPLAY_UNAVAILABLE',
+        '当前账号没有可恢复的回放。',
+      );
+      return;
+    }
+    try {
+      const existing = verifiedDanceVideoReceipt(run);
+      if (
+        existing &&
+        (await loadDanceVideo(run, existing, owner, accountId)) &&
+        (await readSim2RealDanceVideo(existing.sha256, existing.sizeBytes))
+      ) {
+        response.json({ ok: true, state: 'completed' });
+        return;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (!runner) {
+        response.json({ ok: true, state: 'unavailable' });
+        return;
+      }
+      const result = await requestLocalReferenceReplay({
+        ...runner,
+        accountId,
+        externalRunId: run.externalRunId,
+        start: request.method === 'POST',
+      });
+      if (result.state !== 'completed') {
+        response
+          .status(result.state === 'rendering' ? 202 : 200)
+          .json({ ok: true, state: result.state });
+        return;
+      }
+      // Select only the fields checked by the platform and only from the original runner.
+      const { file, sha256, sizeBytes, policySha256, sourceReplaySha256, fps, durationSeconds } =
+        result.video;
+      const video = {
+        file,
+        sha256,
+        sizeBytes,
+        policySha256,
+        sourceReplaySha256,
+        fps,
+        durationSeconds,
+      };
+      const metrics = { ...originalMetrics, originmanReference: { ...evidence, video } };
+      const candidate = { ...run, metrics };
+      const verified = verifiedDanceVideoReceipt(candidate);
+      if (
+        !verified ||
+        fps !== 50 ||
+        typeof durationSeconds !== 'number' ||
+        !Number.isFinite(durationSeconds) ||
+        durationSeconds <= 0 ||
+        durationSeconds > 241 ||
+        !(await loadDanceVideo(candidate, verified, owner, accountId)) ||
+        !(await readSim2RealDanceVideo(verified.sha256, verified.sizeBytes))
+      ) {
+        throw new Error('unverified recovered replay');
+      }
+      await updateSim2RealRun(run.id, { metrics }, owner);
+      response.json({ ok: true, state: 'completed' });
+    } catch (error) {
+      console.warn('[sim2real] reference replay recovery unavailable', redactInternalError(error));
+      sendApiError(
+        response,
+        503,
+        'SIM2REAL_REFERENCE_REPLAY_UNAVAILABLE',
+        '暂时无法确认原回放的生成状态，请稍后重试。',
+      );
+    }
+  });
+  router.get(api('/runs/:id/reference-replay'), referenceReplay);
+  router.post(api('/runs/:id/reference-replay'), referenceReplay);
+
   router.get(
     api('/runs/:id/dance-video'),
     wrapAsync(async (request, response) => {
@@ -5266,6 +5371,9 @@ export function createSim2RealRouter(
         if (!report || !('passed' in report) || !report.passed) {
           const unsupported = report?.unsupportedStance;
           const busy = report?.busy;
+          const screening =
+            report &&
+            referenceScreenDiagnosis(report, training.originmanReference.trajectory, composition);
           sendApiError(
             response,
             !report ? 503 : 409,
@@ -5278,8 +5386,10 @@ export function createSim2RealRouter(
                 ? '算力正在筛查另一条轨迹或检查环境。请稍后重新提交。'
                 : !report
                   ? 'Worker 未返回可核验的筛查结果。请检查连接后重试。'
-                  : '编排未通过物理筛查。请在跟跳页面筛查当前轨迹，定位失败帧后再提交。',
-            { retryable: !report || busy === true },
+                  : report.invalid && !screening
+                    ? report.invalid
+                    : '编排未通过物理筛查。请根据失败位置调整轨迹。',
+            { retryable: !report || busy === true, ...(screening && { screening }) },
           );
           return;
         }

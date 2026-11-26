@@ -63,6 +63,7 @@ export function exportStudioPlugin({
     mcpServers: {
       'rdk-robot-learning-platform': {
         transport: 'stdio',
+        requestTimeoutMs: 150_000,
         command: nodePath,
         args: [launcher],
         env: { RDK_SIM2REAL_MCP_BASE_URL: origin.toString().replace(/\/+$/, '') },
