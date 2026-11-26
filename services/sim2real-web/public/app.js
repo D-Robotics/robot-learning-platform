@@ -1784,7 +1784,18 @@ async function refreshSessionMenu() {
 }
 
 function setAuthGate(payload) {
+  const enteringGuestMode = !state.authRequired;
   state.authRequired = true;
+  if (enteringGuestMode) {
+    stationDiscovery = null;
+    stationDiscoveryGeneration += 1;
+    state.station.ready = false;
+    state.station.offlineReason = '';
+    const devices = $('station-device-list');
+    devices?.replaceChildren();
+    devices?.setAttribute('hidden', '');
+    renderStationConnectionEntry();
+  }
   const loginUrl = withLocalReturnTo(safeLoginUrl(
     payload && typeof payload === 'object' && typeof payload.ssoLoginUrl === 'string'
       ? payload.ssoLoginUrl
@@ -2179,10 +2190,10 @@ const FLOW_CHILD_CONTEXTS = {
   prepare: { kicker: '02 · 训练与策略', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '配置训练参数和算力。OriginMan 可在此设置舞蹈目标。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
   submit: { kicker: '02 · 训练与策略', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
-  'evaluation-run': { kicker: '03 · 评测与证据', title: '发起评测', description: '选择评测来源和目标，生成一份可追溯评测 Run。', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
+  'evaluation-run': { kicker: '03 · 评测与证据', title: '发起评测', description: '查看训练结果，或导入轨迹检查遥测。', view: 'evaluate', evalModule: 'run', focus: '#evaluation-run-panel' },
   comparison: { kicker: '03 · 评测与证据', title: '结果对比', description: '比较最近 Run 的成功率、奖励和跌倒率趋势。', view: 'evaluate', evalModule: 'comparison', focus: '#evaluation-comparison-panel' },
   'evaluation-evidence': { kicker: '03 · 评测与证据', title: '全部证据', description: '查看轨迹、训练、评测、制品和部署记录，保留完整证据链。', view: 'records', recordTab: 'all', focus: '#history-list' },
-  devices: { kicker: '04 · 设备与发布', title: '设备管理', description: '登记设备、建立受控连接并查看设备能力。', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
+  devices: { kicker: '04 · 设备与发布', title: '设备管理', description: '从 RDK Studio 发现板卡，或使用板卡地址连接。', view: 'station', stationModule: 'devices', focus: '#station-device-manager' },
   preflight: { kicker: '04 · 设备与发布', title: '预检与发布', description: '生成并执行只读预检，确认制品可以进入目标板卡。', view: 'deploy', deployModule: 'preflight', focus: '#preflight-panel' },
   feedback: { kicker: '04 · 设备与发布', title: '运行反馈与回滚', description: '查看上线闸门、部署时间线和可回滚版本。', view: 'deploy', deployModule: 'feedback', focus: '#feedback-panel' },
 };
@@ -2568,38 +2579,6 @@ function syncStationDeviceForm() {
     `当前产品：${product.displayName} · 默认档案已按产品线推荐，可按板端实际能力改选。`,
   );
 
-  const transportSelect = $('station-device-transport');
-  const bridge = transportSelect?.value === 'bridge';
-  const hostInput = $('station-device-host');
-  if (hostInput) {
-    hostInput.placeholder = bridge
-      ? 'Bridge 中的板卡 IP 或主机名'
-      : '例如 board-host.example.internal';
-  }
-  const add = $('station-device-add');
-  if (add) add.dataset.transportMode = bridge ? 'bridge' : 'ssh';
-  const hostField = $('station-device-host')?.closest('label');
-  if (hostField) hostField.hidden = bridge;
-  $('station-device-host')?.toggleAttribute('disabled', bridge);
-  document.querySelectorAll('[data-station-ssh-field]').forEach((field) => {
-    field.hidden = bridge;
-    field.querySelector('input')?.toggleAttribute('disabled', bridge);
-  });
-  const sshPath = $('station-device-ssh-path');
-  if (sshPath) sshPath.hidden = bridge;
-  const scriptButton = $('station-device-script-btn');
-  if (scriptButton) scriptButton.hidden = bridge;
-  const addButton = $('station-device-add-btn');
-  if (addButton) {
-    addButton.disabled = bridge;
-    addButton.textContent = bridge ? '请从下方已配对设备连接' : '添加设备与能力档案';
-  }
-  setText(
-    'station-device-transport-note',
-    bridge
-      ? 'Local Bridge 设备会出现在下方列表；无需填写地址或 SSH，直接点击设备卡片上的“连接”。'
-      : '服务器直连板卡时使用；密码只用于本次建档。',
-  );
 }
 
 function selectedProject() {
@@ -6806,10 +6785,33 @@ function stopPolicyTrial() {
   setPolicyTrialStatus('已请求停止策略试跑。');
 }
 
+function evaluationIntakeError(message) {
+  const note = $('evaluation-empty-error');
+  if (note) {
+    note.hidden = !message;
+    note.textContent = message;
+  }
+}
+
+function revealEvaluationTelemetry() {
+  if (document.body.dataset.activeView !== 'evaluate') return;
+  if (state.evalModule !== 'run') {
+    const context = FLOW_CHILD_CONTEXTS['evaluation-run'];
+    applyFlowChildDestination(context);
+    setFlowChild('evaluation-run', { focus: false });
+  }
+  const panel = $('evaluation-telemetry');
+  if (!panel) return;
+  panel.open = true;
+  panel.querySelector('summary')?.focus({ preventScroll: true });
+  panel.scrollIntoView({ block: 'start' });
+}
+
 async function importTelemetryFile(event) {
   const input = event.target;
   const file = input?.files?.[0];
   if (!file) return;
+  evaluationIntakeError('');
   const generation = ++replayLoadGeneration;
   const scope = replayContextKey();
   try {
@@ -6826,19 +6828,24 @@ async function importTelemetryFile(event) {
     state.telemetry = stampTelemetryContext(evidence);
     renderAll();
     inspectLocalTelemetry(state.telemetry);
+    revealEvaluationTelemetry();
     const skippedHint = evidence.skipped ? `，跳过 ${evidence.skipped} 条无效行` : '';
     showToast(
       '已导入 ' + evidence.summary.sampleCount + ' 帧遥测' + skippedHint + '，可用于本地回放检查',
       'success',
     );
   } catch (error) {
-    showToast(error instanceof Error ? error.message : '遥测文件无法解析', 'error');
+    if (generation !== replayLoadGeneration || scope !== replayContextKey()) return;
+    const message = error instanceof Error ? error.message : '遥测文件无法解析';
+    evaluationIntakeError(message + '。请选择包含有效采样帧的 JSONL 后重试。');
+    showToast(message, 'error');
   } finally {
     input.value = '';
   }
 }
 
 async function loadDemoTelemetry() {
+  evaluationIntakeError('');
   const generation = ++replayLoadGeneration;
   const scope = replayContextKey();
   if (state.productId !== 'microduck') {
@@ -6859,8 +6866,11 @@ async function loadDemoTelemetry() {
     state.telemetry = stampTelemetryContext(evidence);
     renderAll();
     inspectLocalTelemetry(state.telemetry);
+    revealEvaluationTelemetry();
     showToast('已载入合成演示证据；它不会代表真实 X5 遥测', 'normal');
   } catch (error) {
+    if (generation !== replayLoadGeneration || scope !== replayContextKey()) return;
+    evaluationIntakeError('暂时无法载入示例，请重试。');
     showToast(error instanceof Error ? error.message : '演示证据加载失败', 'error');
   }
 }
@@ -6994,7 +7004,13 @@ async function publishTelemetry() {
 
 function clearTelemetry() {
   invalidateReplayEvidence();
+  evaluationIntakeError('');
   renderAll();
+  const empty = $('evaluation-empty');
+  if (empty && !empty.hidden && document.body.dataset.activeView === 'evaluate') {
+    $('evaluation-empty-import')?.focus({ preventScroll: true });
+    empty.scrollIntoView({ block: 'nearest' });
+  }
   showToast('已清除本地遥测证据');
 }
 
@@ -7023,21 +7039,20 @@ function renderEvaluation() {
         evidence.publishedRunId ||
         evidence.evaluation),
   );
-  // 空态优先：没有真实 Run 评测或遥测证据时，六个空面板各自用不同的
-  // 措辞说"没数据"（14 处空文案、9 个"—"、5/10 禁用按钮，一面 2000px 的
-  // 空脚手架墙）。尤其是 Mock Run：它只能证明协议和台账通了，不能让
-  // 页面重新显示一套没有指标的“结果”卡。收起全部空面板，换一张三步
-  // 引导卡；一旦有真实证据立刻恢复完整仪表盘。banner 与底部"下一步"条
-  // 保留——它们是状态提醒，不是空数据面板。
-  const evaluateView = document.querySelector('[data-view-section="evaluate"]');
   const dashboardEmpty = !hasRunEvaluation && !hasTelemetryEvidence;
-  if (evaluateView) evaluateView.dataset.empty = dashboardEmpty ? 'true' : 'false';
-  const emptyGuide = $('evaluation-empty');
-  if (emptyGuide) emptyGuide.hidden = !dashboardEmpty;
-  if (dashboardEmpty) {
-    const qualityBadge = $('eval-run-quality');
-    if (qualityBadge) qualityBadge.hidden = true;
+  for (const id of ['evaluation-banner', 'evaluation-run-panel', 'evaluation-comparison-panel',
+    'evaluation-inspector', 'evaluation-telemetry', 'evaluation-next']) {
+    $(id)?.toggleAttribute('hidden', dashboardEmpty);
   }
+  $('evaluation-empty')?.toggleAttribute('hidden', !dashboardEmpty);
+  $('evaluation-empty-demo')?.toggleAttribute('hidden', state.productId !== 'microduck');
+  setText('evaluation-empty-title', runs.length ? '还没有可查看的评测结果' : '还没有评测记录');
+  setText('evaluation-empty-description', runs.length
+    ? '查看当前运行的进度，或导入已有轨迹。'
+    : state.productId === 'microduck'
+      ? '导入已有轨迹，或先用示例熟悉回放。'
+      : '导入已有轨迹，或先配置一次训练。');
+  setText('evaluation-empty-run', runs.length ? '查看训练记录' : '去配置训练');
   renderRunComparison(runs);
   const metrics = latestMetrics;
   const status = String(latest?.status || '').toLowerCase();
@@ -7046,11 +7061,7 @@ function renderEvaluation() {
   const evaluationExists = hasRealEvaluation(evidence, latest);
   const releaseGradeEvidence = hasReleaseGradeEvidence(evidence, latest);
   const unverifiedEvidence = evaluationExists && !releaseGradeEvidence;
-  // 空态文案与引导卡保持一致（"等待第一次…"），不要回落到主分支的
-  // "尚未产生评测结果"——两句话在引导卡旁边各说各的会互相打架。
-  let statusLabel = dashboardEmpty
-    ? '等待第一次训练或遥测'
-    : '尚未产生评测结果';
+  let statusLabel = '尚未产生评测结果';
   if (mockRun && ['completed', 'ready'].includes(status)) {
     statusLabel = dashboardEmpty ? '已有协议演示 · 等待真实评测' : '协议演示完成';
   }
@@ -11239,8 +11250,41 @@ async function stationRunCommand(id) {
   }
 }
 
-async function stationInit() {
+let stationDiscovery = null;
+let stationDiscoveryGeneration = 0;
+
+function renderStationConnectionEntry() {
+  const { ready, mock, offlineReason } = state.station;
+  const device = selectedDevice();
+  const summary = state.authRequired ? '登录后可查看和连接设备。'
+    : ready && !mock && (state.station.device || device) ? '设备已连接。可在设备列表切换目标。'
+    : !stationDiscovery ? '正在查找工作区设备…'
+      : stationDiscovery.error ? '暂时无法读取全部设备。可从 RDK Studio 刷新列表，或查看连接诊断。'
+        : stationDiscovery.count ? `找到 ${stationDiscovery.count} 台设备。请在列表中连接或设为目标。`
+          : device ? '当前目标尚未连接。可刷新列表或查看连接诊断。'
+            : '尚未连接设备。请选择一种连接方式。';
+  const status = $('station-device-manager-note');
+  if (status && status.textContent !== summary) status.textContent = summary;
+  const details = $('station-connection-diagnostics');
+  if (details) details.hidden = !offlineReason && !stationDiscovery?.error;
+  for (const [id, message] of [['station-board-diagnostic', offlineReason],
+    ['station-discovery-diagnostic', stationDiscovery?.error]]) {
+    const note = $(id);
+    if (note) {
+      note.hidden = !message;
+      note.textContent = message || '';
+    }
+  }
   const notice = $('station-notice');
+  if (notice) {
+    notice.hidden = !offlineReason;
+    notice.textContent = device
+      ? '当前目标无法连接。请回到「设备连接」查看状态和诊断。'
+      : '请先在「设备连接」选择或添加设备。';
+  }
+}
+
+async function stationInit() {
   const honestyNote = $('station-honesty-note');
   const generation = ++state.station.healthGeneration;
   const deviceId = String(state.selectedDeviceId || '');
@@ -11272,16 +11316,7 @@ async function stationInit() {
           ? `${health.device.name}（${health.device.id}）`
           : fallbackDevice?.name || fallbackDevice?.id || selectedOption?.textContent || '（未选择）';
       }
-      if (notice) {
-        notice.hidden = false;
-        // 服务端给的 offlineReason 里可能已经带了"仍可使用"的说明，无脑追加
-        // 会让横幅把同一件事说两遍（实测渲染出"仿真和训练工作流仍可使用…
-        // 仿真、训练与数据分析仍可使用。"）。
-        const offlineReason = String(state.station.offlineReason || '').trim();
-        notice.textContent = `上位机离线：${offlineReason}${
-          offlineReason.includes('仍可使用') ? '' : ' 仿真、训练与数据分析仍可使用。'
-        }`;
-      }
+      renderStationConnectionEntry();
       if (honestyNote) honestyNote.hidden = true;
       stationLog(`上位机离线：${state.station.offlineReason}`, 'info');
       return;
@@ -11292,7 +11327,7 @@ async function stationInit() {
     state.station.offlineReason = '';
     state.station.mock = health?.agent?.mock === true;
     state.station.device = health?.device ?? null;
-    if (notice) notice.hidden = true;
+    renderStationConnectionEntry();
     if (honestyNote) honestyNote.hidden = health?.agent?.mock !== true;
     const deviceName = $('station-device-name');
     if (deviceName) {
@@ -11323,15 +11358,9 @@ async function stationInit() {
     if (deviceName) {
       deviceName.textContent = fallbackDevice?.name || fallbackDevice?.id || selectedOption?.textContent || '（未选择）';
     }
-    if (notice) {
-      const detail = error instanceof Error ? error.message : '板端 agent 或板卡设备不可用';
-      notice.hidden = false;
-      const cleanDetail = detail.replace(/[。.!！?？\s]+$/u, '');
-      notice.textContent =
-        '上位机未就绪：' +
-        cleanDetail +
-        '。请确认板卡上的 rdk-board-agent 已启动、19100 端口可达，并在设备列表中完成接入。';
-    }
+    state.station.offline = true;
+    state.station.offlineReason = error instanceof Error ? error.message : '板端状态不可用';
+    renderStationConnectionEntry();
     stationLog('上位机初始化失败', 'error');
   }
 }
@@ -11422,46 +11451,17 @@ function stationBridgeRow(bridge, device) {
 async function stationDeviceManagerLoad() {
   const list = $('station-device-list');
   if (!list) return;
-  let payload = null;
-  let deviceConnectionsError = null;
-  try { payload = await request('/sim2real/device-connections'); }
-  catch (error) { deviceConnectionsError = error; }
+  const generation = ++stationDiscoveryGeneration;
+  const [devices, bridge] = await Promise.allSettled([
+    request('/sim2real/device-connections'),
+    request('/sim2real/local-bridge/status'),
+  ]);
+  if (generation !== stationDiscoveryGeneration) return;
+  const payload = devices.status === 'fulfilled' ? devices.value : null;
+  const bridgeStatus = bridge.status === 'fulfilled' ? bridge.value : null;
   const connections = Array.isArray(payload?.connections) ? payload.connections : [];
-  let bridgeStatus = null;
-  try {
-    bridgeStatus = await request('/sim2real/local-bridge/status');
-  } catch (error) {
-    if (!deviceConnectionsError) stationLog(`Local Bridge 状态暂不可用：${error instanceof Error ? error.message : '未知错误'}`, 'error');
-  }
-  const form = document.querySelector('#station-device-manager .station-device-add');
-  if (form) {
-    let toggle = $('station-device-add-toggle');
-    if (bridgeStatus?.provider === 'studio-desktop') {
-      if (!toggle) {
-        toggle = document.createElement('button');
-        toggle.id = 'station-device-add-toggle';
-        toggle.type = 'button';
-        toggle.className = 'button button-ghost';
-        toggle.textContent = '添加其他设备';
-        toggle.setAttribute('aria-expanded', 'false');
-        toggle.addEventListener('click', () => {
-          form.hidden = !form.hidden;
-          toggle.setAttribute('aria-expanded', String(!form.hidden));
-          toggle.textContent = form.hidden ? '添加其他设备' : '收起添加设备';
-        });
-        const toggleRow = document.createElement('p');
-        toggleRow.className = 'station-device-ssh-hint';
-        toggleRow.append(toggle);
-        form.before(toggleRow);
-        form.hidden = true;
-      }
-      toggle.hidden = false;
-      toggle.parentElement.before(list);
-    } else {
-      form.hidden = false;
-      if (toggle) toggle.hidden = true;
-    }
-  }
+  const errors = [devices, bridge].filter((result) => result.status === 'rejected')
+    .map((result) => result.reason instanceof Error ? result.reason.message : '设备状态不可用');
   list.replaceChildren();
   const bridges = Array.isArray(bridgeStatus?.bridges) ? bridgeStatus.bridges : [];
   const bridgeDevices = bridges.flatMap((bridge) => bridge.online !== false ? (bridge.devices || []).map((device) => ({ bridge, device })) : []);
@@ -11493,16 +11493,11 @@ async function stationDeviceManagerLoad() {
         : '暂时无法连接 Studio 设备桥，请确认 Studio 正在运行，并检查本机连接后重试。';
     list.append(hint);
   }
-  if (!connections.length && !bridgeDevices.length && !registeredDevices.length && !(bridgeStatus?.provider === 'studio-desktop' && bridgeStatus.state !== 'ready')) {
-    const empty = document.createElement('span');
-    empty.className = 'station-topic-empty';
-    empty.id = 'station-device-list-empty';
-    empty.textContent = bridgeStatus?.provider === 'studio-desktop' && bridgeStatus.state === 'ready'
-      ? 'Studio 当前没有可共享的本地设备。请先在 Studio 连接板卡。'
-      : deviceConnectionsError ? '暂时无法读取设备列表；Local Bridge 在线后会自动刷新。' : '尚无已建立的配对连接。已登记的设备可通过上方目标选择器查看。';
-    list.append(empty);
-  }
   for (const connection of connections) list.append(stationDeviceRow(connection));
+  const count = connections.length + bridgeDevices.length + registeredDevices.length;
+  list.hidden = !list.childElementCount;
+  stationDiscovery = { count, error: errors.join(' · ') };
+  renderStationConnectionEntry();
   if (bridgeDevices.length) stationLog(`已发现 ${bridgeDevices.length} 台本地 Bridge 设备，可直接连接`, 'ok');
   stationBridgePollResume();
   // The software workflow remains usable without a board. This manager is
@@ -11537,13 +11532,13 @@ function devicePairingHint(message) {
     return '主机名无法解析：改用板卡的 IP 地址再试一次。';
   }
   if (/authentication|password|Permission denied|密码|认证/i.test(text)) {
-    return 'SSH 认证失败：确认用户名与密码；只允许密钥登录的板卡请改用路径 B 一键脚本。';
+    return 'SSH 认证失败：确认用户名与密码；只允许密钥登录的板卡请改用配对脚本。';
   }
   if (/agent/i.test(text)) {
     return '板端 agent 未就绪：先在板卡上运行一键配对脚本安装 agent，再回来添加。';
   }
   if (/studio|bridge|桥/i.test(text)) {
-    return '本地部署未配置 RDK Studio 桥，路径 B 暂不可用：请用路径 A 表单直接配对。';
+    return '暂时无法生成配对脚本。可使用板卡地址添加设备。';
   }
   return `${text || '未知错误'}（可重试一次；仍失败请查看服务端日志定位。）`;
 }
@@ -11558,6 +11553,13 @@ function showPairingHint(text) {
 function wireDeviceManagerEvents() {
   if (state.station.deviceManagerWired) return;
   state.station.deviceManagerWired = true;
+  $('station-device-refresh')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    setText('station-device-manager-note', '正在刷新设备列表…');
+    try { await stationDeviceManagerLoad(); }
+    finally { button.disabled = false; }
+  });
   $('station-device-add-btn')?.addEventListener('click', async () => {
     const host = String($('station-device-host')?.value || '').trim();
     const username = String($('station-device-user')?.value || 'root').trim();
@@ -11565,14 +11567,10 @@ function wireDeviceManagerEvents() {
     const port = Number($('station-device-port')?.value || 22);
     const label = String($('station-device-label')?.value || '').trim();
     const profile = String($('station-device-profile')?.value || 'custom');
-    const transport = String($('station-device-transport')?.value || 'ssh');
-    if (transport === 'bridge') {
-      showPairingHint('Local Bridge 不通过此表单建档；请在下方已配对设备列表中点击“连接”。');
-      stationLog('当前选择 Local Bridge，请从已配对设备列表连接。', 'normal');
-      return;
-    }
+    const transport = 'ssh';
     if (!host) {
-      stationLog('请填写板卡 IP 或主机名（不带 http://）', 'error');
+      showPairingHint('请填写板卡 IP 或主机名。');
+      $('station-device-host')?.focus();
       return;
     }
     try {
@@ -11581,13 +11579,13 @@ function wireDeviceManagerEvents() {
         body: JSON.stringify({ host, username, port, label, profile, transport }),
       });
       stationLog(`已添加 SSH 备用设备 ${created?.connection?.label || host}，仅在服务器可达板卡时使用`, 'ok');
-      showPairingHint('路径 A 完成：设备已建档。下一步：点设备卡片上的「连接」建立受控隧道并做能力检查。');
+      showPairingHint('设备已添加。请在设备列表点击「连接」，验证板卡是否可达。');
       try { localStorage.setItem(`rdk-device-profile:${created?.connection?.id || host}`, JSON.stringify({ profile, transport })); } catch {}
       $('station-device-host').value = '';
       await stationDeviceManagerLoad();
     } catch (error) {
       const hint = devicePairingHint(error instanceof Error ? error.message : '未知错误');
-      showPairingHint(`路径 A 配对失败：${hint}`);
+      showPairingHint(`添加设备失败。${hint}`);
       stationLog(`添加失败：${hint}`, 'error');
     }
   });
@@ -11596,7 +11594,11 @@ function wireDeviceManagerEvents() {
     const user = String($('station-device-user')?.value || 'root').trim() || 'root';
     const password = String($('station-device-password')?.value || '');
     const port = Number($('station-device-port')?.value || 22);
-    if (!host) { showToast('请先填写板卡 IP 或主机名。', 'error'); return; }
+    if (!host) {
+      showPairingHint('生成脚本前请填写板卡 IP 或主机名。');
+      $('station-device-host')?.focus();
+      return;
+    }
     let script = '';
     try {
       // The Studio host exposes the shared Local Bridge protocol under its
@@ -11606,7 +11608,7 @@ function wireDeviceManagerEvents() {
       script = pairing.oneliner || pairing.command;
     } catch (error) {
       const raw = error instanceof Error ? error.message : '无法生成连接命令，请先登录。';
-      showPairingHint(`路径 B 生成失败：${devicePairingHint(raw)}`);
+      showPairingHint(`生成配对脚本失败。 ${devicePairingHint(raw)}`);
       showToast(raw, 'error');
       return;
     }
@@ -11614,7 +11616,7 @@ function wireDeviceManagerEvents() {
     const text = $('station-connect-script-text');
     if (text) text.value = script;
     output?.removeAttribute('hidden');
-    showPairingHint('路径 B：脚本已含平台地址与一次性配对凭据——在板卡终端粘贴运行即可，设备会自动出现在下方列表（无需再填 SSH）。');
+    showPairingHint('脚本已生成。在板卡终端运行脚本后，设备会出现在列表中。');
     try { await navigator.clipboard?.writeText(script); showToast('连接脚本已生成并复制。', 'success'); } catch { showToast('连接脚本已生成，请手动复制。', 'normal'); }
   });
   $('station-connect-script-copy')?.addEventListener('click', async () => {
@@ -11858,7 +11860,6 @@ function stationTeardown() {
 }
 
 function wireStationEvents() {
-  $('station-device-transport')?.addEventListener('change', syncStationDeviceForm);
   syncStationDeviceForm();
   document.querySelectorAll('[data-station-command]').forEach((button) => {
     button.addEventListener('click', () => stationRunCommand(button.dataset.stationCommand));
@@ -12355,6 +12356,20 @@ function wireEvents() {
   });
   $('evaluation-empty-import')?.addEventListener('click', () => {
     $('telemetry-file-input')?.click();
+  });
+  $('evaluation-empty-demo')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try { await loadDemoTelemetry(); }
+    finally { button.disabled = false; }
+  });
+  $('evaluation-empty-run')?.addEventListener('click', () => {
+    if (!runsForCurrentModel().length) {
+      showTrainStep(selectedModel() ? 'configure' : 'prepare');
+      return;
+    }
+    setView('records');
+    setRecordsTab('run');
   });
   $('run-progress-detail')?.addEventListener('click', () => {
     const run = runsForCurrentModel().find((item) => item.id === $('run-progress-card')?.dataset.runId);
