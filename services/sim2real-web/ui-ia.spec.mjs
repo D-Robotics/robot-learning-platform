@@ -481,6 +481,14 @@ assert.doesNotMatch(
   'the overview duplicate command bar (context/quick-actions/agent card) must stay removed',
 );
 assert.match(html, /id="run-detail-dialog"/, 'runs must have a detail surface');
+assert.match(
+  html,
+  /id="records-recent" hidden[\s\S]*?id="records-recent-open"[\s\S]*?id="history-list"/,
+);
+assert.match(
+  app,
+  /runResultSection\('run-result-evaluation'[\s\S]*?runResultSection\('run-result-replay'[\s\S]*?runResultSection\('run-result-artifact'/,
+);
 assert.match(html, /id="sim-action-list"/, 'simulation must show the manifest action library');
 assert.equal(
   (html.match(/data-record-tab="(?:all|run|deploy|artifact|telemetry)"/g) || []).length,
@@ -733,7 +741,7 @@ assert.match(
 );
 assert.match(
   app,
-  /function renderRunMetricCards\(record\)/,
+  /function renderRunMetricCards\(metrics, definitions = RUN_METRIC_CARDS\)/,
   'run detail must render readable metric cards',
 );
 assert.match(
