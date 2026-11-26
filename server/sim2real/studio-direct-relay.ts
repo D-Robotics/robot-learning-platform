@@ -20,6 +20,7 @@
 import type { Request, Response } from 'express';
 
 import { studioCookieAuthConfigured } from './studio-cookie-auth.js';
+import { STUDIO_PLUGIN_AUTHORIZE_PATH } from './studio-plugin-auth.js';
 
 const RELAY_TIMEOUT_MS = 30_000;
 const RELAY_MIN_INTERVAL_MS = 1_500;
@@ -121,11 +122,13 @@ function workshopContinuation(value: unknown): string | undefined {
     : undefined;
 }
 
-function experimentContinuation(value: unknown, basePath: string): string | undefined {
+function loginContinuation(value: unknown, basePath: string): string | undefined {
   if (typeof value !== 'string' || !value.startsWith(`${basePath}/`)) return undefined;
-  const match = /^\/experiment\.html\?context=[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.exec(
-    value.slice(basePath.length),
-  );
+  const local = value.slice(basePath.length);
+  const authPrefix = STUDIO_PLUGIN_AUTHORIZE_PATH + '?id=';
+  if (local.startsWith(authPrefix) && /^[a-f0-9]{32}$/.test(local.slice(authPrefix.length)))
+    return value;
+  const match = /^\/experiment\.html\?context=[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.exec(local);
   return match ? `${basePath}${match[0]}` : undefined;
 }
 
@@ -280,7 +283,7 @@ export function createStudioDirectRelay(deps: StudioDirectRelayDeps = {}) {
     /** 表单形态（无 JS 的 HTML 登录页）：成功/失败一律重定向。 */
     async handleForm(request: Request, response: Response): Promise<void> {
       const workshop = workshopContinuation(request.body?.workshop);
-      const returnTo = experimentContinuation(request.body?.returnTo, basePath);
+      const returnTo = loginContinuation(request.body?.returnTo, basePath);
       if (!studioDirectRelayAvailable()) {
         response.redirect(302, loginRedirect('unavailable', workshop, returnTo));
         return;
@@ -320,7 +323,7 @@ export function renderStudioDirectLoginPage(
 ): string {
   const workshop = workshopContinuation(workshopInput);
   const base = normalizeRelayBasePath(basePath);
-  const returnTo = experimentContinuation(returnToInput, base);
+  const returnTo = loginContinuation(returnToInput, base);
   const messages: Record<string, string> = {
     missing: '请输入账号与密码。',
     invalid: '账号或密码不正确。',

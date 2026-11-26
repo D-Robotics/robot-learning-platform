@@ -27,7 +27,7 @@ export const WORKSHOP_TOOLS = [
       },
       additionalProperties: false,
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
 ];
 const noSubmission = () => ({ training: false, evaluation: false });
@@ -79,6 +79,21 @@ export function workshopPreview(base, stage = 'preview', resource) {
       : `[打开 ${label}](${href})。${firstStep}`,
     ...workshopPageNavigation(href),
   };
+}
+
+function workshopWorkerIssue(resource) {
+  if (resource.source === 'local-agent' || resource.mock === true)
+    return '指定算力无法用于平台参考舞蹈训练。';
+  if (resource.status === 'offline') return '指定算力当前离线。';
+  if (
+    resource.status !== 'online' ||
+    resource.mock !== false ||
+    !Array.isArray(resource.engines) ||
+    !resource.engines.length
+  )
+    return '指定算力尚未通过连接和课程能力检查。';
+  if (!resource.engines.includes('originman-reference-ppo'))
+    return '指定算力未提供参考舞蹈训练引擎。';
 }
 
 export async function workshopEntry(
@@ -172,8 +187,6 @@ export async function workshopEntry(
     const value = await call('rdk_compute_resources_list', {});
     const resource = value.computeResources?.find((item) => item.id === args.computeResourceId);
     if (!resource) throw Error('当前账号看不到指定算力机，请重新选择。');
-    if (resource.mock === true || resource.source === 'local-agent')
-      throw Error('舞蹈训练需要平台可访问的真实 Worker，请选择其他算力机。');
     const current = await call('rdk_platform_status', {});
     if (
       !signedIn(current) ||
@@ -181,12 +194,19 @@ export async function workshopEntry(
       current.session.accountId !== accountId
     )
       throw Error('账号或平台已变化，请重新选择算力机。');
+    const issue = workshopWorkerIssue(resource);
+    if (issue) {
+      const preview = workshopPreview(base.toString(), 'choose-compute');
+      return {
+        ...preview,
+        studentReply: `${issue}请在[舞蹈工作台](${preview.entryUrl})选择在线的课堂共享 GPU，或在「执行资源」检查自建算力。`,
+      };
+    }
     return workshopPreview(base.toString(), 'choose-compute', resource);
   }
-  const list = await remote('list', {}, accountId);
   const session = args.contextId
-    ? (await remote('select', { contextId: args.contextId }, accountId)).session
-    : list.current;
+    ? (await remote('read', { contextId: args.contextId }, accountId)).session
+    : (await remote('list', {}, accountId)).current;
   const stage = session?.stage ?? 'choose';
   const result = stage === 'results' ? await readResult?.(session.contextId) : undefined;
   signal?.throwIfAborted();

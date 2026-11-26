@@ -101,7 +101,7 @@ try {
         state.authStarts++;
         return json({
           ...login,
-          verificationUrl: origin + '/api/sso/plugin/authorize?id=' + login.id,
+          verificationUrl: origin + '/robotics-learning/api/sso/plugin/authorize?id=' + login.id,
           userCode: login.id.slice(0, 8).toUpperCase(),
           expiresAt: Date.now() + 300000,
         });
@@ -118,8 +118,10 @@ try {
             })
           : json({ status: 'pending' }, 202);
       }
-      if (route === '/api/sso/me')
-        return json({ user: req.headers.cookie === cookie ? { id: 'classroom-fixture' } : null });
+      if (route === '/api/sso/session')
+        return req.headers.cookie === cookie
+          ? json({ ok: true, identity: { accountId: 'classroom-fixture' } })
+          : json({ ok: false, error: 'SIM2REAL_AUTH_REQUIRED' }, 401);
       if (route === '/healthz') return json({ ready: true, degraded: [] });
       if (req.headers.cookie !== cookie) return json({ error: 'LOGIN_REQUIRED' }, 401);
       if (route === '/api/v1/duck/auth/session')

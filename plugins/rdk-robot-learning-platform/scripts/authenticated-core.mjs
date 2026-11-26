@@ -209,6 +209,7 @@ export async function connectAuthenticatedCore({
           : '平台未能完成这项工作区查询。',
         {
           httpStatus: response.ok ? 502 : response.status,
+          retryable: value?.retryable === true,
           ...(typeof value?.nextAction === 'string' && {
             nextAction: value.nextAction.slice(0, 500),
           }),
@@ -222,6 +223,150 @@ export async function connectAuthenticatedCore({
     structuredContent: value,
     content: [{ type: 'text', text: JSON.stringify(value) }],
   });
+  async function trainingPreflight(args, signal) {
+    const id = typeof args.computeResourceId === 'string' ? args.computeResourceId.trim() : '';
+    if (!id || id.length > 160) {
+      throw new PluginRequestError('DSH_CAPABILITY_REJECTED', '请选择有效的训练算力 ID。', {
+        httpStatus: 400,
+        nextAction: '从当前账号的算力列表选择资源后重试预检。',
+      });
+    }
+    const input = {};
+    for (const field of ['taskId', 'engine', 'device']) {
+      if (args[field] === undefined) continue;
+      if (typeof args[field] !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(args[field])) {
+        throw new PluginRequestError(
+          'DSH_CAPABILITY_REJECTED',
+          '训练预检的任务、引擎或设备标识无效。',
+          {
+            httpStatus: 400,
+          },
+        );
+      }
+      input[field] = args[field];
+    }
+    const accountId = await verifiedWorkspaceAccount();
+    try {
+      return await readWorkspaceJson(
+        '/compute-resources/' + encodeURIComponent(id) + '/preflight',
+        signal,
+        accountId,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(input),
+        },
+      );
+    } catch (error) {
+      if (
+        error.httpStatus === 404 &&
+        ['SIM2REAL_API_NOT_FOUND', 'WORKSPACE_READ_FAILED'].includes(error.code)
+      ) {
+        throw new PluginRequestError(
+          'PLATFORM_FEATURE_UNAVAILABLE',
+          '当前平台未提供算力环境预检。',
+          {
+            httpStatus: 501,
+            nextAction: '可检查所选 Worker 的连接。请维护者更新平台后再核验任务环境。',
+          },
+        );
+      }
+      throw error;
+    }
+  }
+  async function readRunLogs(args, signal) {
+    const { runId, after = 0 } = args;
+    if (
+      typeof runId !== 'string' ||
+      !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(runId) ||
+      !Number.isSafeInteger(after) ||
+      after < 0
+    ) {
+      throw new PluginRequestError(
+        'DSH_CAPABILITY_REJECTED',
+        '请提供完整 Run ID 和有效的日志游标。',
+        {
+          httpStatus: 400,
+        },
+      );
+    }
+    const accountId = await verifiedWorkspaceAccount();
+    const body = await readWorkspaceJson(
+      '/runs/' + encodeURIComponent(runId) + '/logs?after=' + after,
+      signal,
+      accountId,
+      { method: 'GET' },
+    );
+    if (
+      body.runId !== runId ||
+      typeof body.status !== 'string' ||
+      !Array.isArray(body.lines) ||
+      body.lines.length > 600 ||
+      !Number.isSafeInteger(body.total) ||
+      body.total < 0 ||
+      !Number.isSafeInteger(body.retainedFrom) ||
+      body.retainedFrom < 0
+    ) {
+      throw new PluginRequestError(
+        'RUN_LOG_RESPONSE_INVALID',
+        '平台未返回本次 Run 的有效日志回执。',
+        {
+          httpStatus: 502,
+        },
+      );
+    }
+    let nextAfter = after;
+    const lines = body.lines.slice(0, 200).map((line) => {
+      if (
+        !Number.isSafeInteger(line?.n) ||
+        line.n <= nextAfter ||
+        line.n > body.total ||
+        !['stdout', 'stderr'].includes(line.stream) ||
+        typeof line.text !== 'string' ||
+        line.text.length > 2_000
+      ) {
+        throw new PluginRequestError('RUN_LOG_RESPONSE_INVALID', '平台返回的日志游标或格式无效。', {
+          httpStatus: 502,
+        });
+      }
+      nextAfter = line.n;
+      return { n: line.n, stream: line.stream, text: line.text };
+    });
+    const d = body.diagnostic;
+    const diagnostic =
+      body.logAvailability === 'not-started' &&
+      body.trainingStarted === false &&
+      typeof d?.code === 'string' &&
+      d.code.length <= 80 &&
+      typeof d.message === 'string' &&
+      d.message.length <= 500 &&
+      typeof d.nextAction === 'string' &&
+      d.nextAction.length <= 500 &&
+      typeof d.outcomeUnknown === 'boolean'
+        ? {
+            code: d.code,
+            message: d.message,
+            nextAction: d.nextAction,
+            outcomeUnknown: d.outcomeUnknown,
+          }
+        : null;
+    return {
+      runId,
+      status: body.status,
+      total: body.total,
+      retainedFrom: body.retainedFrom,
+      truncated: body.truncated === true,
+      lines,
+      nextAfter,
+      hasMore: lines.length > 0 && nextAfter < body.total,
+      ...(body.source === 'retained-tail' && {
+        source: body.source,
+        ...(typeof body.stdoutTail === 'string' && { stdoutTail: body.stdoutTail.slice(-2000) }),
+        ...(typeof body.stderrTail === 'string' && { stderrTail: body.stderrTail.slice(-2000) }),
+      }),
+      ...(diagnostic && { logAvailability: 'not-started', trainingStarted: false, diagnostic }),
+    };
+  }
   async function connectBoard(connectionId, signal) {
     if (typeof connectionId !== 'string' || !/^[A-Za-z0-9._:-]{1,160}$/.test(connectionId))
       throw new PluginRequestError(
@@ -1320,6 +1465,19 @@ export async function connectAuthenticatedCore({
     async request(method, params, options) {
       if (
         method === 'tools/call' &&
+        ['rdk_training_preflight', 'rdk_run_logs'].includes(params.name)
+      ) {
+        try {
+          const handler =
+            params.name === 'rdk_training_preflight' ? trainingPreflight : readRunLogs;
+          return apiResult(await handler(params.arguments ?? {}, options?.signal));
+        } catch (error) {
+          options?.signal?.throwIfAborted();
+          return apiResult(publicFailure(error), true);
+        }
+      }
+      if (
+        method === 'tools/call' &&
         recordingTools.has(params.name) &&
         (await supportsRecordings(options?.signal)) === false
       )
@@ -1381,94 +1539,6 @@ export async function connectAuthenticatedCore({
                 : tool,
             ),
         };
-      }
-      // Older retained cores omit the platform's structured pre-engine diagnostic.
-      // Enrich only failed empty logs through the same owner-authorized read API.
-      if (method === 'tools/call' && params.name === 'rdk_run_logs' && !result.isError) {
-        let value = result.structuredContent;
-        if (!value) {
-          try {
-            value = JSON.parse(result.content?.find((c) => c.type === 'text')?.text);
-          } catch {}
-        }
-        if (
-          ['failed', 'completed'].includes(value?.status) &&
-          Array.isArray(value.lines) &&
-          value.lines.length === 0 &&
-          !value.diagnostic
-        ) {
-          const id = params.arguments?.runId;
-          if (typeof id === 'string' && id.length > 0 && id.length <= 160) {
-            const response = await fetchPlatform(
-              '/api/v1/duck/runs/' + encodeURIComponent(id) + '/logs',
-              { method: 'GET', headers: { accept: 'application/json' }, signal: options?.signal },
-            );
-            if (!response.ok)
-              throw new PluginRequestError(
-                'RUN_DIAGNOSTIC_UNAVAILABLE',
-                '当前账号无法读取该Run的启动诊断；保留原Run，不重交。',
-                { httpStatus: response.status },
-              );
-            const chunks = [];
-            let size = 0;
-            if (response.body)
-              for await (const chunk of response.body) {
-                size += chunk.byteLength;
-                if (size > 65536)
-                  throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '启动诊断超出读取预算。');
-                chunks.push(Buffer.from(chunk));
-              }
-            let body;
-            try {
-              body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            } catch {
-              throw new PluginRequestError('RUN_DIAGNOSTIC_INVALID', '平台未返回有效启动诊断。');
-            }
-            if (body.runId === id && body.source === 'retained-tail') {
-              return apiResult({
-                ...value,
-                source: body.source,
-                ...(typeof body.stdoutTail === 'string' && {
-                  stdoutTail: body.stdoutTail.slice(-2000),
-                }),
-                ...(typeof body.stderrTail === 'string' && {
-                  stderrTail: body.stderrTail.slice(-2000),
-                }),
-              });
-            }
-            const d = body.diagnostic;
-            if (
-              body.runId === id &&
-              body.logAvailability === 'not-started' &&
-              body.trainingStarted === false &&
-              d &&
-              typeof d.code === 'string' &&
-              d.code.length <= 80 &&
-              typeof d.message === 'string' &&
-              d.message.length <= 500 &&
-              typeof d.nextAction === 'string' &&
-              d.nextAction.length <= 500 &&
-              typeof d.outcomeUnknown === 'boolean'
-            ) {
-              value = {
-                ...value,
-                logAvailability: 'not-started',
-                trainingStarted: false,
-                diagnostic: {
-                  code: d.code,
-                  message: d.message,
-                  nextAction: d.nextAction,
-                  outcomeUnknown: d.outcomeUnknown,
-                },
-              };
-              return {
-                ...result,
-                structuredContent: value,
-                content: [{ type: 'text', text: JSON.stringify(value) }],
-              };
-            }
-          }
-        }
       }
       if (method === 'tools/call' && params.name === 'rdk_platform_status') {
         let value = result.structuredContent;

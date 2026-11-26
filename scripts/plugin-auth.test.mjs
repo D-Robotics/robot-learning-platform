@@ -29,7 +29,7 @@ function fixture(t) {
         ok: true,
         id,
         secret,
-        verificationUrl: origin + '/api/sso/plugin/authorize?id=' + id,
+        verificationUrl: base + '/api/sso/plugin/authorize?id=' + id,
         userCode: 'AAAAAAAA',
         expiresAt: clock + 300000,
       };
@@ -45,9 +45,10 @@ function fixture(t) {
               'rdk_sso_web_session=private-cookie' + (account === 'alice' ? '' : '-' + account),
           }
         : { ok: true, status: 'pending' };
-    } else if (p === '/api/sso/me') {
+    } else if (p === '/robotics-learning/api/sso/session') {
       const suffix = init.headers.cookie === 'rdk_sso_web_session=private-cookie-bob';
-      value = { user: revoked ? null : { id: suffix ? 'bob' : 'alice' } };
+      status = revoked ? 401 : 200;
+      value = { ok: !revoked, identity: { accountId: suffix ? 'bob' : 'alice' } };
     } else if (p.endsWith('/session')) {
       const body = JSON.parse(init.body);
       status = revoked ? 401 : 200;
@@ -182,7 +183,7 @@ test('browser parent logout/expiry is checked against SSO before every use', asy
   assert.equal((await a.status()).authenticated, true);
   f.revoke();
   assert.equal((await a.status()).authenticated, false);
-  assert.ok(f.seen.some((x) => x.url === origin + '/api/sso/me'));
+  assert.ok(f.seen.some((x) => x.url === base + '/api/sso/session'));
 });
 
 test('authenticated proxy preserves idempotency and locale without forwarding host credentials', async () => {
@@ -457,7 +458,7 @@ test('pending browser authorization survives actual Node process exit, approval,
     });
     const value = await response.json();
     if (req.url.endsWith('/start'))
-      value.verificationUrl = url + '/api/sso/plugin/authorize?id=' + value.id;
+      value.verificationUrl = url + '/robotics-learning/api/sso/plugin/authorize?id=' + value.id;
     res.writeHead(response.status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(value));
   });
@@ -512,7 +513,7 @@ test('unrecognized or mismatched identity receipts preserve authorization and do
     env: { RDK_SIM2REAL_MCP_BASE_URL: base },
     cacheDirectory: f.dir,
     fetchImpl: async (...args) =>
-      String(args[0]).endsWith('/api/sso/me') && me !== undefined
+      String(args[0]) === base + '/api/sso/session' && me !== undefined
         ? new Response(JSON.stringify(me), { status: 200 })
         : f.fetchImpl(...args),
     now: f.now,
@@ -522,7 +523,7 @@ test('unrecognized or mismatched identity receipts preserve authorization and do
   await a.call('rdk_auth_login', { openBrowser: false });
   f.approve();
   assert.equal((await a.status()).authenticated, true);
-  for (const value of [{ ok: true }, { user: { id: 'someone-else' } }]) {
+  for (const value of [{ ok: true }, { ok: true, identity: { accountId: 'someone-else' } }]) {
     me = value;
     const status = await a.status();
     assert.equal(status.authenticated, null);

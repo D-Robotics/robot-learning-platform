@@ -6,7 +6,7 @@
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css?v=reference-replay-2" />
-    <script type="module" src="./run-detail-page.mjs?v=11"></script>
+    <script type="module" src="./run-detail-page.mjs?v=13"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -42,6 +42,13 @@
             <h2 id="run-overview-heading">本轮运行</h2>
             <span id="run-id-label">等待 Run ID</span>
           </div>
+          <section id="run-queue-panel" aria-labelledby="run-queue-heading" hidden>
+            <h3 id="run-queue-heading">排队进度</h3>
+            <p id="run-queue-status" role="status"></p>
+            <button id="run-queue-check-workers" type="button">查看其他算力</button>
+            <p id="run-queue-worker-status" role="status" hidden></p>
+            <a id="run-queue-alternative" hidden></a>
+          </section>
           <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
           <p id="run-hardware-readiness" hidden></p>
           <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
@@ -79,6 +86,8 @@
             <span id="replay-segment-status" role="status" aria-live="polite"></span>
           </div>
           <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
+          <button id="reference-replay-retry" type="button" hidden>重新生成原回放</button>
+          <p id="reference-replay-feedback" role="status" aria-live="polite" hidden></p>
         </section>
 
         <section aria-labelledby="curve-heading">

@@ -1,5 +1,8 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=9';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=12';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
+import {
+  anotherWorkshopWorker, freshWorkshopWorkerLoad, workshopWorkerReady,
+} from './originman-worker-capacity.mjs';
 import {
   composeOriginmanReference, MAX_REFERENCE_CLIPS,
 } from './originman-reference-compose.mjs?v=2';
@@ -7,6 +10,8 @@ import {
 const byId = (id) => document.getElementById(id);
 const worker = byId('reference-worker');
 const envs = byId('reference-envs');
+const steps = byId('reference-steps');
+const budgetHint = byId('reference-budget-hint');
 const status = byId('reference-status');
 const error = byId('reference-error');
 const trainingError = byId('reference-training-error');
@@ -18,9 +23,11 @@ const exportButton = byId('reference-export');
 const checkWorker = byId('reference-worker-check');
 const refreshWorkers = byId('reference-worker-refresh');
 const workerHint = byId('reference-worker-hint');
+const workerSuggestion = byId('reference-worker-suggestion');
 const screenCurrent = byId('reference-screen-current');
 const screenFiles = byId('reference-screen-files');
 const screenCancel = byId('reference-screen-cancel');
+const screenDetails = byId('reference-screen-details');
 const screenStatus = byId('reference-screen-status');
 const screenResults = byId('reference-screen-results');
 const exampleButton = byId('reference-example');
@@ -33,12 +40,51 @@ let trajectory;
 let trajectoryDigest;
 const screenings = new Map();
 let displayedScreenKey;
-let attempt;
+const pendingSubmissions = new Map();
+let draftScope;
+
+function submissionId(key) {
+  const existing = pendingSubmissions.get(key);
+  if (existing) return existing;
+  const id = crypto.randomUUID();
+  pendingSubmissions.set(key, id);
+  savePendingSubmissions();
+  return id;
+}
+
+function submissionStorage() {
+  const window = document.defaultView;
+  if (draftScope && window) return window.sessionStorage;
+}
+
+function savePendingSubmissions() {
+  try {
+    submissionStorage()?.setItem(
+      'rdk-originman-reference-submissions-v1:' + draftScope,
+      JSON.stringify([...pendingSubmissions].slice(-30)),
+    );
+  } catch {
+    // Storage can be unavailable in a private or restricted browser session.
+  }
+}
+
+function restorePendingSubmissions() {
+  try {
+    const items = JSON.parse(submissionStorage()?.getItem(
+      'rdk-originman-reference-submissions-v1:' + draftScope,
+    ) ?? '[]');
+    for (const [key, id] of items)
+      if (typeof key === 'string' && /^[a-f0-9-]{36}$/.test(id)) pendingSubmissions.set(key, id);
+  } catch {
+    // The in-memory request key still protects ordinary retries.
+  }
+}
 let preparing = false;
 let checking = false;
 let submitting = false;
 let screening;
 let resources = [];
+let requestedWorkerUnavailable = false;
 
 async function api(path, body, idempotencyKey, signal) {
   const response = await fetch(new URL('./api/v1/duck/' + path, location.href), {
@@ -55,7 +101,10 @@ async function api(path, body, idempotencyKey, signal) {
   if (!response.ok || !value?.ok) {
     if (response.status === 401) throw Error('请先登录机器人学习平台，再刷新此页。');
     if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
-    throw Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。');
+    throw Object.assign(
+      Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。'),
+      { code: value?.code ?? value?.error?.code, retryable: value?.retryable, screening: value?.screening },
+    );
   }
   return value;
 }
@@ -67,7 +116,7 @@ function showError(target, message = '') {
 
 const query = new URLSearchParams(location.search);
 const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
-if (query.get('budget') === 'formal') byId('reference-steps').value = '503808';
+if (query.get('budget') === 'formal') steps.value = '503808';
 byId('reference-mode').addEventListener('change', (event) => {
   const url = new URL(location.href);
   if (motion.isUpload()) url.searchParams.delete('mode');
@@ -89,27 +138,36 @@ function currentScreenKey() {
   return screeningKey(worker.value, selected?.expectedTrajectorySha256, selected?.expectedStanceProfile);
 }
 
+function showBudgetHint() {
+  const frames = motion.isUpload() ? trajectory?.joint_pos.length : motion.previewFrames();
+  budgetHint.hidden = !frames;
+  if (!frames) {
+    budgetHint.textContent = '';
+    return;
+  }
+  const stepsPerEnv = Number(steps.value) / Number(envs.value);
+  const repeats = Math.floor(stepsPerEnv / frames);
+  const estimate = repeats
+    ? `按每个并行环境折算，步数约够 ${repeats.toLocaleString('zh-CN')} 支完整轨迹。`
+    : '按每个并行环境折算，步数不足一支完整轨迹。增加预算或减少并行环境可延长每个环境的训练。';
+  budgetHint.textContent = estimate + '每次评测从第一帧开始，尝试跑完整支。';
+}
+
 function refresh() {
   const editing = submitting || preparing || Boolean(screening);
-  const uploaded = motion.isUpload();
   const ready = Boolean(currentReference());
   const key = currentScreenKey();
   const passed = screenings.get(key);
   const failed = passed === false;
-  const needsScreen = !uploaded && ready && passed !== true;
-  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed || needsScreen;
-  submit.textContent = submitting ? '正在提交…' : '开始仿真训练';
+  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed;
+  submit.textContent = submitting ? '正在校验并提交…' : '开始仿真训练';
   if (!screening && displayedScreenKey !== key) {
     screenResults.replaceChildren();
     screenStatus.textContent = passed === true ? '当前轨迹已在所选 Worker 通过筛查。'
       : failed ? '当前轨迹曾未通过筛查，请调整后复查。' : '';
     displayedScreenKey = key;
   }
-  const blocker = byId('reference-screen-blocker');
-  blocker.hidden = !failed && !(needsScreen && selectedWorkerReady());
-  blocker.textContent = failed
-    ? '当前轨迹未通过所选 Worker 的筛查。请调整轨迹或重新筛查后再提交。'
-    : '预置和自由编排需在所选 Worker 通过筛查后才能提交。';
+  byId('reference-screen-blocker').hidden = !failed;
   motion.setLocked(editing || checking);
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
@@ -120,11 +178,13 @@ function refresh() {
   worker.disabled = submitting || checking || Boolean(screening);
   checkWorker.disabled = worker.disabled || !worker.value;
   refreshWorkers.disabled = worker.disabled;
+  showWorkerSuggestion();
   screenCurrent.disabled = editing || checking || !ready || !selectedWorkerReady();
   screenFiles.disabled = editing || checking || !calibration || !selectedWorkerReady();
   screenCancel.hidden = !screening;
   envs.disabled = submitting;
-  byId('reference-steps').disabled = submitting;
+  steps.disabled = submitting;
+  showBudgetHint();
 }
 
 function selectedWorkerReady() {
@@ -133,38 +193,57 @@ function selectedWorkerReady() {
 
 function showWorkerHint() {
   const selected = resources.find(({ id }) => id === worker.value);
-  if (!resources.length) {
+  const load = freshWorkshopWorkerLoad(selected);
+  if (requestedWorkerUnavailable) {
+    workerHint.textContent = '原先指定的算力当前无法用于参考舞蹈。请选择在线的课堂共享 GPU，或在「执行资源」检查原算力。';
+  } else if (!resources.length) {
     workerHint.textContent = '当前账号未找到支持本课程的算力。可在工作台的「执行资源」中核对。';
   } else if (!selected?.ready) {
-    workerHint.textContent = '选择算力并检查连接，确认支持参考轨迹训练。';
-  } else if (selected.activeJobs >= selected.maxConcurrentJobs && selected.maxConcurrentJobs > 0) {
-    workerHint.textContent = '所选算力的运行名额已满，提交后将在这张卡上排队。';
+    workerHint.textContent = '请选择在线的课堂共享 GPU，或检查自建算力是否支持参考舞蹈训练。';
+  } else if (load && load.activeJobs === load.maxConcurrentJobs) {
+    workerHint.textContent = '查询时所选算力的运行名额已满。提交后以 Worker 的当前队列为准。';
+  } else if (load?.queuedJobs > 0) {
+    workerHint.textContent = '所选算力最近已有任务排队，提交后以 Worker 的安排为准。';
+  } else if (!load) {
+    workerHint.textContent = '算力已连接。当前缺少实时负载，可刷新负载后再判断是否需要排队。';
   } else {
-    workerHint.textContent = '算力已连接，可以筛查当前轨迹。负载为最近一次查询的快照。';
+    workerHint.textContent = '所选算力最近有空位。提交时仍会核对当前负载和账号名额。';
   }
 }
 
-async function loadWorkers(selection) {
+function workerAlternative() {
+  const load = freshWorkshopWorkerLoad(resources.find(({ id }) => id === worker.value));
+  return !load || load.activeJobs === load.maxConcurrentJobs || load.queuedJobs > 0
+    ? anotherWorkshopWorker(resources, worker.value)
+    : undefined;
+}
+
+function showWorkerSuggestion() {
+  const alternative = workerAlternative();
+  byId('reference-worker-suggestion-panel').hidden = worker.disabled || !alternative;
+  workerSuggestion.textContent = alternative ? '选择 ' + alternative.name + '（最近有空位）' : '';
+}
+
+async function loadWorkers(selection, { fromLink = false } = {}) {
   const { computeResources } = await api('compute-resources');
+  const previous = worker.value;
   resources = computeResources
     .filter(({ source, mock, engines }) => source !== 'local-agent' && mock !== true &&
       (!engines?.length || engines.includes('originman-reference-ppo')))
-    .map(({ id, name, status, mock, cuda, engines, activeJobs, maxConcurrentJobs, queuedJobs }) => ({
-      id, name, cuda, activeJobs, maxConcurrentJobs, queuedJobs,
-      ready: status === 'online' && mock === false && engines?.includes('originman-reference-ppo'),
-    }));
+    .map((resource) => ({ ...resource, ready: workshopWorkerReady(resource) }));
   worker.replaceChildren(new Option('请选择', ''));
   for (const value of resources) {
-    const measured = value.ready && Number.isInteger(value.activeJobs) && value.maxConcurrentJobs > 0;
-    const state = measured ? `运行 ${value.activeJobs}/${value.maxConcurrentJobs}` : value.ready ? '可用' : '待检查';
-    const queue = value.ready && Number.isInteger(value.queuedJobs) ? ` · 排队 ${value.queuedJobs}` : '';
+    const load = freshWorkshopWorkerLoad(value);
+    const state = load ? `运行 ${load.activeJobs}/${load.maxConcurrentJobs}` : value.ready ? '负载待刷新' : '待检查';
+    const queue = load ? ` · 排队 ${load.queuedJobs}` : '';
     const option = new Option(`${value.name} · ${state}${queue}`, value.id);
     option.dataset.cuda = String(value.cuda === true);
     worker.append(option);
   }
-  if (resources.some(({ id }) => id === selection)) worker.value = selection;
-  else if (resources.length === 1) worker.value = resources[0].id;
-  if (worker.value !== selection) worker.dispatchEvent(new Event('change'));
+  const canKeep = resources.some(({ id, ready }) => id === selection && (!fromLink || ready));
+  if (selection && !canKeep) requestedWorkerUnavailable = true;
+  worker.value = canKeep ? selection : '';
+  if (worker.value !== previous) worker.dispatchEvent(new Event('change'));
   else showWorkerHint();
 }
 
@@ -200,7 +279,6 @@ async function selectTrajectory(load, nextSpeed) {
     speed = nextSpeed;
     trajectory = value;
     trajectoryDigest = receipt.trajectorySha256 ?? receipt.referenceSha256;
-    attempt = undefined;
     const list = byId('reference-clips');
     list.replaceChildren(...clips.map(({ label }) => {
       const item = document.createElement('li');
@@ -220,10 +298,13 @@ async function selectTrajectory(load, nextSpeed) {
 }
 
 worker.addEventListener('change', () => {
+  if (worker.value) requestedWorkerUnavailable = false;
   envs.value = worker.selectedOptions[0]?.dataset.cuda === 'true' ? '64' : '1';
   showWorkerHint();
   refresh();
 });
+steps.addEventListener('change', showBudgetHint);
+envs.addEventListener('change', showBudgetHint);
 async function updateWorkers(testConnection) {
   if (checking || submitting || screening || (testConnection && !worker.value)) return;
   const selection = worker.value;
@@ -252,6 +333,17 @@ async function updateWorkers(testConnection) {
 }
 checkWorker.addEventListener('click', () => void updateWorkers(true));
 refreshWorkers.addEventListener('click', () => void updateWorkers(false));
+workerSuggestion.addEventListener('click', () => {
+  if (worker.disabled) return;
+  const alternative = workerAlternative();
+  if (!alternative) {
+    void updateWorkers(false);
+    return;
+  }
+  worker.value = alternative.id;
+  worker.dispatchEvent(new Event('change'));
+  worker.focus();
+});
 
 async function readClip(incoming) {
   if (incoming.size > 16 * 1024 * 1024) throw Error('参考文件大小不能超过 16 MiB。');
@@ -286,6 +378,36 @@ function downloadReference(value, name) {
 exampleDownload.addEventListener('click', () => downloadReference(example, 'originman-reference-example.json'));
 exportButton.addEventListener('click', () => downloadReference(trajectory, 'originman-reference-prepared.json'));
 
+function createScreenResult(label, result, digest) {
+  const row = document.createElement('li');
+  const location = result.failureLocation;
+  const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
+    : location?.fromBlockNumber
+      ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
+      : location?.betweenBlocks ? '，发生在两段过渡处' : '';
+  const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
+  const violation = result.limitViolation;
+  if (violation) {
+    row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
+  } else {
+    row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
+    const reasons = result.failure;
+    if (reasons?.nonFootContacts?.length) {
+      row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
+    }
+    if (reasons?.tilt) {
+      row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
+    }
+    if (reasons?.height) {
+      row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
+    }
+  }
+  const detail = document.createElement('small');
+  detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
+  row.append(detail);
+  return row;
+}
+
 async function screenBatch(entries) {
   if (screening || preparing || submitting || checking || !selectedWorkerReady()) return;
   if (entries.length > MAX_REFERENCE_CLIPS) {
@@ -317,31 +439,7 @@ async function screenBatch(entries) {
           throw Error('筛查站姿与当前预览不一致，请重新预览。');
         screenings.set(screeningKey(computeResourceId, digest, result.stanceProfile), result.passed);
         if (result.passed) passed++;
-        const location = result.failureLocation;
-        const block = location?.blockNumber ? `，第 ${location.blockNumber} 段（${location.motionId}）`
-          : location?.fromBlockNumber
-            ? `，第 ${location.fromBlockNumber} 段（${location.fromMotionId}）到第 ${location.toBlockNumber} 段（${location.toMotionId}）的过渡`
-            : location?.betweenBlocks ? '，发生在两段过渡处' : '';
-        const failure = result.firstFailedFrame == null ? '' : `，首个失败帧 ${result.firstFailedFrame}${block}`;
-        const violation = result.limitViolation;
-        if (violation) {
-          row.textContent = `${label} · 未通过${failure}。${violation.joint} 目标角 ${violation.targetRad.toFixed(3)} rad，允许 ${violation.minRad.toFixed(3)} 至 ${violation.maxRad.toFixed(3)} rad，共 ${violation.framesOutside} 帧超限。`;
-        } else {
-          row.textContent = `${label} · ${result.passed ? '通过' : '未通过'}，${result.framesEvaluated}/${result.framesExpected} 帧，峰值倾角 ${result.maxTiltDeg.toFixed(2)}°${failure}。`;
-          const reasons = result.failure;
-          if (reasons?.nonFootContacts?.length) {
-            row.textContent += `非足底碰撞体触地（${reasons.nonFootContacts.join('、')}）。`;
-          }
-          if (reasons?.tilt) {
-            row.textContent += `失败帧倾角 ${reasons.tilt.actualDeg.toFixed(2)}°，达到 ${reasons.tilt.limitDeg.toFixed(2)}° 上限。`;
-          }
-          if (reasons?.height) {
-            row.textContent += `机身高度 ${reasons.height.actualM.toFixed(3)} m，低于 ${reasons.height.limitM.toFixed(3)} m。`;
-          }
-        }
-        const detail = document.createElement('small');
-        detail.textContent = ` 训练轨迹 SHA-256 ${digest}`;
-        row.append(detail);
+        row.append(...createScreenResult(label, result, digest).childNodes);
       } catch (cause) {
         if (controller.signal.aborted) break;
         row.textContent = `${label} · ${cause.message}`;
@@ -378,16 +476,16 @@ byId('reference-form').addEventListener('submit', async (event) => {
   const reference = currentReference();
   const passed = screenings.get(currentScreenKey());
   if (submitting || checking || preparing || screening || !selectedWorkerReady() || !reference ||
-      passed === false || (!motion.isUpload() && passed !== true)) return;
+      passed === false) return;
   submitting = true;
   refresh();
   showError(trainingError);
   const computeResourceId = worker.value;
-  const trainingSteps = Number(byId('reference-steps').value);
+  const trainingSteps = Number(steps.value);
   const numEnvs = Number(envs.value);
   const key = JSON.stringify([computeResourceId, trainingSteps, numEnvs,
     reference.composition, reference.expectedTrajectorySha256 ?? trajectoryDigest, reference.expectedStanceProfile]);
-  if (!attempt || attempt.key !== key) attempt = { key, id: crypto.randomUUID() };
+  const id = submissionId(key);
   try {
     const { modelId } = await api('originman-reference/model', { computeResourceId });
     const result = await api('runs', {
@@ -398,30 +496,45 @@ byId('reference-form').addEventListener('submit', async (event) => {
         engine: 'originman-reference-ppo', video: true, maxIterations: trainingSteps / 4096, numEnvs,
         originmanReference: { ...reference, trainingSteps, seed: 7 },
       },
-    }, attempt.id);
+    }, id);
     const runId = result.run?.id;
     if (!/^[\w.-]{1,120}$/.test(runId ?? '')) throw Error('平台未返回 Run ID。请保留本页再试。');
+    pendingSubmissions.delete(key);
+    savePendingSubmissions();
     const url = new URL('./originman-reference-run.html', location.href);
     url.searchParams.set('runId', runId);
     location.assign(url.href);
   } catch (cause) {
-    showError(trainingError, cause.message);
+    const diagnosis = cause.screening;
+    const digest = reference.expectedTrajectorySha256 ?? trajectoryDigest;
+    if (diagnosis?.passed === false && diagnosis.trajectorySha256 === digest &&
+        diagnosis.stanceProfile === reference.expectedStanceProfile) {
+      const screenKey = currentScreenKey();
+      screenings.set(screenKey, false);
+      displayedScreenKey = screenKey;
+      screenResults.replaceChildren(createScreenResult('当前轨迹', diagnosis, digest));
+      screenStatus.textContent = '本次提交的筛查结果';
+      screenDetails.open = true;
+    }
+    showError(trainingError, cause instanceof TypeError
+      ? '连接中断，暂未确认是否提交成功。用当前配置再次提交会找回同一任务。'
+      : cause.message);
   } finally {
     submitting = false;
     refresh();
   }
 });
 
-let draftScope;
 try {
   const setup = await api('originman-reference');
   draftScope = setup.draftScope;
+  restorePendingSubmissions();
   example = setup.example;
   calibration = setup.calibration;
   showCalibration(calibration);
   status.textContent = '请选择文件或加载示例。';
   try {
-    await loadWorkers(query.get('computeResourceId'));
+    await loadWorkers(query.get('computeResourceId'), { fromLink: true });
   } catch (cause) {
     workerHint.textContent = cause.message;
   }

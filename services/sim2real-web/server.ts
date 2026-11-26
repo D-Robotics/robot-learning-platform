@@ -38,6 +38,7 @@ import {
   resolveDataDir,
 } from '../../server/sim2real/standalone-adapters.js';
 import { createStudioLoginRelayRouter } from '../../server/sim2real/studio-login-relay.js';
+import { createStudioPluginAuthRouter } from '../../server/sim2real/studio-plugin-auth.js';
 import { createRateLimitMiddleware } from '../../server/sim2real/rate-limit.js';
 import { createMujocoApiBridge } from '../../server/sim2real/mujoco-bridge.js';
 import { createResponseCompressionMiddleware } from '../../server/sim2real/response-compression.js';
@@ -56,6 +57,7 @@ import {
 } from '../../server/sim2real/sim2real-rbac.js';
 import {
   createSim2RealRouter,
+  requestOwner,
   SIM2REAL_VERSIONED_API_PREFIX,
 } from '../../server/routes/sim2real-routes.js';
 import { createSim2RealEventsSseRouter } from '../../server/routes/sim2real-events-sse.js';
@@ -136,6 +138,7 @@ const SIM2REAL_DSH_MAX_RESPONSE_CHARS = 20_000;
 const SIM2REAL_DSH_MAX_REASONING_CHARS = 8_000;
 const SIM2REAL_DSH_MAX_TOOL_TRAIL = 30;
 const SAFE_DSH_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/;
+const REFERENCE_JSON_LIMIT_BYTES = 16 * 1024 * 1024;
 
 const dshSessionTails = new Map<string, Promise<void>>();
 type DshApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
@@ -860,7 +863,7 @@ export function createSim2RealWebApp(): Express {
   // error boundary below converts parser failures into stable JSON responses.
   const normalJson = express.json({ limit: '2mb' });
   const imageChatJson = express.json({ limit: '6mb' });
-  const referenceJson = express.json({ limit: '16mb' });
+  const referenceJson = express.json({ limit: REFERENCE_JSON_LIMIT_BYTES });
   app.use((request, response, next) => {
     const referenceRoute =
       /^\/api\/(?:sim2real|v1\/duck)\/(originman-reference\/(?:validate|screen)|runs)\/?$/.exec(
@@ -869,9 +872,10 @@ export function createSim2RealWebApp(): Express {
     const referenceUpload =
       request.method === 'POST' &&
       referenceRoute &&
-      (referenceRoute[1] !== 'runs' || request.get('X-RDK-Reference-Trajectory') === '1') &&
-      (!studioSsoAuth.isMultiUserDeployment() || Boolean(studioSsoAuth.resolvePrincipal(request)));
+      (referenceRoute[1] !== 'runs' || request.get('X-RDK-Reference-Trajectory') === '1');
     if (referenceUpload) {
+      // Expired sessions must fail on auth, even when the trajectory exceeds the normal JSON limit.
+      if (requestOwner(request, response, studioSsoAuth) === null) return;
       referenceJson(request, response, (error?: unknown) => {
         if (
           !error &&
@@ -1122,6 +1126,21 @@ export function createSim2RealWebApp(): Express {
   // boundary so a cross-site page cannot post credentials through this
   // service. Same-origin browser posts carry an allowed Origin and pass.
   app.use(sim2RealCsrfMiddleware);
+  const pluginAuthOrigin = URL.parse(
+    process.env.RDK_SIM2REAL_PUBLIC_ORIGIN ?? process.env.RDK_STUDIO_WEB_PUBLIC_ORIGIN ?? '',
+  );
+  app.use(
+    createStudioPluginAuthRouter({
+      auth: studioSsoAuth,
+      enabled: studioSsoAdapterMode() === 'studio-cookie' && studioSsoAdapterConfigured(),
+      basePath: configuredPublicBasePath(),
+      publicOrigin:
+        pluginAuthOrigin?.protocol === 'https:' &&
+        pluginAuthOrigin.href === pluginAuthOrigin.origin + '/'
+          ? pluginAuthOrigin.origin
+          : undefined,
+    }),
+  );
   // DSH is an authenticated execution surface.  Keep the capability catalog
   // public for discovery, but require a verified principal and the optional
   // `agent` permission before a prompt can create a session or invoke tools.
@@ -1948,13 +1967,16 @@ export function createSim2RealWebApp(): Express {
           : redactInternalError(error),
       );
       if (response.headersSent) return;
-      if ((error as { type?: string })?.type === 'entity.too.large') {
+      const parserError = error as { type?: string; limit?: number } | undefined;
+      if (parserError?.type === 'entity.too.large') {
         response.status(413).json({
           ok: false,
           error: 'SIM2REAL_REQUEST_TOO_LARGE',
           message: /^\/api\/sim2real\/dsh\/chat\/?$/.test(request.path)
             ? '看图请求体不能超过 6 MiB；图片不能超过 4 MiB。'
-            : '请求体过大；请将遥测按更小的 JSON 分片上传。',
+            : parserError.limit === REFERENCE_JSON_LIMIT_BYTES
+              ? '轨迹请求体不能超过 16 MiB。请将长轨迹分段后再上传。'
+              : '请求体超过上传容量上限。请缩小请求后重试。',
           retryable: false,
         });
         return;

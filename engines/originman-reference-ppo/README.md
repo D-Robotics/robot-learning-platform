@@ -26,7 +26,10 @@ reports mean tracking error. An ONNX is downloadable for completed simulation
 runs even when the quality gate fails. This version is scoped to simulation.
 Training evaluates a checkpoint every 32,768 steps and at the budget
 boundary. Preset and action-group compositions finish the selected budget.
-An uploaded trajectory can stop at the first passing checkpoint. The worker
+The Workshop offers 8,192 steps for a quick check and up to 1,998,848 steps for
+full-length training. Steps are shared by the parallel environments. Each
+environment starts the sequence at its first frame, and a fall may end it
+early. An uploaded trajectory can stop at the first passing checkpoint. The worker
 selects the best evaluation by pass status, frame coverage, tracking error and
 tilt, then exports its ONNX and matching replay. The results record both total
 training steps and the exported checkpoint's step count.
@@ -53,9 +56,11 @@ proxy imposes a lower limit. Other training uploads use the standard limit.
 The Workshop and the Studio MCP can preview an existing preset or an ordered
 list of motion IDs with repeat counts. The platform compiles the same references
 at submission, checks the preview SHA-256 and records the recipe and source
-digests with the Run. Configured compositions have a 90-second limit. The
-simulation reports tracking RMSE, per-block completion and ONNX parity. The
-legacy dance recipe and the direct reference file upload retain their contracts.
+digests with the Run. Free compositions support up to 12,000 frames at 50 Hz
+(240 seconds), including transitions. Approved full-length presets retain their
+recorded timing within the same frame budget. The simulation reports tracking
+RMSE, completion for each action occurrence and ONNX parity. The legacy dance
+recipe and the direct reference file upload retain their contracts.
 
 The built-in catalog includes a teaching example. To enable an approved shared
 library, prepare a source `catalog.json` with `schemaVersion: 1`, `motions` and
@@ -68,3 +73,7 @@ with NumPy available, then set `RDK_ORIGINMAN_MOTION_DIR` on the platform servic
 to the output directory. Use a directory outside the public web root. This
 library is available to signed-in learners. Individual source recordings can
 also be uploaded directly from the reference page for an account's own Run.
+
+The public plugin uses the model bundle already configured on the selected
+Worker. For a new Worker, use the [dance engine bundle generator](../originman-dance-ppo/README.md)
+with a converted model supplied by the operator.

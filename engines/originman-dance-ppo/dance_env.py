@@ -29,8 +29,7 @@ SECTION_TYPES = {
 }
 MAX_SECTIONS = 8
 
-# Learner-tunable reward knobs. Defaults are the validated 2026-11-11 reward
-# shaping; overrides must stay inside these safety bounds.
+# Learner-tunable reward knobs. Overrides must stay inside these safety bounds.
 REWARD_TUNING_LIMITS = {
     "weightShiftTargetM": (0.02, 0.06),
     "weightShiftToleranceM": (0.008, 0.04),
@@ -50,7 +49,8 @@ DEFAULT_REWARD_TUNING = {
     "weightShiftTargetM": 0.036,
     "weightShiftToleranceM": 0.016,
     "squatDepthM": 0.042,
-    "squatToleranceM": 0.018,
+    # Keep visible reward changes when descending from standing height.
+    "squatToleranceM": 0.035,
     "settleStillnessWeight": 2.6,
     "workPenalty": 0.8,
     "squatWorkPenalty": 0.35,
@@ -100,6 +100,10 @@ def alternating_arm_targets(local_beat, intensity):
 def squat_rise_phase(progress):
     """Start upright, reach the lowest point halfway through, then rise."""
     return math.cos(2 * math.pi * progress)
+
+
+def squat_height_match(height, target, tolerance):
+    return math.exp(-((height - target) / tolerance) ** 2)
 
 
 def tracked_style(type_, local, intensity, hands, upright, feet_delta, contacts):
@@ -317,7 +321,7 @@ class ConfigurableChoreography(Dance):
             squat_phase = squat_rise_phase(progress)
             target = self.robot.base_height - 0.009 - self.reward["squatDepthM"] * (0.5 - 0.5 * squat_phase)
             style = intensity * (
-                self.reward["squatWeight"] * math.exp(-((height - target) / self.reward["squatToleranceM"]) ** 2)
+                self.reward["squatWeight"] * squat_height_match(height, target, self.reward["squatToleranceM"])
                 + 1.10 * np.clip(-squat_phase * arm_forward / 0.13, -1, 1)
                 + 0.4 * accent
             )

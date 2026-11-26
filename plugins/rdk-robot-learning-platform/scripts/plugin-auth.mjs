@@ -76,6 +76,7 @@ export function createPluginAuth({
   const audience = base.href.replace(/\/$/, ''),
     origin = base.origin,
     native = env.RDK_STUDIO_LOGIN_BOUND === '1' && env.RDK_STUDIO_INHERIT_LOGIN !== '0';
+  const authorizePath = base.pathname.replace(/\/$/, '') + '/api/sso/plugin/authorize';
   const mode = native ? 'studio-session' : 'browser-login';
   const cacheScope = process.platform === 'win32' ? JSON.stringify([audience, root]) : audience;
   const filename = path.join(
@@ -195,7 +196,7 @@ export function createPluginAuth({
       !url.username &&
       !url.password &&
       !url.hash &&
-      url.pathname === '/api/sso/plugin/authorize' &&
+      url.pathname === authorizePath &&
       /^[a-f0-9]{32}$/.test(value.id ?? '') &&
       /^[A-Za-z0-9_-]{43}$/.test(value.secret ?? '') &&
       /^[A-Z0-9]{8}$/.test(value.userCode ?? '') &&
@@ -218,10 +219,10 @@ export function createPluginAuth({
     const stored = await readPrivate(pendingFilename);
     if (stored && (!flow || stored.id === flow.id)) fs.unlinkSync(pendingFilename);
   }
-  async function request(route, { body, headers = {} } = {}) {
+  async function request(route, { body, headers = {}, studioOrigin = false } = {}) {
     let response;
     try {
-      response = await fetchImpl(origin + route, {
+      response = await fetchImpl((studioOrigin ? origin : audience) + route, {
         method: body === undefined ? 'GET' : 'POST',
         headers: {
           accept: 'application/json',
@@ -236,6 +237,12 @@ export function createPluginAuth({
       throw classifyPluginFailure(error);
     }
     if (!response.ok) {
+      if (response.status === 404 && route.startsWith('/api/sso/'))
+        throw new PluginRequestError(
+          'AUTH_PROTOCOL_UNSUPPORTED',
+          '此地址尚未提供插件授权接口，请核对学习平台地址和部署版本。',
+          { httpStatus: 404, nextAction: '网页仍可登录。插件需连接已启用授权的学习平台。' },
+        );
       if ([401, 410].includes(response.status))
         throw loginRequired(
           response.status === 410 ? 'LOGIN_CONFIRMATION_EXPIRED' : 'LOGIN_REQUIRED',
@@ -359,6 +366,7 @@ export function createPluginAuth({
       const { value } = await request('/api/sso/plugin/session', {
         body: { audience, accountId: id },
         headers: { 'x-rdk-sso-session': sid },
+        studioOrigin: true,
       });
       assertRevision(expectedRevision);
       if (value.accountId !== id || !safe(value))
@@ -373,22 +381,21 @@ export function createPluginAuth({
     if (accountId && saved?.accountId !== accountId) throw accountChanged();
     if (saved) {
       try {
-        const { value } = await request('/api/sso/me', { headers: { cookie: saved.cookie } });
+        const { value } = await request('/api/sso/session', { headers: { cookie: saved.cookie } });
         assertRevision(expectedRevision);
-        if (value.user?.id === saved.accountId) {
+        if (value.ok === true && value.identity?.accountId === saved.accountId) {
           if ((await read())?.cookie !== saved.cookie) throw accountChanged();
           assertRevision(expectedRevision);
           return saved.cookie;
         }
-        if (value.user !== null)
-          throw new PluginRequestError(
-            value.user?.id ? 'AUTH_ACCOUNT_MISMATCH' : 'AUTH_RESPONSE_INVALID',
-            '登录身份回执与已授权账号不一致或格式无效，连接已停止；不会自动换码。',
-            {
-              httpStatus: 502,
-              nextAction: '保留当前授权，由维护者核对身份接口；不要反复申请验证码。',
-            },
-          );
+        throw new PluginRequestError(
+          value.identity?.accountId ? 'AUTH_ACCOUNT_MISMATCH' : 'AUTH_RESPONSE_INVALID',
+          '登录身份回执与已授权账号不一致或格式无效，连接已停止；不会自动换码。',
+          {
+            httpStatus: 502,
+            nextAction: '保留当前授权，由维护者核对身份接口；不要反复申请验证码。',
+          },
+        );
       } catch (error) {
         if (!error.needsLogin) throw error;
       }

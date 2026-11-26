@@ -6,6 +6,9 @@ import {
 import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
+  ORIGINMAN_REFERENCE_MAX_COMPOSITION_SECTIONS,
+  ORIGINMAN_REFERENCE_MAX_FRAMES,
+  ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES,
   ORIGINMAN_REFERENCE_TASK,
   ORIGINMAN_SOURCE_STANCE,
   type OriginmanReferenceTrajectory,
@@ -55,6 +58,8 @@ export function resolvedTaskPack(taskId?: string): Record<string, unknown> | nul
 export interface Sim2RealRobogoRunResult {
   status: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed';
   externalRunId?: string;
+  /** Latest queue evidence from the worker, kept out of the durable Run. */
+  queue?: { position?: number; queuedAt?: string };
   /** Propagated by the server-side mock worker; never implies a deployable model. */
   mock?: boolean;
   launchUrl?: string;
@@ -566,9 +571,20 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   };
 }
 
-function safeReferenceSections(value: unknown) {
-  if (!Array.isArray(value) || !value.length || value.length > 90) return undefined;
+function safeReferenceSections(
+  value: unknown,
+  totalFramesExpected: number,
+  totalFramesEvaluated: number,
+) {
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    value.length > ORIGINMAN_REFERENCE_MAX_COMPOSITION_SECTIONS
+  )
+    return undefined;
   const rows: NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['sections']> = [];
+  let sectionFramesExpected = 0;
+  let sectionFramesEvaluated = 0;
   for (const item of value) {
     if (!item || typeof item !== 'object') return undefined;
     const { id, framesExpected, framesEvaluated, completed } = item;
@@ -576,12 +592,19 @@ function safeReferenceSections(value: unknown) {
       typeof id !== 'string' ||
       !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) ||
       !Number.isSafeInteger(framesExpected) ||
-      framesExpected < 50 ||
-      framesExpected > 4500 ||
+      framesExpected < ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES ||
       !Number.isSafeInteger(framesEvaluated) ||
       framesEvaluated < 0 ||
       framesEvaluated > framesExpected ||
       typeof completed !== 'boolean'
+    )
+      return undefined;
+    sectionFramesExpected += framesExpected;
+    sectionFramesEvaluated += framesEvaluated;
+    // Transitions are evaluated but are outside the action ranges.
+    if (
+      sectionFramesExpected > totalFramesExpected ||
+      sectionFramesEvaluated > totalFramesEvaluated
     )
       return undefined;
     const row: (typeof rows)[number] = {
@@ -647,7 +670,7 @@ function safeReferenceMetrics(
     typeof framesEvaluated !== 'number' ||
     !Number.isSafeInteger(framesEvaluated) ||
     framesExpected < 50 ||
-    framesExpected > 12_000 ||
+    framesExpected > ORIGINMAN_REFERENCE_MAX_FRAMES ||
     framesEvaluated < 1 ||
     framesEvaluated > framesExpected ||
     typeof trackingMaeRad !== 'number' ||
@@ -666,7 +689,7 @@ function safeReferenceMetrics(
     ![referenceSha256, sceneSha256].every((digest) => /^[a-f0-9]{64}$/.test(digest))
   )
     return undefined;
-  const sections = safeReferenceSections(rawSections);
+  const sections = safeReferenceSections(rawSections, framesExpected, framesEvaluated);
   return {
     framesExpected,
     framesEvaluated,
@@ -932,6 +955,25 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   // record or the status response.
   const progress = safeProgressPoints(source.progress);
   const failureDetail = safeFailureDetail(source);
+  const queue: NonNullable<Sim2RealRobogoRunResult['queue']> = {};
+  if (status === 'queued') {
+    const position = source.queuePosition;
+    if (
+      typeof position === 'number' &&
+      Number.isSafeInteger(position) &&
+      position >= 1 &&
+      position <= 1000
+    ) {
+      queue.position = position;
+    }
+    const queuedAt = source.createdAt;
+    if (typeof queuedAt === 'string') {
+      const time = Date.parse(queuedAt);
+      if (time > 0 && time <= Date.now() && new Date(time).toISOString() === queuedAt) {
+        queue.queuedAt = queuedAt;
+      }
+    }
+  }
   // Local workers report the honest device fact at the top level of the job
   // view (job.cuda), not inside metrics. Merge it in so the platform run
   // record can surface GPU usage; only an explicit boolean is trusted.
@@ -942,6 +984,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
       : metrics;
   return {
     status,
+    ...(Object.keys(queue).length ? { queue } : {}),
     ...(validExternalRunId ? { externalRunId: validExternalRunId } : {}),
     ...(mock !== undefined ? { mock } : {}),
     ...(launchUrl ? { launchUrl } : {}),
@@ -1175,6 +1218,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
   runnerUrl: string;
   token?: string;
   accountId: string;
+  resourceId?: string;
   trajectory: OriginmanReferenceTrajectory;
   stanceProfile?: typeof ORIGINMAN_SOURCE_STANCE;
 }) {
@@ -1193,6 +1237,10 @@ export async function screenOriginmanReferenceWithWorker(input: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       'X-Sim2Real-Account': safeAccountId(input.accountId),
+      ...(input.resourceId &&
+        /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/.test(input.resourceId) && {
+          'X-Sim2Real-Screen-Resource': input.resourceId,
+        }),
       ...(token ? { Authorization: 'Bearer ' + token } : {}),
     },
     body: serialized,
@@ -1266,6 +1314,7 @@ export async function screenOriginmanReferenceWithWorker(input: {
     framesEvaluated: Number(gate.framesEvaluated),
     maxTiltDeg: Number(gate.maxTiltDeg),
     firstFailedFrame: gate.completed ? null : Number(gate.firstFailedFrame),
+    ...(report.cached === true && { cached: true }),
     ...(!gate.completed && { failure: referenceFailure(gate.failure) }),
     passed:
       gate.completed &&

@@ -98,6 +98,107 @@ test('course model reader uses the same verified identity and preserves full man
   assert.deepEqual((await f.core.readModels()).models[0].manifest, manifest);
 });
 
+test('training preflight sends the selected resource, task, engine and device on the live route', async (t) => {
+  const params = {
+    name: 'rdk_training_preflight',
+    arguments: {
+      computeResourceId: 'gpu-7',
+      taskId: 'originman-reference-track',
+      engine: 'originman-reference-ppo',
+      device: 'cuda',
+    },
+  };
+  let failure;
+  const f = await fixture(t, async (url, options) => {
+    assert.match(String(url), /\/api\/v1\/duck\/compute-resources\/gpu-7\/preflight$/);
+    assert.equal(options.method, 'POST');
+    assert.equal(options.headers.cookie, 'rdk_sso_web_session=fixture-verified');
+    assert.deepEqual(JSON.parse(options.body), {
+      taskId: 'originman-reference-track',
+      engine: 'originman-reference-ppo',
+      device: 'cuda',
+    });
+    if (failure) return Response.json({ ok: false, error: failure }, { status: 404 });
+    return Response.json({ ok: true, report: {}, trainingSubmitted: false });
+  });
+  assert.equal(
+    (await f.core.request('tools/call', params)).structuredContent.trainingSubmitted,
+    false,
+  );
+  failure = 'SIM2REAL_API_NOT_FOUND';
+  const unavailable = await f.core.request('tools/call', params);
+  assert.equal(unavailable.isError, true);
+  assert.equal(unavailable.structuredContent.error, 'PLATFORM_FEATURE_UNAVAILABLE');
+  failure = 'SIM2REAL_COMPUTE_RESOURCE_NOT_FOUND';
+  const missing = await f.core.request('tools/call', params);
+  assert.equal(missing.structuredContent.error, failure);
+});
+
+test('logs use the authenticated cursor API once and resume from the last returned line', async (t) => {
+  const lines = Array.from({ length: 250 }, (_, i) => ({
+    n: i + 6,
+    stream: 'stdout',
+    text: 'training progress',
+  }));
+  let calls = 0;
+  const f = await fixture(t, async (url, options) => {
+    calls++;
+    assert.match(String(url), /\/runs\/run-42\/logs\?after=5$/);
+    assert.equal(options.headers.cookie, 'rdk_sso_web_session=fixture-verified');
+    return Response.json({
+      ok: true,
+      runId: 'run-42',
+      status: 'completed',
+      total: 255,
+      retainedFrom: 6,
+      lines,
+    });
+  });
+  const { structuredContent: value } = await f.core.request('tools/call', {
+    name: 'rdk_run_logs',
+    arguments: { runId: 'run-42', after: 5 },
+  });
+  assert.equal(calls, 1);
+  assert.equal(value.lines.length, 200);
+  assert.equal(value.nextAfter, 205);
+  assert.equal(value.hasMore, true);
+});
+
+test('logs preserve a server-provided terminal tail and distinguish a transient Worker outage', async (t) => {
+  let ready = true;
+  const f = await fixture(t, async () =>
+    ready
+      ? Response.json({
+          ok: true,
+          runId: 'run-42',
+          status: 'completed',
+          total: 4,
+          retainedFrom: 4,
+          lines: [],
+          source: 'retained-tail',
+          stdoutTail: 'retained output',
+        })
+      : Response.json(
+          { ok: false, error: 'SIM2REAL_RUN_LOGS_UNAVAILABLE', retryable: true },
+          { status: 503 },
+        ),
+  );
+  const request = () =>
+    f.core.request('tools/call', {
+      name: 'rdk_run_logs',
+      arguments: { runId: 'run-42', after: 4 },
+    });
+  const tail = await request();
+  assert.equal(tail.structuredContent.source, 'retained-tail');
+  assert.equal(tail.structuredContent.nextAfter, 4);
+  assert.equal(tail.structuredContent.stdoutTail, 'retained output');
+  ready = false;
+  const failure = await request();
+  assert.equal(failure.isError, true);
+  assert.equal(failure.structuredContent.error, 'SIM2REAL_RUN_LOGS_UNAVAILABLE');
+  assert.equal(failure.structuredContent.retryable, true);
+});
+
 test('experiment sessions use only the pinned platform and never return its session cookie', async (t) => {
   const observed = [];
   const f = await fixture(t, async (url, options) => {

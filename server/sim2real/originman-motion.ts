@@ -7,6 +7,10 @@ import { lstat, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   ORIGINMAN_REFERENCE_JOINTS,
+  ORIGINMAN_REFERENCE_MAX_BLOCK_REPEATS,
+  ORIGINMAN_REFERENCE_MAX_COMPOSITION_BLOCKS,
+  ORIGINMAN_REFERENCE_MAX_FRAMES,
+  ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES,
   originmanReferenceCalibration,
   originmanReferenceExample,
   validateOriginmanReferenceTrajectory,
@@ -14,11 +18,12 @@ import {
   type OriginmanMotionProvenance,
 } from '../../shared/originman-reference-training.js';
 
-const FPS = 50;
-const MAX_FRAMES = FPS * 90;
-const MAX_BLOCKS = 128;
+const { fps: FPS, maxSpeedRadPerS: SPEED_LIMIT } = originmanReferenceCalibration.trajectory;
+const MAX_FRAMES = ORIGINMAN_REFERENCE_MAX_FRAMES;
+const MAX_SECONDS = MAX_FRAMES / FPS;
+const MAX_BLOCKS = ORIGINMAN_REFERENCE_MAX_COMPOSITION_BLOCKS;
+const MAX_REPEATS = ORIGINMAN_REFERENCE_MAX_BLOCK_REPEATS;
 const MAX_MOTIONS = 512;
-const SPEED_LIMIT = originmanReferenceCalibration.trajectory.maxSpeedRadPerS;
 const ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const REFERENCE_FILE = /^[a-z0-9][a-z0-9_-]{0,63}\.json$/;
@@ -107,7 +112,7 @@ function label(value: unknown): value is string {
 
 function blocks(value: unknown, motions: Motion[]): Block[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > MAX_BLOCKS)
-    throw new OriginmanMotionError('请选择 1–128 个动作块。');
+    throw new OriginmanMotionError(`请选择 1–${MAX_BLOCKS} 个动作块。`);
   const ids = new Set(motions.map((motion) => motion.id));
   return value.map((entry) => {
     const { id, repeats = 1, ...extra } = record(entry);
@@ -117,10 +122,10 @@ function blocks(value: unknown, motions: Motion[]): Block[] {
       typeof repeats !== 'number' ||
       !Number.isInteger(repeats) ||
       repeats < 1 ||
-      repeats > 8 ||
+      repeats > MAX_REPEATS ||
       Object.keys(extra).length
     )
-      throw new OriginmanMotionError('每个动作的重复次数须为 1–8。');
+      throw new OriginmanMotionError(`每个动作的重复次数须为 1–${MAX_REPEATS}。`);
     return { id, repeats };
   });
 }
@@ -208,7 +213,7 @@ async function loadCatalog(): Promise<Catalog> {
         !label(category) ||
         typeof frames !== 'number' ||
         !Number.isInteger(frames) ||
-        frames < 2 ||
+        frames < ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES ||
         frames > MAX_FRAMES ||
         typeof sha256 !== 'string' ||
         !SHA256.test(sha256) ||
@@ -319,7 +324,7 @@ export async function listOriginmanMotion() {
       ...(preset.reference?.stanceProfile && { stanceProfile: preset.reference.stanceProfile }),
     })),
     ...(catalog.unavailableMotions?.length && { unavailableMotions: catalog.unavailableMotions }),
-    limits: { maxBlocks: MAX_BLOCKS, maxSeconds: MAX_FRAMES / FPS, maxRepeats: 8 },
+    limits: { maxBlocks: MAX_BLOCKS, maxSeconds: MAX_SECONDS, maxRepeats: MAX_REPEATS },
   };
 }
 
@@ -328,7 +333,7 @@ async function readTrajectoryAsset(
   metadata: { sha256: string; frames: number },
   purpose: 'training' | 'motion-block',
 ) {
-  const bytes = await readBounded(file, 5 * 1024 * 1024);
+  const bytes = await readBounded(file, 16 * 1024 * 1024);
   if (digest(bytes) !== metadata.sha256) throw Error('Motion hash mismatch');
   const trajectory = validateOriginmanReferenceTrajectory(JSON.parse(bytes.toString()), purpose);
   if (trajectory.joint_pos.length !== metadata.frames) throw Error('Motion frame count mismatch');
@@ -406,7 +411,7 @@ export async function prepareOriginmanMotion(input: unknown) {
     throw new OriginmanMotionError('节奏须在 80–140 BPM 之间。');
   const minimumTotal = minimumFrames(selected, seconds, catalog);
   if (minimumTotal > MAX_FRAMES)
-    throw new OriginmanMotionError('编排总时长不能超过 90 秒，请减少动作或重复次数。');
+    throw new OriginmanMotionError(`编排总时长不能超过 ${MAX_SECONDS} 秒，请减少动作或重复次数。`);
 
   const positions: number[][] = [];
   const ranges: { id: string; from: number; to: number }[] = [];
@@ -437,7 +442,7 @@ export async function prepareOriginmanMotion(input: unknown) {
           if (minimumTotal + extraFrames > MAX_FRAMES) {
             const previous = motions.get(ranges.at(-1)!.id)!;
             throw new OriginmanMotionError(
-              `「${previous.displayName}」到「${metadata.displayName}」延长过渡后超过 90 秒。请减少片段或重复次数。`,
+              `「${previous.displayName}」到「${metadata.displayName}」延长过渡后超过 ${MAX_SECONDS} 秒。请减少片段或重复次数。`,
               422,
             );
           }

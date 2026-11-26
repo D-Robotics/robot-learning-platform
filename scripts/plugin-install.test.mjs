@@ -116,9 +116,25 @@ test('installation preserves unrelated MCP entries, permissions, disable state, 
   assert.equal(fs.readFileSync(path.join(dir, backup), 'utf8'), before);
 });
 test('fresh Studio installs use the connection name recognized by its learning tool router', () => {
-  const connection = { command: '/runtime/node', args: ['/plugin/experience-mcp.mjs'] };
+  const config = createMcpConfiguration({
+    platform: 'darwin',
+    root: '/plugin',
+    nodePath: '/runtime/node',
+    studioPermissions: true,
+  });
+  const connection = config.mcpServers['rdk-robot-learning-platform'];
   const result = mergeStudioConnection({}, connection);
   assert.equal(result.name, 'rdk-robot-learning-platform');
+  assert.equal(Object.hasOwn(result.configuration.mcpServers[result.name], 'managedPlugin'), false);
+  assert.deepEqual(result.configuration.mcpServers[result.name].permissions, {
+    tools: { rdk_workshop: 'readonly', rdk_originman_reference_track: 'readonly' },
+  });
+  const permissions = { default: 'approval', tools: { rdk_workshop: 'deny' } };
+  const upgrade = mergeStudioConnection(
+    { mcpServers: { 'rdk-robot-learning-platform': { ...connection, permissions } } },
+    connection,
+  );
+  assert.deepEqual(upgrade.configuration.mcpServers[upgrade.name].permissions, permissions);
 });
 test('multiple learning connections require a choice; invalid config and missing host are not overwritten', (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-install-'));
@@ -158,6 +174,21 @@ test('configuration is idempotent and accepts fresh installs without a credentia
   assert.deepEqual(a.manifest, b.manifest);
   assert.equal(fs.readdirSync(dir).filter((x) => x.endsWith('.tmp')).length, 0);
   assert.ok(!JSON.stringify(a.manifest).includes('PASSWORD'));
+  const bundledRuntime = path.join(dir, 'mcp', 'runtime', 'node');
+  const studio = configurePlugin({
+    root: dir,
+    nodePath: bundledRuntime,
+    nodeVersion: '24.15.0',
+    studioPermissions: true,
+  });
+  const name = 'rdk-robot-learning-platform';
+  const importManifest = JSON.parse(fs.readFileSync(studio.target, 'utf8')).mcpServers[name];
+  assert.equal(importManifest.command, './mcp/runtime/node');
+  assert.deepEqual(importManifest.args, ['./scripts/experience-mcp.mjs']);
+  assert.equal(studio.manifest.mcpServers[name].command, bundledRuntime);
+  assert.deepEqual(studio.manifest.mcpServers[name].args, [
+    path.join(dir, 'scripts', 'experience-mcp.mjs'),
+  ]);
 });
 
 test('configuration invoked through a directory alias actually runs instead of silently exiting', async (t) => {
@@ -266,7 +297,9 @@ test('Studio upgrades report an imported plugin that can shadow the configured M
   const outcome = installStudioConnection({ command: 'new' }, { directory, pluginRoot });
   assert.equal(outcome.installed, false);
   assert.equal(outcome.needsHostImport, true);
+  assert.equal(outcome.importDirectory, pluginRoot);
   assert.match(outcome.reason, /插件中心更新/);
+  assert.match(outcome.reason, /移除插件中心的旧条目/);
   assert.equal(fs.readFileSync(target, 'utf8'), original);
   assert.equal(
     installStudioConnection({ command: 'new' }, { directory, pluginRoot: oldRoot }).installed,

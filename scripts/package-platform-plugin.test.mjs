@@ -26,6 +26,7 @@ function fixture(testContext, target) {
     'portable-studio-setup.mjs',
     'portable-studio-setup-macos.command',
     'portable-studio-setup-windows.cmd',
+    'portable-studio-setup-windows.ps1',
   ]) {
     write(
       path.join(root, 'scripts', installer),
@@ -45,13 +46,18 @@ function fixture(testContext, target) {
   write(path.join(plugin, '.mcp.json'), '{"mcpServers":{}}');
   write(path.join(root, '.agents/plugins/marketplace.json'), '{}');
 
-  const folder = 'node-fixture';
-  const windows = target.startsWith('win32-');
-  const binary = windows ? 'node.exe' : 'bin/node';
-  const runtime = path.join(root, windows ? 'node.zip' : 'node.tar.gz');
-  execFileSync(python, [
-    '-c',
-    String.raw`
+  const universal = target === 'universal';
+  const targets = universal ? ['darwin-arm64', 'win32-x64'] : [target];
+  const runtimeTargets = {};
+  const runtimeFiles = {};
+  for (const current of targets) {
+    const folder = 'node-fixture';
+    const windows = current.startsWith('win32-');
+    const binary = windows ? 'node.exe' : 'bin/node';
+    const runtime = path.join(root, `node-${current}.${windows ? 'zip' : 'tar.gz'}`);
+    execFileSync(python, [
+      '-c',
+      String.raw`
 import io, sys, tarfile, zipfile
 filename, binary = sys.argv[1:]
 files = {binary: b'executable fixture', 'node-fixture/LICENSE': b'license fixture'}
@@ -65,22 +71,23 @@ else:
             member.size = len(data)
             archive.addfile(member, io.BytesIO(data))
 `,
-    runtime,
-    `${folder}/${binary}`,
-  ]);
+      runtime,
+      `${folder}/${binary}`,
+    ]);
+    runtimeFiles[current] = runtime;
+    runtimeTargets[current] = {
+      url: `https://nodejs.org/dist/v24.15.0/${path.basename(runtime)}`,
+      sha256: digest(fs.readFileSync(runtime)),
+      folder,
+      binary,
+    };
+  }
   write(
     path.join(plugin, 'runtime-downloads.json'),
     JSON.stringify({
       version: '24.15.0',
       checksumSource: 'https://nodejs.org/dist/v24.15.0/SHASUMS256.txt',
-      targets: {
-        [target]: {
-          url: `https://nodejs.org/dist/v24.15.0/${path.basename(runtime)}`,
-          sha256: digest(fs.readFileSync(runtime)),
-          folder,
-          binary,
-        },
-      },
+      targets: runtimeTargets,
     }),
   );
   const output = path.join(root, 'output');
@@ -88,15 +95,14 @@ else:
     builder,
     '--out-dir',
     output,
-    '--studio-target',
-    target,
-    '--studio-runtime',
-    runtime,
+    ...(universal
+      ? ['--studio-universal-runtime-dir', root]
+      : ['--studio-target', target, '--studio-runtime', runtimeFiles[target]]),
   ];
-  return { runtime, output, args };
+  return { runtime: runtimeFiles[target], runtimeFiles, output, args };
 }
 
-for (const target of ['darwin-arm64', 'win32-x64']) {
+for (const target of ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64']) {
   test(`exports a self-contained stock Studio ${target} ZIP and retains a generic ZIP`, (t) => {
     const { args, output } = fixture(t, target);
     const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
@@ -109,12 +115,15 @@ for (const target of ['darwin-arm64', 'win32-x64']) {
       '-c',
       String.raw`
 import hashlib, json, sys, zipfile
-generic, portable, root, binary = sys.argv[1:]
+generic, portable, root, binary, native = sys.argv[1:]
 with zipfile.ZipFile(generic) as archive:
     assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
     assert root + binary not in archive.namelist()
 with zipfile.ZipFile(portable) as archive:
-    assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
+    config = json.loads(archive.read(root + '.mcp.json'))['mcpServers'][root.rstrip('/')]
+    assert config['commandByPlatform'] == {native: './' + binary}
+    assert config['command'] == './' + binary
+    assert config['args'] == ['./scripts/experience-mcp.mjs']
     launcher = 'setup-studio-windows.cmd' if binary.endswith('.exe') else 'setup-studio-macos.command'
     assert root + launcher in archive.namelist()
     assert root + 'setup-studio.mjs' in archive.namelist()
@@ -131,6 +140,7 @@ with zipfile.ZipFile(portable) as archive:
       portable,
       `${name}/`,
       `mcp/runtime/${tool}`,
+      target,
     ]);
   });
 }
@@ -141,5 +151,69 @@ test('rejects a changed runtime archive before publishing any ZIP', (t) => {
   const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /SHA-256 does not match/);
+  assert.deepEqual(fs.readdirSync(output), []);
+});
+
+test('exports one Studio ZIP for Windows x64 and Apple Silicon with complete provenance', (t) => {
+  const { args, output } = fixture(t, 'universal');
+  const report = JSON.parse(execFileSync(process.execPath, args, { encoding: 'utf8' }));
+  assert.equal(report.archives.length, 3);
+  const portable = path.join(output, `${name}-1.2.3-studio-universal.zip`);
+  assert.equal(digest(fs.readFileSync(portable)), report.archives[2].sha256);
+  execFileSync(python, [
+    '-c',
+    String.raw`
+import hashlib, json, sys, zipfile
+portable, root = sys.argv[1:]
+with zipfile.ZipFile(portable) as archive:
+    assert archive.testzip() is None
+    config = json.loads(archive.read(root + '.mcp.json'))['mcpServers'][root.rstrip('/')]
+    assert config['commandByPlatform'] == {
+        'darwin-arm64': './mcp/runtime/darwin-arm64/node',
+        'win32-x64': './mcp/runtime/win32-x64/node.exe',
+    }
+    assert config['args'] == ['./scripts/experience-mcp.mjs']
+    assert config['requestTimeoutMs'] == 150000
+    assert config['permissions']['tools'] == dict.fromkeys([
+        'rdk_workshop', 'rdk_originman_reference_track', 'rdk_originman_motion_library',
+        'rdk_originman_motion_preview', 'rdk_training_status',
+    ], 'readonly')
+    guide = archive.read(root + 'STUDIO-SETUP.md').decode()
+    for launcher in ['setup-studio-windows.cmd', 'setup-studio-macos.command']:
+        assert root + launcher in archive.namelist()
+        assert launcher in guide
+    assert root + 'setup-studio-windows.ps1' in archive.namelist()
+    assert root + 'mcp/runtime/provenance.json' not in archive.namelist()
+    runtime_root = root + 'mcp/runtime/'
+    assert {
+        entry[len(runtime_root):].split('/')[0]
+        for entry in archive.namelist() if entry.startswith(runtime_root)
+    } == {'darwin-arm64', 'win32-x64'}
+    assert 'Windows x64' in guide and 'Apple 芯片 Mac' in guide
+    for target, binary in [('win32-x64', 'node.exe'), ('darwin-arm64', 'node')]:
+        directory = runtime_root + target + '/'
+        path = directory + binary
+        provenance = json.loads(archive.read(directory + 'provenance.json'))
+        assert provenance['target'] == target
+        assert target in provenance['archive']
+        assert provenance['binarySha256'] == hashlib.sha256(archive.read(path)).hexdigest()
+        assert archive.getinfo(path).external_attr >> 16 & 0o111 == 0o111
+        assert archive.read(directory + 'LICENSE') == b'license fixture'
+    inventory = dict(line.split('  ', 1)[::-1] for line in archive.read(root + 'FILES.sha256').decode().splitlines())
+    entries = [name for name in archive.namelist() if name != root + 'FILES.sha256']
+    assert set(inventory) == {name[len(root):] for name in entries}
+    assert all(hashlib.sha256(archive.read(name)).hexdigest() == inventory[name[len(root):]] for name in entries)
+`,
+    portable,
+    `${name}/`,
+  ]);
+});
+
+test('universal packaging discards staged ZIPs if any architecture fails validation', (t) => {
+  const { args, output, runtimeFiles } = fixture(t, 'universal');
+  fs.appendFileSync(runtimeFiles['win32-x64'], 'tampered');
+  const result = spawnSync(process.execPath, args, { encoding: 'utf8' });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /pinned target: win32-x64/);
   assert.deepEqual(fs.readdirSync(output), []);
 });

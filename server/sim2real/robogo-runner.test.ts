@@ -308,6 +308,26 @@ describe('RoboGo Sim2Real runner adapter', () => {
     expect(result.failureDetail).toBeUndefined();
   });
 
+  it('reports validated queue evidence only while the Worker job is queued', async () => {
+    const createdAt = '2025-06-01T01:23:45.000Z';
+    const read = (status: string, queuePosition: unknown, timestamp: string) =>
+      requestRobogoTrainingStatus({
+        accountId: 'alice',
+        externalRunId: 'queue-job',
+        runnerUrl: 'https://runner.example.test/train',
+        fetchImpl: async () =>
+          Response.json({ status, runId: 'queue-job', queuePosition, createdAt: timestamp }),
+      });
+    expect((await read('queued', 3, createdAt)).queue).toEqual({
+      position: 3,
+      queuedAt: createdAt,
+    });
+    expect((await read('queued', '3', createdAt)).queue).toEqual({ queuedAt: createdAt });
+    expect((await read('queued', 1, '2099-01-01T00:00:00.000Z')).queue).toEqual({ position: 1 });
+    expect((await read('queued', 1001, 'invalid')).queue).toBeUndefined();
+    expect((await read('running', 2, createdAt)).queue).toBeUndefined();
+  });
+
   it('polls a runner job and accepts bounded checkpoint, artifact, and metrics metadata', async () => {
     let capturedUrl = '';
     const result = await requestRobogoTrainingStatus({
@@ -422,6 +442,89 @@ describe('RoboGo Sim2Real runner adapter', () => {
     expect(await read('originman-recovery', receipt.policySha256)).toEqual(receipt);
     expect(await read('originman-recovery', 'broken')).toBeUndefined();
     expect(await read('other', receipt.policySha256)).toBeUndefined();
+  });
+
+  describe('reference choreography evaluation', () => {
+    const evaluation = {
+      framesExpected: 12_000,
+      framesEvaluated: 12_000,
+      trackingMaeRad: 0.04,
+      maxTiltDeg: 8,
+      finalYawDeg: 1,
+      qualityGatePassed: true,
+      referenceSha256: 'a'.repeat(64),
+      sceneSha256: 'b'.repeat(64),
+    };
+    const poll = async (sections: readonly unknown[], overrides: Partial<typeof evaluation> = {}) =>
+      (
+        await requestRobogoTrainingStatus({
+          accountId: 'alice',
+          externalRunId: 'reference-run',
+          runnerUrl: 'https://runner.example.test/train',
+          fetchImpl: async () =>
+            Response.json({
+              status: 'completed',
+              runId: 'reference-run',
+              metrics: {
+                engine: 'originman-reference-ppo',
+                contractValid: true,
+                observationSize: 96,
+                actionSize: 18,
+                originmanReference: { ...evaluation, ...overrides, sections },
+              },
+            }),
+        })
+      ).metrics?.originmanReference;
+    const segment = (id: string, expected: number, evaluated = expected) => ({
+      id,
+      framesExpected: expected,
+      framesEvaluated: evaluated,
+      completed: expected === evaluated,
+    });
+
+    it('retains all expanded sections including two-frame action clips', async () => {
+      const sections = Array.from({ length: 1024 }, () => segment('short-action', 2));
+      const runFrames = 2 * sections.length + 9 * (sections.length - 1);
+      const result = await poll(sections, {
+        framesExpected: runFrames,
+        framesEvaluated: runFrames,
+      });
+      expect(result?.sections?.length).toBe(sections.length);
+      expect(result?.sections).toEqual(sections);
+    });
+
+    it('retains a single section spanning the longest supported trajectory', async () => {
+      const sections = [segment('long-action', evaluation.framesExpected)];
+      expect((await poll(sections))?.sections).toEqual(sections);
+    });
+
+    it('retains unfinished sections and leaves space for transition frames', async () => {
+      const sections = [segment('open', 250, 100), segment('close', 225, 0)];
+      expect(
+        await poll(sections, {
+          framesExpected: 500,
+          framesEvaluated: 100,
+          qualityGatePassed: false,
+        }),
+      ).toMatchObject({ sections, qualityGatePassed: false });
+    });
+
+    it.each([
+      ['expected frame count', [segment('open', 8000), segment('close', 4001)], {}],
+      [
+        'evaluated frame count',
+        [segment('open', 55), segment('close', 500, 46)],
+        { framesEvaluated: 100 },
+      ],
+      ['section count', Array.from({ length: 1025 }, () => segment('short-action', 2)), {}],
+    ] as const)(
+      'omits section data that exceeds the run %s',
+      async (_label, sections, overrides) => {
+        const result = await poll(sections, overrides);
+        expect(result?.framesExpected).toBe(12_000);
+        expect(result).not.toHaveProperty('sections');
+      },
+    );
   });
 
   it('merges the worker-level cuda flag into metrics without trusting non-boolean values', async () => {

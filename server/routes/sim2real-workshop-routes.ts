@@ -53,6 +53,47 @@ function courseEngine(engines?: string[]) {
     : 'originman-recovery-reflect';
 }
 
+function failureLocation(composition: OriginmanMotionProvenance | undefined, frame: number | null) {
+  if (!composition?.ranges.length || frame === null) return {};
+  const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
+  if (block >= 0) return { blockNumber: block + 1, motionId: composition.ranges[block].id };
+  const after = composition.ranges.findIndex(({ from }) => from >= frame);
+  return after > 0
+    ? {
+        betweenBlocks: true,
+        fromBlockNumber: after,
+        toBlockNumber: after + 1,
+        fromMotionId: composition.ranges[after - 1].id,
+        toMotionId: composition.ranges[after].id,
+      }
+    : { betweenBlocks: true };
+}
+
+export function referenceScreenDiagnosis(
+  result: Awaited<ReturnType<typeof screenOriginmanReferenceWithWorker>>,
+  trajectory: Parameters<typeof screenOriginmanReferenceWithWorker>[0]['trajectory'],
+  composition?: OriginmanMotionProvenance,
+) {
+  if ('passed' in result && typeof result.passed === 'boolean') {
+    return { ...result, failureLocation: failureLocation(composition, result.firstFailedFrame) };
+  }
+  if (result.invalid && result.violation) {
+    const { frame, joint } = result.violation;
+    return {
+      passed: false,
+      trajectorySha256: originmanReferenceDigest(trajectory),
+      framesExpected: trajectory.joint_pos.length,
+      framesEvaluated: 0,
+      firstFailedFrame: frame,
+      ...(result.stanceProfile && { stanceProfile: result.stanceProfile }),
+      limitViolation: result.violation,
+      failureLocation: failureLocation(composition, frame),
+      message: `第 ${frame} 帧的 ${joint} 目标角度超出所选场景的执行器限位。`,
+    };
+  }
+  return undefined;
+}
+
 export function createPlatformWorkshopSessions() {
   const root = () => String(process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
   const experiments = createExperimentSessions({ root, getRun: getWorkshopRun });
@@ -180,21 +221,6 @@ export function registerSim2RealWorkshopRoutes(
           400,
         );
       }
-      const failureLocation = (frame: number | null) => {
-        if (!composition?.ranges.length || frame === null) return {};
-        const block = composition.ranges.findIndex(({ from, to }) => from < frame && frame <= to);
-        if (block >= 0) return { blockNumber: block + 1, motionId: composition.ranges[block].id };
-        const after = composition.ranges.findIndex(({ from }) => from >= frame);
-        return after > 0
-          ? {
-              betweenBlocks: true,
-              fromBlockNumber: after,
-              toBlockNumber: after + 1,
-              fromMotionId: composition.ranges[after - 1].id,
-              toMotionId: composition.ranges[after].id,
-            }
-          : { betweenBlocks: true };
-      };
       const selected = await getSim2RealComputeResourceSecret(
         String(request.body?.computeResourceId ?? ''),
         owner,
@@ -217,6 +243,7 @@ export function registerSim2RealWorkshopRoutes(
         runnerUrl: resource.runnerUrl,
         token: selected.runnerToken,
         accountId: owner ?? 'local-dev',
+        resourceId: resource.id,
         trajectory,
         stanceProfile: composition?.stanceProfile,
       }).catch(() => {
@@ -240,28 +267,13 @@ export function registerSim2RealWorkshopRoutes(
           409,
         );
       }
-      if (result.invalid) {
-        if (result.violation) {
-          const { frame, joint } = result.violation;
-          return {
-            result: {
-              passed: false,
-              trajectorySha256: originmanReferenceDigest(trajectory),
-              framesExpected: trajectory.joint_pos.length,
-              framesEvaluated: 0,
-              firstFailedFrame: frame,
-              ...(result.stanceProfile && { stanceProfile: result.stanceProfile }),
-              limitViolation: result.violation,
-              failureLocation: failureLocation(frame),
-              message: `第 ${frame} 帧的 ${joint} 目标角度超出所选场景的执行器限位。`,
-            },
-          };
-        }
-        throw new ExperimentError('ORIGINMAN_REFERENCE_SCREEN_INVALID', result.invalid, 422);
-      }
-      return {
-        result: { ...result, failureLocation: failureLocation(result.firstFailedFrame ?? null) },
-      };
+      const diagnosis = referenceScreenDiagnosis(result, trajectory, composition);
+      if (diagnosis) return { result: diagnosis };
+      throw new ExperimentError(
+        'ORIGINMAN_REFERENCE_SCREEN_INVALID',
+        result.invalid ?? '筛查未返回诊断。',
+        422,
+      );
     }),
   );
   router.post(

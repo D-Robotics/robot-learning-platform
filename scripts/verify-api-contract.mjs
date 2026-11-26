@@ -35,6 +35,7 @@ const runtimeModules = [
   ['server/routes/sim2real-agent-routes.ts', 'dist-server/server/routes/sim2real-agent-routes.js'],
   ['server/routes/sim2real-events-sse.ts', 'dist-server/server/routes/sim2real-events-sse.js'],
   ['server/sim2real/studio-login-relay.ts', 'dist-server/server/sim2real/studio-login-relay.js'],
+  ['server/sim2real/studio-plugin-auth.ts', 'dist-server/server/sim2real/studio-plugin-auth.js'],
   ['server/sim2real/standalone-adapters.ts', 'dist-server/server/sim2real/standalone-adapters.js'],
   // The standalone composition root owns a small set of API routes that are
   // intentionally outside the reusable routers (capability discovery and the
@@ -141,7 +142,10 @@ const { createSim2RealRouter, SIM2REAL_VERSIONED_API_PREFIX } = await import(
 const { createStudioLoginRelayRouter } = await import(
   path.join(root, 'dist-server/server/sim2real/studio-login-relay.js')
 );
-const { createDeviceBoardDetectRouter } = await import(
+const { createStudioPluginAuthRouter } = await import(
+  path.join(root, 'dist-server/server/sim2real/studio-plugin-auth.js')
+);
+const { createDeviceBoardDetectRouter, standaloneAuth } = await import(
   path.join(root, 'dist-server/server/sim2real/standalone-adapters.js')
 );
 const { createSim2RealAgentRouter } = await import(
@@ -157,6 +161,12 @@ const { createSim2RealWebApp } = await import(
 const legacyRouter = createSim2RealRouter({});
 const versionedRouter = createSim2RealRouter({}, { prefix: SIM2REAL_VERSIONED_API_PREFIX });
 const relayRouter = createStudioLoginRelayRouter();
+const pluginAuthRouter = createStudioPluginAuthRouter({
+  auth: standaloneAuth,
+  enabled: false,
+  basePath: '',
+  publicOrigin: undefined,
+});
 const boardDetectRouter = createDeviceBoardDetectRouter(undefined, {});
 const agentRouter = createSim2RealAgentRouter();
 const eventsLegacyRouter = createSim2RealEventsSseRouter({});
@@ -215,6 +225,7 @@ assert.deepEqual(
 const runtimeRoutes = new Set([
   ...versionedRoutes.map(([m, p]) => `${m} ${p}`),
   ...collectRoutes(relayRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
+  ...collectRoutes(pluginAuthRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(boardDetectRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...collectRoutes(agentRouter).map(([m, p]) => `${m} ${normalizeRoutePath(p)}`),
   ...sseVersionedShapes.map(([m, p]) => `${m} ${p}`),

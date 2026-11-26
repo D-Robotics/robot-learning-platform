@@ -35,6 +35,10 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+MAX_REFERENCE_FRAMES = 12_000
+MIN_MOTION_FRAMES = 2
+# A composition can repeat each of its 128 blocks up to eight times.
+MAX_COMPOSITION_SECTIONS = 128 * 8
 REFERENCE_DIGEST_VERSION = "originman-reference-f64be-v1"
 SOURCE_STANCE = "source-neutral-v1"
 ROLLOUT_STEPS = 4096
@@ -70,8 +74,8 @@ def validate_trajectory(value):
         raise ValueError("unsupported reference trajectory format or joint order")
     pos = np.asarray(value["joint_pos"], dtype=np.float64)
     vel = np.asarray(value["joint_vel"], dtype=np.float64)
-    if pos.ndim != 2 or pos.shape[1] != len(JOINTS) or not 50 <= len(pos) <= 12_000 or vel.shape != pos.shape:
-        raise ValueError("trajectory arrays must have the same [50..12000, 20] shape")
+    if pos.ndim != 2 or pos.shape[1] != len(JOINTS) or not HZ <= len(pos) <= MAX_REFERENCE_FRAMES or vel.shape != pos.shape:
+        raise ValueError(f"trajectory arrays must have the same [{HZ}..{MAX_REFERENCE_FRAMES}, 20] shape")
     for frames, limit in ((pos, PROFILE["trajectory"]["maxAbsRad"]), (vel, PROFILE["trajectory"]["maxSpeedRadPerS"])):
         if not np.isfinite(frames).all() or np.any(np.abs(frames) > limit) or np.any(frames[:, :2]):
             raise ValueError("reference joint values exceed limits or command the head")
@@ -308,13 +312,14 @@ def composition_ranges(training, frames):
                 or source.get("referenceMode") not in ("source-exact", "timing-preserved")):
             raise ValueError("invalid source-exact choreography provenance")
         return []
-    if not isinstance(ranges, list) or not 1 <= len(ranges) <= 90:
+    if not isinstance(ranges, list) or not 1 <= len(ranges) <= MAX_COMPOSITION_SECTIONS:
         raise ValueError("invalid reference choreography segments")
     previous = 0
     for item in ranges:
         if (not isinstance(item, dict) or not isinstance(item.get("id"), str) or
                 type(item.get("from")) is not int or type(item.get("to")) is not int or
-                not previous <= item["from"] < item["to"] <= frames):
+                not previous <= item["from"] < item["to"] <= frames or
+                item["to"] - item["from"] < MIN_MOTION_FRAMES):
             raise ValueError("invalid reference choreography frame boundaries")
         previous = item["to"]
     if ranges[0]["from"] != 0 or previous != frames:
@@ -322,7 +327,8 @@ def composition_ranges(training, frames):
     return ranges
 
 
-def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges):
+def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges,
+                     *, stop_when_passing):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
@@ -371,7 +377,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 best = (score, policy_sha, {**result, "selectedCheckpointSteps": learner.num_timesteps}, frames)
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
-            if result["qualityGatePassed"] and not ranges:
+            if stop_when_passing and result["qualityGatePassed"]:
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
@@ -424,7 +430,8 @@ def main():
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
-        bundle, output, trajectory, budget, num_envs, seed, env, ranges
+        bundle, output, trajectory, budget, num_envs, seed, env, ranges,
+        stop_when_passing=not provenance,
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"

@@ -1,0 +1,89 @@
+name: Studio universal plugin
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/studio-universal-plugin.yml'
+      - 'plugins/rdk-robot-learning-platform/**'
+      - 'scripts/package-platform-plugin*.mjs'
+      - 'scripts/portable-studio-setup*'
+      - 'scripts/verify-universal-studio-bundle.mjs'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: studio-universal-plugin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    outputs:
+      archive: ${{ steps.package.outputs.archive }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Verify exporter and build the universal package
+        id: package
+        run: |
+          node --test scripts/package-platform-plugin.test.mjs
+          mkdir -p "$RUNNER_TEMP/studio-runtimes"
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          import path from 'node:path';
+          import { pipeline } from 'node:stream/promises';
+          const manifest = JSON.parse(fs.readFileSync('plugins/rdk-robot-learning-platform/runtime-downloads.json'));
+          await Promise.all(['darwin-arm64', 'win32-x64'].map(async (target) => {
+            const { url } = manifest.targets[target];
+            const source = new URL(url);
+            const filename = path.posix.basename(source.pathname);
+            if (source.origin !== 'https://nodejs.org' || source.pathname !== '/dist/v' + manifest.version + '/' + filename) {
+              throw new Error('Unexpected Node runtime archive URL');
+            }
+            const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(90000) });
+            if (!response.ok) throw new Error('Node runtime download failed for ' + filename + ': ' + response.status);
+            await pipeline(response.body, fs.createWriteStream(path.join(process.env.RUNNER_TEMP, 'studio-runtimes', filename)));
+          }));
+          JS
+          npm run package:plugin -- --out-dir "$RUNNER_TEMP/studio-bundle" --studio-universal-runtime-dir "$RUNNER_TEMP/studio-runtimes"
+          version=$(node -p "require('./plugins/rdk-robot-learning-platform/plugin.json').version")
+          echo "archive=rdk-robot-learning-platform-${version}-studio-universal.zip" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: studio-universal-zip
+          path: ${{ runner.temp }}/studio-bundle/${{ steps.package.outputs.archive }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  install:
+    name: Install and run MCP (${{ matrix.target }})
+    needs: package
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: windows-latest, target: win32-x64, arch: x64 }
+          - { runner: macos-15, target: darwin-arm64, arch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          architecture: ${{ matrix.arch }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: studio-universal-zip
+          path: universal-plugin-artifact
+      - name: Exercise the native launcher, installed runtime, and Workshop MCP
+        env:
+          RDK_UNIVERSAL_ARCHIVE: universal-plugin-artifact/${{ needs.package.outputs.archive }}
+          RDK_UNIVERSAL_TARGET: ${{ matrix.target }}
+        run: node scripts/verify-universal-studio-bundle.mjs

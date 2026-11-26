@@ -1634,8 +1634,8 @@ test('reference track opens the correct platform mount and keeps result navigati
     arguments: { url: 'https://platform.test/robotics-learning/originman-reference.html' },
   });
   for (const [mode, expectedMessage] of [
-    ['preset', /预置舞蹈/],
-    ['blocks', /加入编排/],
+    ['preset', /预置舞蹈.*自动筛查/],
+    ['blocks', /加入编排.*自动筛查/],
     ['upload', /自己的 NPZ 或 JSON/],
   ]) {
     const result = (await call({ mode })).structuredContent;

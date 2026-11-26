@@ -4,6 +4,7 @@ import type {
   Sim2RealCheckpointRef,
   Sim2RealModelManifest,
   Sim2RealTrainingSpec,
+  Sim2RealRunMetrics,
   Sim2RealDemonstrations,
 } from '../../shared/sim2real.js';
 import {
@@ -174,6 +175,48 @@ export async function requestLocalTrainingStatus(input: {
  * Returns null for any transport failure, non-2xx, size anomaly, or digest
  * mismatch — staging must fail closed, never fall back to a guess.
  */
+type ReferenceVideo = NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['video']>;
+
+export async function requestLocalReferenceReplay(input: {
+  runnerUrl: string;
+  runnerToken: string;
+  accountId: string;
+  externalRunId: string;
+  start: boolean;
+}) {
+  const url = new URL(normalizeRunnerUrl(input.runnerUrl, { localHttp: true }));
+  const runnerPath = url.pathname.replace(/\/+$/, '').replace(/\/train$/, '');
+  url.pathname =
+    runnerPath + '/runs/' + encodeURIComponent(input.externalRunId) + '/reference-replay';
+  assertLocalRunnerToken(input.runnerUrl, input.runnerToken);
+  const response = await fetch(url, {
+    method: input.start ? 'POST' : 'GET',
+    redirect: 'error',
+    signal: AbortSignal.timeout(8_000),
+    headers: {
+      accept: 'application/json',
+      'x-sim2real-account': safeAccountId(input.accountId),
+      ...(input.runnerToken && { authorization: 'Bearer ' + input.runnerToken }),
+    },
+  });
+  if (response.status === 404) return { state: 'unavailable' } as const;
+  const value = (await response.json()) as {
+    ok?: boolean;
+    state?: string;
+    error?: string;
+    video?: ReferenceVideo;
+  };
+  if (response.status === 409 && value.error === 'reference_replay_busy')
+    return { state: 'busy' } as const;
+  if (response.status === 409) return { state: 'unavailable' } as const;
+  if (!response.ok || value.ok !== true) throw new Error('reference replay status unavailable');
+  if (value.state === 'completed' && value.video)
+    return { state: 'completed', video: value.video } as const;
+  if (value.state === 'idle' || value.state === 'rendering' || value.state === 'failed')
+    return { state: value.state } as const;
+  throw new Error('invalid reference replay status');
+}
+
 export async function fetchLocalRunArtifact(input: {
   /** The worker gates every /runs/:id route on the owning account. */
   accountId: string;
@@ -372,8 +415,8 @@ export async function fetchLocalRunTelemetry(input: {
  * Fetch a local-worker run's incremental engine log lines (GET
  * /runs/:id/logs?after=N). The worker numbers lines in arrival order and
  * bounds the ring, so this returns only the new tail plus cursor state.
- * Returns null for any transport failure or non-2xx — the log panel must
- * fail closed (show nothing new) rather than guessing at a gap.
+ * Distinguish a missing Worker job or log endpoint from a transient failure so
+ * the platform can guide recovery without sending the cursor to another Worker.
  */
 export async function fetchLocalRunLogs(input: {
   /** The worker gates every /runs/:id route on the owning account. */
@@ -384,12 +427,18 @@ export async function fetchLocalRunLogs(input: {
   runnerUrl?: string;
   runnerToken?: string;
   timeoutMs?: number;
-}): Promise<{
-  total: number;
-  retainedFrom: number;
-  truncated: boolean;
-  lines: { n: number; stream: string; text: string }[];
-} | null> {
+}): Promise<
+  | {
+      total: number;
+      retainedFrom: number;
+      truncated: boolean;
+      lines: { n: number; stream: string; text: string }[];
+    }
+  | 'job-missing'
+  | 'route-unavailable'
+  | 'worker-auth-rejected'
+  | null
+> {
   const accountId = safeAccountId(input.accountId);
   let runnerUrl: string;
   try {
@@ -409,7 +458,8 @@ export async function fetchLocalRunLogs(input: {
     const token = String(
       input.runnerToken ?? process.env.RDK_SIM2REAL_LOCAL_RUNNER_TOKEN ?? '',
     ).trim();
-    if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token)) return null;
+    if (localRunnerTokenRequired(runnerUrl) && !localRunnerTokenUsable(token))
+      return 'worker-auth-rejected';
     // Same /train-suffix convention as the artifact and telemetry fetches:
     // /runs/:id routes live at the worker root.
     const parsedRunner = new URL(runnerUrl);
@@ -430,7 +480,18 @@ export async function fetchLocalRunLogs(input: {
         signal: controller.signal,
       },
     );
-    if (!response.ok) return null;
+    if (response.status === 401 || response.status === 403) {
+      await response.body?.cancel().catch(() => {});
+      return 'worker-auth-rejected';
+    }
+    if (response.status === 404)
+      return (await readWorkerErrorCode(response)) === 'run_not_found'
+        ? 'job-missing'
+        : 'route-unavailable';
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => {});
+      return null;
+    }
     const payload: unknown = await response.json();
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
     const record = payload as Record<string, unknown>;
@@ -494,7 +555,7 @@ export class LocalEnginePreflightBusyError extends Error {
 
 export class LocalEnginePreflightUnsupportedError extends Error {}
 
-async function workerPreflightErrorCode(response: Response): Promise<string | undefined> {
+async function readWorkerErrorCode(response: Response): Promise<string | undefined> {
   const reader = response.body?.getReader();
   if (!reader) return undefined;
   const chunks: Uint8Array[] = [];
@@ -552,7 +613,7 @@ export async function requestLocalEnginePreflight(input: {
     signal: AbortSignal.timeout(55000),
   });
   if (!response.ok) {
-    const code = await workerPreflightErrorCode(response);
+    const code = await readWorkerErrorCode(response);
     if (
       (response.status === 404 && code === 'not_found') ||
       (response.status === 409 && code === 'engine_preflight_not_configured')
@@ -725,7 +786,7 @@ export async function requestOriginmanEnginePreflight(input: {
     signal: AbortSignal.timeout(55000),
   });
   if (!response.ok) {
-    const code = await workerPreflightErrorCode(response);
+    const code = await readWorkerErrorCode(response);
     if (
       (response.status === 404 && code === 'not_found') ||
       (response.status === 409 && code === 'engine_preflight_not_configured')

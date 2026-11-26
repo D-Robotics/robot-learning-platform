@@ -16,6 +16,7 @@ PROFILE = Path(__file__).resolve().parents[1] / (
 )
 ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,63}")
 ROUNDING_TOLERANCE = 1e-4
+MAX_REFERENCE_FRAMES = 12_000
 
 
 def load_trajectory(data, suffix, profile, *, source_exact=False):
@@ -37,8 +38,8 @@ def load_trajectory(data, suffix, profile, *, source_exact=False):
     pos = np.asarray(trajectory["joint_pos"], dtype=np.float64)
     vel = np.asarray(trajectory["joint_vel"], dtype=np.float64)
     minimum_frames = 50 if source_exact else 2
-    if pos.ndim != 2 or pos.shape[1] != 20 or not minimum_frames <= len(pos) <= 4500 or vel.shape != pos.shape:
-        raise ValueError(f"joint arrays must have the same [{minimum_frames}..4500, 20] shape")
+    if pos.ndim != 2 or pos.shape[1] != 20 or not minimum_frames <= len(pos) <= MAX_REFERENCE_FRAMES or vel.shape != pos.shape:
+        raise ValueError(f"joint arrays must have the same [{minimum_frames}..{MAX_REFERENCE_FRAMES}, 20] shape")
     limits = profile["trajectory"]
     speed_limit = limits["maxSpeedRadPerS"]
     velocity_tolerance = ROUNDING_TOLERANCE if suffix == ".npz" and not source_exact else 0

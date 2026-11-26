@@ -160,6 +160,7 @@ import {
   requestLocalTraining,
   requestLocalTrainingStatus,
   fetchLocalRunArtifact,
+  requestLocalReferenceReplay,
   isLocalRunnerConfigured,
   requestLocalTrainingCancel,
   requestLocalEnginePreflight,
@@ -180,6 +181,7 @@ import {
   screenOriginmanReferenceWithWorker,
   normalizeComputeRunnerUrl,
   resolvedTaskPack,
+  type Sim2RealRobogoRunResult,
 } from '../sim2real/robogo-runner.js';
 import { LOCAL_SIM2REAL_AUTH, type Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import {
@@ -196,7 +198,10 @@ import { registerSim2RealBoardStationRoutes } from './sim2real-board-station-rou
 import { registerSim2RealDeviceConnectionRoutes } from './sim2real-device-connection-routes.js';
 import { registerSim2RealWorkspaceRoutes } from './sim2real-workspace-routes.js';
 import { registerSim2RealExperimentRoutes } from './sim2real-experiment-routes.js';
-import { registerSim2RealWorkshopRoutes } from './sim2real-workshop-routes.js';
+import {
+  referenceScreenDiagnosis,
+  registerSim2RealWorkshopRoutes,
+} from './sim2real-workshop-routes.js';
 import { registerSim2RealAuditRoutes } from './sim2real-audit-routes.js';
 import { deviceConnectionAgentUrl } from '../sim2real/board-tunnel-manager.js';
 import {
@@ -726,7 +731,7 @@ export function workspacePackageVersion(
 }
 
 /** Shared deployments fail closed when no SSO owner is present. */
-function requestOwner(
+export function requestOwner(
   request: Request,
   response: Response,
   auth: Sim2RealAuthPort,
@@ -3263,6 +3268,16 @@ export function createSim2RealRouter(
     owner: string | undefined,
     input: { engine?: unknown; taskId?: unknown; computeResourceId?: unknown; device?: unknown },
   ): Promise<{ computeResourceId: string | null; report: Record<string, unknown> } | null> {
+    if (input.engine === ORIGINMAN_REFERENCE_ENGINE || input.taskId === ORIGINMAN_REFERENCE_TASK) {
+      sendApiError(
+        response,
+        409,
+        'SIM2REAL_REFERENCE_SCREEN_REQUIRED',
+        '舞蹈参考跟跳需要在所选 Worker 上筛查本次轨迹。请打开舞蹈 Workshop，选好动作和算力后点击筛查。',
+        { retryable: false, trainingSubmitted: false },
+      );
+      return null;
+    }
     const originman =
       input.taskId === 'originman-recovery' ||
       input.engine === 'originman-recovery-reflect' ||
@@ -3853,6 +3868,7 @@ export function createSim2RealRouter(
       }
       const evidence = await readWorkshopRunEvidence(run, owner);
       let current = evidence.run;
+      let workerQueue: Sim2RealRobogoRunResult['queue'];
       if (
         (run.backend === 'local' || run.backend === 'robogo') &&
         ['queued', 'running', 'cancelling'].includes(run.status) &&
@@ -3934,6 +3950,15 @@ export function createSim2RealRouter(
                 : {}),
             };
             current = (await updateSim2RealRun(run.id, update, owner)) ?? run;
+            if (
+              current.status === 'queued' &&
+              run.backend === 'local' &&
+              run.mock !== true &&
+              latest.mock !== true &&
+              latest.externalRunId === run.externalRunId
+            ) {
+              workerQueue = latest.queue;
+            }
             // The poll only runs while the ledger copy is queued/running, so a
             // completed status here is always the first observed completion:
             // pull the engine's evaluation telemetry into the replay pipeline
@@ -4007,6 +4032,7 @@ export function createSim2RealRouter(
       response.json({
         ok: true,
         artifactRetention: await getRunPolicyRetention(current, owner),
+        ...(workerQueue ? { queue: workerQueue } : {}),
         ...(evidence.workshopEvidenceIssue && {
           workshopEvidenceIssue: evidence.workshopEvidenceIssue,
         }),
@@ -4027,6 +4053,107 @@ export function createSim2RealRouter(
     requestOwner: (request, response) => requestOwner(request, response, auth),
     getRun: getSim2RealRun,
   });
+
+  const referenceReplay = wrapAsync(async (request, response) => {
+    const owner = requestOwner(request, response, auth);
+    if (owner === null) return;
+    noStore(response);
+    const run = await getSim2RealRun(String(request.params.id || ''), owner);
+    const originalMetrics = run?.metrics;
+    const evidence = originalMetrics?.originmanReference;
+    const accountId =
+      auth.resolvePrincipal(request)?.accountId ??
+      owner ??
+      (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+    if (
+      !accountId ||
+      !run?.externalRunId ||
+      run.relayAgentUrl ||
+      run.backend !== 'local' ||
+      run.taskId !== ORIGINMAN_REFERENCE_TASK ||
+      run.status !== 'completed' ||
+      run.mock !== false ||
+      run.training?.video === false ||
+      !originalMetrics ||
+      !evidence?.replay?.sha256 ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(run.externalRunId)
+    ) {
+      sendApiError(
+        response,
+        404,
+        'SIM2REAL_REFERENCE_REPLAY_UNAVAILABLE',
+        '当前账号没有可恢复的回放。',
+      );
+      return;
+    }
+    try {
+      const existing = verifiedDanceVideoReceipt(run);
+      if (
+        existing &&
+        (await loadDanceVideo(run, existing, owner, accountId)) &&
+        (await readSim2RealDanceVideo(existing.sha256, existing.sizeBytes))
+      ) {
+        response.json({ ok: true, state: 'completed' });
+        return;
+      }
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (!runner) {
+        response.json({ ok: true, state: 'unavailable' });
+        return;
+      }
+      const result = await requestLocalReferenceReplay({
+        ...runner,
+        accountId,
+        externalRunId: run.externalRunId,
+        start: request.method === 'POST',
+      });
+      if (result.state !== 'completed') {
+        response
+          .status(result.state === 'rendering' ? 202 : 200)
+          .json({ ok: true, state: result.state });
+        return;
+      }
+      // Select only the fields checked by the platform and only from the original runner.
+      const { file, sha256, sizeBytes, policySha256, sourceReplaySha256, fps, durationSeconds } =
+        result.video;
+      const video = {
+        file,
+        sha256,
+        sizeBytes,
+        policySha256,
+        sourceReplaySha256,
+        fps,
+        durationSeconds,
+      };
+      const metrics = { ...originalMetrics, originmanReference: { ...evidence, video } };
+      const candidate = { ...run, metrics };
+      const verified = verifiedDanceVideoReceipt(candidate);
+      if (
+        !verified ||
+        fps !== 50 ||
+        typeof durationSeconds !== 'number' ||
+        !Number.isFinite(durationSeconds) ||
+        durationSeconds <= 0 ||
+        durationSeconds > 241 ||
+        !(await loadDanceVideo(candidate, verified, owner, accountId)) ||
+        !(await readSim2RealDanceVideo(verified.sha256, verified.sizeBytes))
+      ) {
+        throw new Error('unverified recovered replay');
+      }
+      await updateSim2RealRun(run.id, { metrics }, owner);
+      response.json({ ok: true, state: 'completed' });
+    } catch (error) {
+      console.warn('[sim2real] reference replay recovery unavailable', redactInternalError(error));
+      sendApiError(
+        response,
+        503,
+        'SIM2REAL_REFERENCE_REPLAY_UNAVAILABLE',
+        '暂时无法确认原回放的生成状态，请稍后重试。',
+      );
+    }
+  });
+  router.get(api('/runs/:id/reference-replay'), referenceReplay);
+  router.post(api('/runs/:id/reference-replay'), referenceReplay);
 
   router.get(
     api('/runs/:id/dance-video'),
@@ -4473,7 +4600,7 @@ export function createSim2RealRouter(
         );
         return;
       }
-      const logs = await fetchLocalRunLogs({
+      const workerLogs = await fetchLocalRunLogs({
         accountId: workerAccount,
         externalRunId: run.externalRunId,
         after,
@@ -4484,6 +4611,7 @@ export function createSim2RealRouter(
             }
           : {}),
       });
+      const logs = typeof workerLogs === 'object' ? workerLogs : null;
       // Terminal job status includes bounded, scrubbed tails even on older
       // workers without a cursor log endpoint. Preserve the live cursor.
       const tail = run.failureDetail;
@@ -4503,6 +4631,18 @@ export function createSim2RealRouter(
           lines: [],
           ...(tail.stdoutTail && { stdoutTail: tail.stdoutTail }),
           ...(tail.stderrTail && { stderrTail: tail.stderrTail }),
+        });
+        return;
+      }
+      if (typeof workerLogs === 'string') {
+        const message = {
+          'job-missing': '原 Worker 已找不到本次任务的日志。请核对原任务目录和当前资源连接。',
+          'route-unavailable': '原 Worker 未提供日志读取接口。请核对其版本与日志保留设置。',
+          'worker-auth-rejected': '原 Worker 的日志读取认证失败。请核对原算力资源的连接凭据。',
+        }[workerLogs];
+        sendApiError(response, 409, 'SIM2REAL_RUN_LOGS_NOT_AVAILABLE', message, {
+          retryable: false,
+          details: { runId: run.id, reason: workerLogs },
         });
         return;
       }
@@ -5224,12 +5364,16 @@ export function createSim2RealRouter(
           runnerUrl: credentials.resource.runnerUrl,
           token: credentials.runnerToken,
           accountId: owner ?? 'local-dev',
+          resourceId: credentials.resource.id,
           trajectory: training.originmanReference.trajectory,
           stanceProfile: composition.stanceProfile,
         }).catch(() => null);
         if (!report || !('passed' in report) || !report.passed) {
           const unsupported = report?.unsupportedStance;
           const busy = report?.busy;
+          const screening =
+            report &&
+            referenceScreenDiagnosis(report, training.originmanReference.trajectory, composition);
           sendApiError(
             response,
             !report ? 503 : 409,
@@ -5242,8 +5386,10 @@ export function createSim2RealRouter(
                 ? '算力正在筛查另一条轨迹或检查环境。请稍后重新提交。'
                 : !report
                   ? 'Worker 未返回可核验的筛查结果。请检查连接后重试。'
-                  : '编排未通过物理筛查。请在跟跳页面筛查当前轨迹，定位失败帧后再提交。',
-            { retryable: !report || busy === true },
+                  : report.invalid && !screening
+                    ? report.invalid
+                    : '编排未通过物理筛查。请根据失败位置调整轨迹。',
+            { retryable: !report || busy === true, ...(screening && { screening }) },
           );
           return;
         }

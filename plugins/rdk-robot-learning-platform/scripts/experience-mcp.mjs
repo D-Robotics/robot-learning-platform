@@ -1348,7 +1348,7 @@ export function experienceProxy(
           '\n查询已知 Run 的留存、归档、ONNX/策略下载、制品可用性或已有回放时，第一步调用 rdk_training_status，传原 runId，展示 artifactRetention、links.policyDownload 和已核验的 links.replay。用户追问刚才那条 Run 时，在当前轮按需登记后重新查询，不用历史回执代替实时读取。只有用户明确要求等待正在运行的任务时才用 rdk_training_wait。已有结果查询不调用独立评测、验收、训练或渲染工具。\n' +
           '\n连接诊断以当前 RDK Robot Learning Platform 插件的 rdk_platform_status 回执为准。先核对返回的 baseUrl、health.ready、session.authenticated 和 canAccessWorkspace；需要版本时调用 rdk_plugin_status。工具目录和旧技能只说明入口，不能证明平台故障。仅在用户明确选择本机部署时检查本机端口或运行旧 CLI。云端连接下，本机 18102 无监听与平台状态无关。若宿主未暴露这些工具，说明当前对话未加载此连接，指引启用或重连插件；不要用旧技能、旧 MCP 或 shell 探针代替已配置的云端连接。仅咨询插件能力时给可用入口，具体工具数量以当前目录为准。' +
           '\n面向用户统一称为 RDK Robot Learning Platform（RDK 机器人学习平台）。介绍能力时先给课程、训练、评测与回放入口；仅在用户追问时展开底层服务、协议与部署细节。' +
-          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
+          '\n用户说“带我开启/开始 OriginMan Workshop”时，直接调用 rdk_workshop({intent:"new"})。在 Studio 通过 load_tools 查询「打开 Workshop」；旧宿主若未识别短名，使用完整名 mcp__rdk-robot-learning-platform__rdk_workshop。按回执导航，再展示 studentReply。如果只拿到旧课程目录，使用回执的绝对链接。127.0.0.1 可能是 MCP 内部转发地址，诊断网页必须依据插件配置的平台 URL。' +
           '\n用户问插件能做什么时，调用 rdk_platform_status 后直接使用 studentReply；仅在追问时展开工具名、数量、接口地址或设备门槛。' +
           '\n这是通用机器人学习插件。先按用户的机型与目标使用 rdk_learning_guide；打开工作台传 task:overview，强化学习或模仿学习有通用入口，只有明确选择课程时才使用 OriginMan 专用工具。开始新实验传 intent:new；查看结果传 intent:results 和原 Run；改参传 intent:retry、原 Run 与 changes，等确认再使用 nextArguments。Studio 优先用 studio_open_url 打开已验证的工作台链接，仍保留可点击地址。已打开不表示已播放。' +
           '\n' +
@@ -1612,9 +1612,9 @@ export function experienceProxy(
             studentReply: input.runId
               ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
               : {
-                  preset: '在右侧选择预置舞蹈，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  preset: '在右侧选择预置舞蹈，预览并选好算力后，可开始仿真训练。平台会自动筛查。',
                   blocks:
-                    '在右侧搜索动作并加入编排，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                    '在右侧搜索动作并加入编排，预览并选好算力后，可开始仿真训练。平台会自动筛查。',
                   upload:
                     '在右侧导入自己的 NPZ 或 JSON 轨迹，也可先加载示例体验。校验后可选择 Worker 开始仿真训练。',
                 }[input.mode ?? 'upload'],
@@ -1780,9 +1780,11 @@ export function experienceProxy(
               : await readRun(args.runId, signal);
             const run = value.run ?? value;
             const runId = run.id ?? run.runId;
-            const course = { 'originman-dance': 'dance', 'originman-recovery': 'recovery' }[
-              run.taskId
-            ];
+            const course = {
+              [REFERENCE_TRACKING_TASK]: 'dance',
+              'originman-dance': 'dance',
+              'originman-recovery': 'recovery',
+            }[run.taskId];
             if (
               !matchesRunIdentifier(args.runId, runId) ||
               !course ||
@@ -1998,7 +2000,18 @@ export function experienceProxy(
             danceFlow = null;
             confirmedDancePlans.clear();
           }
-          if (params.name === 'rdk_auth_switch_account') {
+          if (
+            ['rdk_auth_login', 'rdk_auth_switch_account', 'rdk_auth_status'].includes(
+              params.name,
+            ) &&
+            payload.verificationUrl &&
+            payload.userCode
+          ) {
+            const label =
+              params.name === 'rdk_auth_switch_account' ? '授权另一个账号' : '确认学习平台授权';
+            payload.studentReply = `[${label}](${payload.verificationUrl})。确认页面显示正确的账号后，输入连接码 **${payload.userCode}**，回来继续 Workshop。`;
+            payload.delivery = '把链接和连接码展示给学员。浏览器确认后，调用 rdk_auth_status。';
+          } else if (params.name === 'rdk_auth_switch_account') {
             const link = payload.verificationUrl;
             payload.studentReply = link
               ? `[授权另一个学习平台账号](${link})。在浏览器确认后，回来继续 Workshop。`
@@ -2147,11 +2160,12 @@ export function experienceProxy(
         }
         if (['rdk_originman_short_evaluate', 'rdk_originman_evaluate'].includes(params.name)) {
           const runId = payload.submission?.runId ?? payload.experiment?.evaluation?.runId;
-          workflow ??= {
-            contextId: params.arguments.contextId,
-            runId: payload.experiment?.training?.runId,
-          };
           if (runId) {
+            if (workflow?.contextId !== params.arguments.contextId)
+              workflow = {
+                contextId: params.arguments.contextId,
+                runId: payload.experiment?.training?.runId,
+              };
             workflow.evaluationRunId = runId;
             payload = {
               ...payload,

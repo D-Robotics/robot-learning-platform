@@ -2425,6 +2425,7 @@ function configuredSharedGpus(): ReadonlyMap<string, SharedGpu> {
             name: name.trim(),
             kind: 'local-gpu',
             source: 'server-runner',
+            classroomShared: true,
             runnerUrl: url,
             status: 'unknown',
             tokenConfigured: true,

@@ -1,3 +1,5 @@
+const FPS = 50;
+
 export function mountOriginmanMotion({ api, changed, initialMode, document = globalThis.document }) {
   const byId = (name) => document.getElementById('reference-' + name);
   const { Option } = document.defaultView;
@@ -80,9 +82,9 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
         input.value = String(value);
         if (!input.validity.valid) input.value = initialValue;
       }
-      if (blocks.length) draftStatus.textContent = '已恢复草稿。提交前请重新预览和筛查。';
+      if (blocks.length) draftStatus.textContent = '已恢复草稿。请重新预览后提交。';
       if (blocks.length !== saved.blocks.length) {
-        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览和筛查。';
+        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览后提交。';
       }
       renderSequence();
       if (mode.value === 'blocks') invalidate();
@@ -103,15 +105,19 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
     status.textContent = '';
     const count = blocks.reduce((sum, item) => sum + item.repeats, 0);
     const frames = blocks.reduce((sum, item) => sum + item.motion.frames * item.repeats, 0) +
-      Math.max(0, count - 1) * Math.max(0, Math.round(Number(transition.value) * 50) - 1);
+      Math.max(0, count - 1) * Math.max(0, Math.round(Number(transition.value) * FPS) - 1);
+    const maxSeconds = catalog?.limits?.maxSeconds;
+    const tooLong = Number.isFinite(maxSeconds) && maxSeconds > 0 && frames > maxSeconds * FPS;
+    const tooShort = count === 1 && frames < FPS;
+    const onlyPoses = count > 0 && blocks.every(({ motion }) => motion.poseOnly);
     estimate.textContent = mode.value === 'blocks' && count
-      ? count + ' 段 · 至少 ' + (frames / 50).toFixed(2) + ' 秒（以预览为准）' : '';
-    estimate.dataset.invalidDuration = String(frames > 4500 || (count === 1 && frames < 50) || (count > 0 && blocks.every(({ motion }) => motion.poseOnly)));
+      ? count + ' 段 · 至少 ' + (frames / FPS).toFixed(2) + ' 秒（以预览为准）' : '';
+    estimate.dataset.invalidDuration = String(tooLong || tooShort || onlyPoses);
     setPrepareState();
     if (mode.value === 'blocks' && count > 0) {
-      if (blocks.every(({ motion }) => motion.poseOnly)) status.textContent = '请搭配至少一个动态动作。';
-      else if (count === 1 && frames < 50) status.textContent = '至少需要 1 秒，请增加片段或重复次数。';
-      else if (frames > 4500) status.textContent = '超过 90 秒，请减少动作或重复次数。';
+      if (onlyPoses) status.textContent = '请搭配至少一个动态动作。';
+      else if (tooShort) status.textContent = '至少需要 1 秒，请增加片段或重复次数。';
+      else if (tooLong) status.textContent = '超过 ' + maxSeconds + ' 秒，请减少动作或重复次数。';
     }
     changed();
   }
@@ -319,6 +325,7 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
     },
     isUpload,
     submission: () => isUpload() ? undefined : submission,
+    previewFrames: () => submission ? preview.frames : undefined,
     setLocked(value) {
       if (locked === value) return;
       locked = value;

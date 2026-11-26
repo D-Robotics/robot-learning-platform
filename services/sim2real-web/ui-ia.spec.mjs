@@ -94,6 +94,11 @@ assert.match(
 );
 assert.match(
   html,
+  /<a[^>]*role="menuitem"[^>]*href="https:\/\/rdkstudio\.d-robotics\.cc\/ducklab-mcp\/plugins\/rdk-robot-learning-platform-studio-universal-latest\.zip"[^>]*download[^>]*>下载 Studio 学习插件<\/a>/,
+  'the workbench offers one Studio download for Windows and macOS',
+);
+assert.match(
+  html,
   /data-auth-method="account"[^>]*aria-selected="true"[^>]*tabindex="0"/,
   'the active SSO method tab must expose its selection and keyboard position',
 );
