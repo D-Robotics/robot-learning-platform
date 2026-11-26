@@ -10021,6 +10021,9 @@ body [data-view-section='station'] .station-device-manager > .panel-heading {
   margin-inline-start: 12px;
   color: var(--muted);
 }
+.station-entry-option:not([open]) > .station-entry-body {
+  display: none;
+}
 .station-entry-body {
   padding: 0 16px 16px;
 }

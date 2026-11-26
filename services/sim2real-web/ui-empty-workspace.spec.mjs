@@ -111,6 +111,10 @@ try {
   await visibleText('station-device-manager-note', '尚未连接设备');
   assert.equal(await id('station-notice').isVisible(), false);
   assert.equal(await id('station-device-host').isVisible(), false);
+  assert.equal(
+    await id('station-device-host').evaluate((field) => field.getClientRects().length),
+    0,
+  );
   await firstScreen('station-studio-entry');
   await firstScreen('station-address-entry');
   await capture('03-device-empty');
