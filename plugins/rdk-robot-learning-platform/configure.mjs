@@ -40,7 +40,11 @@ export function createMcpConfiguration({
         type: 'stdio',
         command: nodePath,
         args: [paths.join(root, 'scripts', 'experience-mcp.mjs')],
-        ...(studioPermissions && { permissions: { tools: { rdk_workshop: 'readonly' } } }),
+        ...(studioPermissions && {
+          permissions: {
+            tools: { rdk_workshop: 'readonly', rdk_originman_reference_track: 'readonly' },
+          },
+        }),
         env: {
           RDK_STUDIO_INHERIT_LOGIN: inheritStudioLogin ? '1' : '0',
           ...(courseResourceId ? { RDK_WORKSHOP_COMPUTE_RESOURCE_ID: courseResourceId } : {}),

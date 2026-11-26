@@ -218,11 +218,23 @@ def write_runtime(add, studio, directory):
     }), 0o100644)
 
 def write_studio_entries(add, studio):
+    commands = {}
     for item in studio['runtimes']:
         directory = 'mcp/runtime/'
         if studio['universal']:
             directory += item['target'] + '/'
         write_runtime(add, item, directory)
+        commands[item['target']] = './' + directory + item['binary']
+    # On older Studio versions the ordinary command remains usable on Apple Silicon
+    # and in single-target packages. Updated Studio selects the installed native path.
+    add('.mcp.json', json_bytes({'mcpServers': {studio['name']: {
+        'transport': 'stdio',
+        'command': next(iter(commands.values())),
+        'commandByPlatform': commands,
+        'args': ['./scripts/experience-mcp.mjs'],
+        'permissions': {'tools': {'rdk_workshop': 'readonly', 'rdk_originman_reference_track': 'readonly'}},
+        'env': {'RDK_SIM2REAL_MCP_BASE_URL': 'https://rdkstudio.d-robotics.cc/robotics-learning'},
+    }}}), 0o100644)
     if studio['universal']:
         platform = '此包适用于 Windows x64 和 Apple 芯片 Mac，已包含这两种机型的 Node.js 运行时。'
         launcher = 'Windows 双击 setup-studio-windows.cmd，macOS 双击 setup-studio-macos.command。安装器会选择本机架构的运行时。'
@@ -235,9 +247,9 @@ def write_studio_entries(add, studio):
         '# Studio 安装\n\n'
         + platform + '\n\n'
         '1. 解压 ZIP，打开 Studio。\n'
-        '2. 在扩展中心选择「添加 → 导入工具目录」，选中解压后的插件目录并启用插件。\n'
-        '3. ' + launcher + '安装器将配置 Studio 已导入的副本。\n'
-        '4. 新建对话检查学习平台状态。首次连接按浏览器提示登录。\n\n'
+        '2. 在扩展中心选择「添加 → 从目录导入插件」，选中解压后的插件目录。升级时选择覆盖安装。\n'
+        '3. 连接检查通过后，在对话中说「打开 Workshop」。首次访问账号数据按页面提示登录。\n\n'
+        '若早期 Studio 提示连接失败，' + launcher + '兼容安装器会核对 Studio 已导入的副本与连接。\n\n'
         '安装完成后，启动文件位于 Studio 的插件安装目录。解压来源可移走。'
         '如需停用此插件，也在 Studio 的 MCP 设置中停用机器人学习连接。\n'
     ).encode(), 0o100644)
@@ -252,7 +264,7 @@ def write_zip(archive, filename):
             inventory[name] = checksum(data)
         for entry in archive['entries']:
             name, source = entry['name'], Path(entry['source'])
-            if studio and name == root + 'FILES.sha256':
+            if studio and name in {root + 'FILES.sha256', root + '.mcp.json'}:
                 continue
             mode = entry.get('mode', source.stat().st_mode)
             if studio:

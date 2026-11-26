@@ -15,6 +15,7 @@ description: 用户说“带我开始 Workshop”“继续”“看看效果”�
 
 
 开始 Workshop 使用 `rdk_workshop({intent:"new"})` 打开舞蹈准备页。历史实验用原 `contextId` 查看结果。
+在 Studio 可用 `load_tools` 按「打开 Workshop」查找工具；若短名未匹配，加载 `mcp__rdk-robot-learning-platform__rdk_workshop`。明确要求动作组自由编排时，加载同一连接下的 `mcp__rdk-robot-learning-platform__rdk_originman_reference_track`，参数 `{"mode":"blocks"}`。
 
 本课程的教学边界见[舞蹈 Workshop 课程范围](../../references/workshop-course.md)。
 

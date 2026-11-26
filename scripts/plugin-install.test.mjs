@@ -127,7 +127,7 @@ test('fresh Studio installs use the connection name recognized by its learning t
   assert.equal(result.name, 'rdk-robot-learning-platform');
   assert.equal(Object.hasOwn(result.configuration.mcpServers[result.name], 'managedPlugin'), false);
   assert.deepEqual(result.configuration.mcpServers[result.name].permissions, {
-    tools: { rdk_workshop: 'readonly' },
+    tools: { rdk_workshop: 'readonly', rdk_originman_reference_track: 'readonly' },
   });
   const permissions = { default: 'approval', tools: { rdk_workshop: 'deny' } };
   const upgrade = mergeStudioConnection(

@@ -95,12 +95,22 @@ try {
   requireExit(extracted, 0);
   const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   const { version } = readJson(path.join(unpacked, 'plugin.json'));
-  assert.deepEqual(readJson(path.join(unpacked, '.mcp.json')).mcpServers, {});
+  const packaged = readJson(path.join(unpacked, '.mcp.json')).mcpServers[pluginName];
+  assert.equal(
+    packaged.commandByPlatform[target],
+    './mcp/runtime/' + target + '/' + (windows ? 'node.exe' : 'node'),
+  );
+  assert.deepEqual(packaged.args, ['./scripts/experience-mcp.mjs']);
   assert.match(requireExit(launchInstaller(), 2), /"installationState":"requires-action"/);
   assert.ok(!fs.existsSync(path.join(data, 'mcp.json')), 'No connection before host import');
 
   // The host importer copies the release and records its owned path separately.
-  fs.cpSync(unpacked, imported, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
+  if (windows) {
+    fs.cpSync(unpacked, imported, { recursive: true });
+  } else {
+    fs.mkdirSync(path.dirname(imported));
+    requireExit(run('/bin/cp', ['-cR', unpacked, imported]), 0);
+  }
   fs.writeFileSync(
     path.join(data, 'plugins-registry.json'),
     JSON.stringify({
@@ -111,6 +121,36 @@ try {
     server.once('error', reject).listen(0, '127.0.0.1', resolve),
   );
   const platformUrl = 'http://127.0.0.1:' + server.address().port + '/robotics-learning';
+  const direct = connectMcp({
+    command: path.resolve(imported, packaged.commandByPlatform[target]),
+    args: packaged.args.map((arg) => path.resolve(imported, arg)),
+    env: { ...env, ...packaged.env, RDK_SIM2REAL_MCP_BASE_URL: platformUrl },
+    timeoutMs: 15_000,
+  });
+  try {
+    const init = await direct.request('initialize', {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'Studio direct import fixture', version: '1.0.0' },
+    });
+    assert.equal(init.serverInfo.version, version);
+    direct.notify('notifications/initialized');
+    const { tools } = await direct.request('tools/list');
+    assert.ok(tools.some(({ name }) => name === 'rdk_workshop'));
+    const result = readToolResult(
+      await direct.request('tools/call', {
+        name: 'rdk_originman_reference_track',
+        arguments: { mode: 'blocks' },
+      }),
+    );
+    const workshop = new URL(result.studioNavigation.arguments.url);
+    assert.equal(workshop.origin, new URL(platformUrl).origin);
+    assert.equal(workshop.pathname, '/robotics-learning/originman-reference.html');
+    assert.equal(workshop.searchParams.get('mode'), 'blocks');
+    assert.ok(!fs.existsSync(path.join(data, 'mcp.json')), 'Direct import requires no setup file');
+  } finally {
+    await direct.close();
+  }
   const configuration = path.join(data, 'mcp.json');
   fs.writeFileSync(
     configuration,
@@ -118,7 +158,9 @@ try {
       mcpServers: { [pluginName]: { env: { RDK_SIM2REAL_MCP_BASE_URL: platformUrl } } },
     }),
   );
-  assert.match(requireExit(launchInstaller(), 0), /"installationState":"installed"/);
+  const installer = requireExit(launchInstaller(), 0);
+  assert.match(installer, /"installationState":"installed"/);
+  assert.match(installer, /Workshop 工具连接检查通过/);
   const connections = readJson(configuration).mcpServers;
   assert.deepEqual(Object.keys(connections), [pluginName]);
   const entry = connections[pluginName];
@@ -168,7 +210,14 @@ try {
       'Installer preview must not write',
     );
     console.log(
-      JSON.stringify({ target, nodeVersion, version, tools: tools.length, installedMcp: true }),
+      JSON.stringify({
+        target,
+        nodeVersion,
+        version,
+        tools: tools.length,
+        directImportMcp: true,
+        installedMcp: true,
+      }),
     );
   } finally {
     await client.close();

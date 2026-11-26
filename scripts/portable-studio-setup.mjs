@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { connectMcp, readToolResult } from './scripts/experience.mjs';
 
 const root = fs.realpathSync(path.dirname(fileURLToPath(import.meta.url)));
 const name = 'rdk-robot-learning-platform';
@@ -69,6 +70,41 @@ async function verifyImportedFiles(installed) {
   }
 }
 
+async function verifyWorkshopTools(installed, binary, version) {
+  const config = JSON.parse(readFile(path.join(installed, '.mcp.json'))).mcpServers[name];
+  const client = connectMcp({
+    command: binary,
+    args: [path.join(installed, 'scripts', 'experience-mcp.mjs')],
+    env: { ...process.env, ...config.env },
+    timeoutMs: 15_000,
+  });
+  try {
+    const initialized = await client.request('initialize', {
+      protocolVersion: '2025-03-26',
+      capabilities: {},
+      clientInfo: { name: 'Studio plugin installer', version },
+    });
+    client.notify('notifications/initialized');
+    const { tools } = await client.request('tools/list');
+    const status = readToolResult(
+      await client.request('tools/call', {
+        name: 'rdk_plugin_status',
+        arguments: {},
+      }),
+    );
+    if (
+      initialized.serverInfo?.version !== version ||
+      status.pluginRuntime?.version !== version ||
+      status.pluginRuntime?.loadedSourcesMatch !== true ||
+      !tools.some((tool) => tool.name === 'rdk_workshop')
+    ) {
+      throw Error('Studio 插件工具未通过连接检查，请核对导入的版本后重试。');
+    }
+  } finally {
+    await client.close();
+  }
+}
+
 try {
   const args = process.argv.slice(2);
   const options = new Map();
@@ -117,10 +153,18 @@ try {
       binary,
       [path.join(installed, 'setup.mjs'), '--host', 'studio', ...args],
       {
-        stdio: 'inherit',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        encoding: 'utf8',
+        timeout: 30_000,
       },
     );
     if (child.error) throw child.error;
+    if (child.status === 0 && child.stdout.includes('"installationState":"installed"')) {
+      await verifyWorkshopTools(installed, binary, manifest.version);
+      console.log('Workshop 工具连接检查通过。');
+    }
+    process.stdout.write(child.stdout ?? '');
+    process.stderr.write(child.stderr ?? '');
     process.exitCode = child.status ?? 1;
   }
 } catch (error) {

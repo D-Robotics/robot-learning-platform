@@ -115,12 +115,15 @@ for (const target of ['darwin-arm64', 'darwin-x64', 'win32-arm64', 'win32-x64'])
       '-c',
       String.raw`
 import hashlib, json, sys, zipfile
-generic, portable, root, binary = sys.argv[1:]
+generic, portable, root, binary, native = sys.argv[1:]
 with zipfile.ZipFile(generic) as archive:
     assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
     assert root + binary not in archive.namelist()
 with zipfile.ZipFile(portable) as archive:
-    assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
+    config = json.loads(archive.read(root + '.mcp.json'))['mcpServers'][root.rstrip('/')]
+    assert config['commandByPlatform'] == {native: './' + binary}
+    assert config['command'] == './' + binary
+    assert config['args'] == ['./scripts/experience-mcp.mjs']
     launcher = 'setup-studio-windows.cmd' if binary.endswith('.exe') else 'setup-studio-macos.command'
     assert root + launcher in archive.namelist()
     assert root + 'setup-studio.mjs' in archive.namelist()
@@ -137,6 +140,7 @@ with zipfile.ZipFile(portable) as archive:
       portable,
       `${name}/`,
       `mcp/runtime/${tool}`,
+      target,
     ]);
   });
 }
@@ -163,7 +167,13 @@ import hashlib, json, sys, zipfile
 portable, root = sys.argv[1:]
 with zipfile.ZipFile(portable) as archive:
     assert archive.testzip() is None
-    assert json.loads(archive.read(root + '.mcp.json')) == {'mcpServers': {}}
+    config = json.loads(archive.read(root + '.mcp.json'))['mcpServers'][root.rstrip('/')]
+    assert config['commandByPlatform'] == {
+        'darwin-arm64': './mcp/runtime/darwin-arm64/node',
+        'win32-x64': './mcp/runtime/win32-x64/node.exe',
+    }
+    assert config['args'] == ['./scripts/experience-mcp.mjs']
+    assert config['permissions'] == {'tools': {'rdk_workshop': 'readonly', 'rdk_originman_reference_track': 'readonly'}}
     guide = archive.read(root + 'STUDIO-SETUP.md').decode()
     for launcher in ['setup-studio-windows.cmd', 'setup-studio-macos.command']:
         assert root + launcher in archive.namelist()
