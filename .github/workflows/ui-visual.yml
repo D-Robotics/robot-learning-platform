@@ -93,10 +93,22 @@ jobs:
             RDK_SIM2REAL_LOCAL_RUNNER_URL=http://127.0.0.1:19090/train RDK_SIM2REAL_LOCAL_RUNNER_MODE=mock \
             npm run dev:sim2real > /tmp/journey-service.log 2>&1 &
           for i in $(seq 1 60); do
-            if curl -fsS http://127.0.0.1:18103/healthz > /dev/null; then exit 0; fi
+            if curl -fsS http://127.0.0.1:18103/readyz > /dev/null; then exit 0; fi
             sleep 1
           done
           echo "journey service did not come up; log follows"; cat /tmp/journey-service.log; exit 1
+      - name: Check the desktop evaluation and device empty states
+        env:
+          RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18103/
+          RDK_EMPTY_WORKSPACE_SCREENSHOTS: ${{ runner.temp }}/empty-workspace
+        run: node services/sim2real-web/ui-empty-workspace.spec.mjs
+      - name: Upload the desktop empty-workspace screenshots on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: empty-workspace
+          path: ${{ runner.temp }}/empty-workspace/
+          if-no-files-found: ignore
       - name: Run the training-journey sweep
         env:
           RDK_SIM2REAL_BASE_URL: http://127.0.0.1:18103/
