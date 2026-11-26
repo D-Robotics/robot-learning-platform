@@ -167,7 +167,7 @@ record(
 for (const [label, view, child, target] of [
   ['打开仿真与录制', 'simulate', 'simulate', '#simulator-title'],
   ['打开模型与契约', 'train', 'prepare', '#template-button'],
-  ['打开评测与回放', 'evaluate', 'evaluation-run', '#telemetry-title'],
+  ['打开评测与回放', 'evaluate', 'evaluation-run', '#evaluation-empty-import'],
   ['打开预检与发布', 'deploy', 'preflight', '#plan-button'],
 ]) {
   await openGuide();
