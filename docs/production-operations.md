@@ -120,6 +120,27 @@ RDK_SSH_ACCEPTANCE=1 node scripts/accept-studio-ssh-worker.mjs
 `acceptance-report.json`。结束时仅停止本次拥有的 Worker，私有安装目录和隔离台账留作证据。
 它不替代真实 Studio SSH 连接、GPU 或真实开发机部署验收。
 
+## OriginMan 环境包分发
+
+在平台服务器的私有目录放置已审核的 OriginMan 环境 ZIP，由运维账号执行：
+
+```bash
+sudo rdk-originman-publish /path/to/originman-env.zip
+```
+
+发布命令使用 [环境包分发脚本](../scripts/deploy-originman-environment.py)，在平台服务器
+校验包清单，通过指定的 SSH 连接把原始 ZIP 送到训练机。训练机用独立的接收账号重新验证
+压缩包和文件摘要，返回版本、训练场景摘要和标定摘要。两端使用按版本和摘要命名的目录保留
+历史发布，`current-package` 指向最后一次成功发布的环境包。对同一包重试会复用已验证的目录。
+
+运维安装接收端时，使用专用的 SSH 密钥，固定训练机主机密钥，在 `authorized_keys` 中启用
+`restrict` 和固定命令 `deploy-originman-environment.py --root <私有目录> receive`。
+平台端用 `publish --ssh-config <私有配置>` 指向该连接，压缩包与配置均位于 Web 根目录之外。
+
+`current-package` 用于环境包分发。训练 Worker 注册原生环境前需要补齐训练运行时及实际
+使用的参考轨迹，并在隔离环境验证模型接口、短训、导出和回放。按训练引擎的配置切换与验收
+流程启用新环境。已完成 Run 的产物继续通过原记录追溯。
+
 ## 认证配置（studio-cookie 嫁接 · web-cloud 部署）
 
 `/sim2real` 挂在 `rdkstudio.d-robotics.cc` 同域路径下，认证**嫁接 Studio 的
