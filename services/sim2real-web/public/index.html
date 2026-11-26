@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=61" />
+    <link rel="stylesheet" href="./app.css?v=63" />
     <link rel="stylesheet" href="./originman-scene.css?v=1" />
   </head>
   <body>
@@ -1696,9 +1696,17 @@
                   <input
                     id="record-search"
                     type="search"
-                    placeholder="搜索任务、Run、模型、状态或设备"
+                    placeholder="搜索任务、运行编号、模型或状态"
                     aria-label="搜索记录"
                   />
+                </div>
+                <div class="records-recent" id="records-recent" hidden>
+                  <div class="records-recent-copy">
+                    <span class="small-note">最近完成的运行</span>
+                    <strong id="records-recent-title"></strong>
+                    <span class="small-note" id="records-recent-meta"></span>
+                  </div>
+                  <button class="button button-primary button-small" id="records-recent-open" type="button">查看本次结果</button>
                 </div>
                 <div class="history-list" id="history-list">
                   <div class="empty-state">还没有运行记录。先打开仿真或发起一次训练。</div>
@@ -2366,9 +2374,9 @@
     -->
     <script defer src="./telemetry-core.js?v=duck-lab-32"></script>
     <script defer src="./run-inspector-core.js?v=2"></script>
-    <script defer src="./run-inspector.js?v=3"></script>
+    <script defer src="./run-inspector.js?v=4"></script>
     <script defer src="./training-plans.js?v=8"></script>
-    <script defer src="./app.js?v=duck-lab-91"></script>
+    <script defer src="./app.js?v=duck-lab-92"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-20"></script>

@@ -290,6 +290,41 @@ try {
   await locator('run-detail-dialog').waitFor({ state: 'visible' });
   assert.match(await locator('run-detail-dialog').innerText(), new RegExp(run.id));
   record('the homepage opens the same recent Run', true);
+
+  await locator('run-detail-close').click();
+  await page.locator('.nav-item[data-view-target="records"]').click();
+  assert.match(await locator('records-recent-meta').innerText(), new RegExp(run.id.slice(0, 8)));
+  await locator('records-recent-open').click();
+  assert.match(await locator('run-detail-dialog').innerText(), new RegExp(run.id));
+  await locator('run-detail-close').click();
+  await page.locator('[data-record-tab="run"]').click();
+  await locator('record-search').fill(run.id);
+  assert.equal(await locator('records-recent').isVisible(), false);
+  const row = locator('history-list').locator('.history-row');
+  assert.equal(await row.count(), 1);
+  assert.equal(await row.getAttribute('data-record-id'), run.id);
+  await row.click();
+  const detail = locator('run-detail-dialog');
+  await detail.getByRole('button', { name: '制品', exact: true }).click();
+  assert.equal(
+    await locator('run-result-artifact').evaluate((node) => node === document.activeElement),
+    true,
+  );
+  assert.equal(await detail.getByRole('button', { name: '下载 ONNX' }).count(), starter ? 1 : 0);
+  if (!starter) {
+    assert.match(
+      await detail.getByRole('region', { name: '回放' }).innerText(),
+      /还没有可加载的回放/,
+    );
+    assert.match(
+      await detail.getByRole('region', { name: '评测' }).innerText(),
+      /演示运行|还没有评测结果/,
+    );
+  }
+  await page.keyboard.press('Escape');
+  assert.equal(await detail.isVisible(), false);
+  assert.equal(writeRequests.length, 1, 'opening history details never submits training');
+  record('recent completion and exact Run search open the same scoped results', true);
 } catch (error) {
   await screenshot('failure').catch(() => {});
   record('desktop training journey', false, error.stack || error.message);

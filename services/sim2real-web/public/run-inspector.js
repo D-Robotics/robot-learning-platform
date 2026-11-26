@@ -113,6 +113,12 @@
         this.pause();
         this.seek(Number(this.scrub.value));
       });
+      this.scrub.addEventListener('keydown', (event) => {
+        if (event.key !== 'Home' && event.key !== 'End') return;
+        event.preventDefault();
+        this.pause();
+        this.seek(event.key === 'Home' ? 0 : this.limit);
+      });
       this.panes = node('div', 'run-inspector-panes');
       this.append(
         this.heading,
@@ -177,6 +183,10 @@
 
     updateMode(remount = false) {
       const compare = this.options.mode === 'compare';
+      const fixed = this.options.fixedRun === true;
+      this.heading.hidden = fixed;
+      this.note.hidden = fixed;
+      this.toolbar.hidden = fixed;
       this.second.wrapper.hidden = !compare;
       this.heading.textContent = compare ? '两 Run 同步对照' : '单 Run 诊断';
       this.note.textContent = compare
@@ -206,10 +216,13 @@
         this.fetchJson(path, signal),
         this.fetchJson(path + '/replay', signal),
       ]);
+      const run = detail.run || detail;
+      const replyRunId = this.options.fixedRun ? replay.runId : replay.runId ?? runId;
+      if (run.id !== runId || replyRunId !== runId)
+        throw new Error('响应的运行编号与当前记录不一致，无法加载回放。');
       const prepared = core.prepareFrames(replay.frames);
       if (!prepared.frames.length)
         throw new Error(`Run ${runId} 没有含有效时间戳的原始遥测，不能绘制诊断。`);
-      const run = detail.run || detail;
       const summary = replay.replay || {};
       // /replay returns provenance inside its replay summary. Keep an explicit
       // fresh rejection instead of inheriting a previously attested Run row.
@@ -278,7 +291,7 @@
         return true;
       } catch (error) {
         if (generation === this.generation && error.name !== 'AbortError')
-          this.status.textContent = `加载失败：${error.message}。保留上次已加载数据。`;
+          this.status.textContent = `加载失败：${error.message}。${this.tracks.length ? '保留上次已加载数据。' : ''}`;
         return false;
       } finally {
         if (generation === this.generation) {
