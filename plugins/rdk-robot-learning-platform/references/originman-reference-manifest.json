@@ -2,16 +2,16 @@
   "schemaVersion": 1,
   "modelId": "originman-reference-workshop",
   "displayName": "OriginMan · 参考轨迹跟跳",
-  "version": "ppo-reference-v1",
+  "version": "ppo-reference-v2",
   "robot": {
     "id": "originman",
     "variant": "legs"
   },
   "contract": {
-    "id": "custom-policy-originman-reference-v1",
+    "id": "custom-policy-originman-reference-v2",
     "robotId": "originman",
     "jointCount": 20,
-    "observationSize": 96,
+    "observationSize": 78,
     "actionSize": 18,
     "controlHz": 50,
     "physicsTimestepSeconds": 0.001,
@@ -20,6 +20,10 @@
       {
         "name": "projected_gravity_and_body_gyro",
         "size": 6
+      },
+      {
+        "name": "beat_phase_phrase_and_bpm",
+        "size": 5
       },
       {
         "name": "joint_position_error",
@@ -34,12 +38,12 @@
         "size": 18
       },
       {
-        "name": "reference_joint_velocity",
-        "size": 18
+        "name": "choreography_slot",
+        "size": 8
       },
       {
-        "name": "previous_residual_action",
-        "size": 18
+        "name": "recording_progress_and_final_hold",
+        "size": 5
       }
     ]
   },
@@ -60,6 +64,6 @@
   ],
   "metadata": {
     "source": "Existing hash-verified OriginMan MuJoCo worker bundle.",
-    "notes": "Simulation-only reference trajectory tracking PPO with 96 observations, 18 residual joint commands and 50 Hz control."
+    "notes": "Simulation-only recorded-motion tracking PPO with 78 observations, 18 residual joint commands and 50 Hz control."
   }
 }

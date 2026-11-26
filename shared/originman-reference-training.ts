@@ -3,7 +3,7 @@ export { originmanReferenceCalibration };
 
 export const ORIGINMAN_REFERENCE_TASK = 'originman-reference-track';
 export const ORIGINMAN_REFERENCE_ENGINE = 'originman-reference-ppo';
-export const ORIGINMAN_REFERENCE_CONTRACT = 'custom-policy-originman-reference-v1';
+export const ORIGINMAN_REFERENCE_CONTRACT = 'custom-policy-originman-reference-v2';
 export const ORIGINMAN_REFERENCE_JOINTS = originmanReferenceCalibration.robot.jointOrder;
 const { fps, maxAbsRad, maxSpeedRadPerS } = originmanReferenceCalibration.trajectory;
 const ROUNDING_TOLERANCE = 1e-4;

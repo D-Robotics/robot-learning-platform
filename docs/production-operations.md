@@ -120,6 +120,14 @@ RDK_SSH_ACCEPTANCE=1 node scripts/accept-studio-ssh-worker.mjs
 `acceptance-report.json`。结束时仅停止本次拥有的 Worker，私有安装目录和隔离台账留作证据。
 它不替代真实 Studio SSH 连接、GPU 或真实开发机部署验收。
 
+## OriginMan 舞蹈独立评测场景
+
+给 `RDK_ORIGINMAN_DANCE_EVAL_BUNDLE_ROOT` 配置私有素材目录。子目录按
+`model/scene.xml` 的完整 SHA-256 命名，每个目录包含完整模型、网格、模型清单和
+`reference.npy`。平台按 Run 台账保存的场景摘要选择并验证素材，历史配置
+`RDK_ORIGINMAN_DANCE_EVAL_BUNDLE` 也须匹配该摘要。保留旧 Run 依赖的场景版本，
+以便服务升级后继续复评。同一场景可以供多个账号读取，策略文件和评测结果仍按账号归属。
+
 ## OriginMan 环境包分发
 
 在平台服务器的私有目录放置已审核的 OriginMan 环境 ZIP，由运维账号执行：

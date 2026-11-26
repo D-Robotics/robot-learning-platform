@@ -20,6 +20,7 @@ import {
 } from '../../shared/originman-workshop.js';
 import { registerOriginmanClassroomRoutes } from './originman-classroom-routes.js';
 import { registerOriginmanSimulatorRoutes } from './originman-simulator-routes.js';
+import legacyReferenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-legacy-manifest.json' with { type: 'json' };
 import referenceManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-manifest.json' with { type: 'json' };
 import {
   ORIGINMAN_REFERENCE_ENGINE,
@@ -2443,7 +2444,9 @@ function verifiedDanceVideoReceipt(run: Sim2RealRunRecord) {
   return { sha256: video.sha256, sizeBytes: video.sizeBytes, externalRunId: run.externalRunId };
 }
 
-const referenceModelManifest = validateSim2RealManifest(referenceManifest).manifest;
+const referenceModelManifests = [referenceManifest, legacyReferenceManifest].map(
+  (manifest) => validateSim2RealManifest(manifest).manifest,
+);
 
 export function createSim2RealRouter(
   deps: { runOnDevice?: RunOnDevice; auth?: Sim2RealAuthPort } = {},
@@ -5218,11 +5221,14 @@ export function createSim2RealRouter(
       }
       if (taskId === ORIGINMAN_REFERENCE_TASK) {
         if (
-          !referenceModelManifest ||
-          !isDeepStrictEqual(model.manifest.contract, referenceModelManifest.contract) ||
-          !isDeepStrictEqual(model.manifest.robot, referenceModelManifest.robot) ||
-          !isDeepStrictEqual(model.manifest.simulator, referenceModelManifest.simulator) ||
-          !isDeepStrictEqual(model.manifest.artifacts, referenceModelManifest.artifacts)
+          !referenceModelManifests.some(
+            (manifest) =>
+              manifest &&
+              isDeepStrictEqual(model.manifest.contract, manifest.contract) &&
+              isDeepStrictEqual(model.manifest.robot, manifest.robot) &&
+              isDeepStrictEqual(model.manifest.simulator, manifest.simulator) &&
+              isDeepStrictEqual(model.manifest.artifacts, manifest.artifacts),
+          )
         ) {
           sendApiError(
             response,

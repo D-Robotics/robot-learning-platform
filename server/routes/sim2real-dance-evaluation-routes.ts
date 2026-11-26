@@ -12,6 +12,28 @@ const execute = promisify(execFile);
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const sha256 = /^[a-f0-9]{64}$/;
 const gate = 'originman-dance-squat-descent-ascent-v1';
+
+export async function resolveOriginmanDanceEvaluationBundle(
+  expectedSceneSha256: string,
+  registry: string | undefined,
+  fallback: string | undefined,
+) {
+  if (!sha256.test(expectedSceneSha256)) return null;
+  const candidates = [
+    ...(registry ? [path.join(registry, expectedSceneSha256)] : []),
+    ...(fallback ? [fallback] : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const scene = await readFile(path.join(candidate, 'model', 'scene.xml'));
+      if (digest(scene) === expectedSceneSha256) return candidate;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    }
+  }
+  return null;
+}
 const inFlight = new Map<string, Promise<void>>();
 const evaluator = fileURLToPath(
   new URL('../../engines/originman-dance-ppo/evaluate_policy.py', import.meta.url),
@@ -119,9 +141,19 @@ export function registerSim2RealDanceEvaluationRoutes(router: Router, deps: Depe
         return;
       }
       const python = process.env.RDK_ORIGINMAN_DANCE_EVAL_PYTHON;
-      const bundle = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE;
-      if (!python || !bundle) {
+      const registry = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE_ROOT;
+      const fallback = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE;
+      if (!python || (!registry && !fallback)) {
         response.status(503).json({ ok: false, message: '平台尚未配置独立舞蹈评测运行环境。' });
+        return;
+      }
+      const bundle = await resolveOriginmanDanceEvaluationBundle(
+        scope.source.sceneSha256,
+        registry,
+        fallback,
+      );
+      if (!bundle) {
+        response.status(409).json({ ok: false, message: '平台缺少这条训练记录对应的原仿真场景。' });
         return;
       }
       let work = inFlight.get(scope.key);

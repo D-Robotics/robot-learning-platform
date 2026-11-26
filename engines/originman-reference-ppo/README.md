@@ -18,8 +18,15 @@ the source environment.
 
 The adapter first runs the same trajectory through a zero-residual controller,
 both with the reference calibration and with the existing scene parameters.
-Then PPO learns reference-conditioned residual commands. The result policy
-takes 96 values and emits 18 normalized corrections in the tracked joint order.
+Then PPO learns reference-conditioned residual commands. New runs use the version 2 contract. The policy receives 78 values and emits
+18 normalized corrections in the tracked joint order at 50 Hz. The observation
+includes body orientation and gyro, the beat clock, joint angles and velocities,
+reference joint offsets, and progress through the recording. The reference is
+the base target and the policy supplies bounded residual offsets. Each recording
+uses choreography slot zero, so longer compositions do not change the policy
+shape. Version 1 retains its 96→18 layout and controller for existing work.
+The delivered analytical-reference checkpoint is evaluated with its original
+78→18 engine and scene.
 The evaluator runs the exported ONNX on the same reference; completion, tilt
 below 32° and absolute terminal yaw below 5° determine the gate. The page also
 reports mean tracking error. An ONNX is downloadable for completed simulation
