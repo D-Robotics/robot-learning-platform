@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=10';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=11';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   anotherWorkshopWorker, freshWorkshopWorkerLoad, workshopWorkerReady,
@@ -27,6 +27,7 @@ const workerSuggestion = byId('reference-worker-suggestion');
 const screenCurrent = byId('reference-screen-current');
 const screenFiles = byId('reference-screen-files');
 const screenCancel = byId('reference-screen-cancel');
+const screenDetails = byId('reference-screen-details');
 const screenStatus = byId('reference-screen-status');
 const screenResults = byId('reference-screen-results');
 const exampleButton = byId('reference-example');
@@ -62,7 +63,10 @@ async function api(path, body, idempotencyKey, signal) {
   if (!response.ok || !value?.ok) {
     if (response.status === 401) throw Error('请先登录机器人学习平台，再刷新此页。');
     if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
-    throw Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。');
+    throw Object.assign(
+      Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。'),
+      { code: value?.code ?? value?.error?.code, retryable: value?.retryable },
+    );
   }
   return value;
 }
@@ -113,25 +117,19 @@ function showBudgetHint() {
 
 function refresh() {
   const editing = submitting || preparing || Boolean(screening);
-  const uploaded = motion.isUpload();
   const ready = Boolean(currentReference());
   const key = currentScreenKey();
   const passed = screenings.get(key);
   const failed = passed === false;
-  const needsScreen = !uploaded && ready && passed !== true;
-  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed || needsScreen;
-  submit.textContent = submitting ? '正在提交…' : '开始仿真训练';
+  submit.disabled = editing || checking || !ready || !selectedWorkerReady() || failed;
+  submit.textContent = submitting ? '正在校验并提交…' : '开始仿真训练';
   if (!screening && displayedScreenKey !== key) {
     screenResults.replaceChildren();
     screenStatus.textContent = passed === true ? '当前轨迹已在所选 Worker 通过筛查。'
       : failed ? '当前轨迹曾未通过筛查，请调整后复查。' : '';
     displayedScreenKey = key;
   }
-  const blocker = byId('reference-screen-blocker');
-  blocker.hidden = !failed && !(needsScreen && selectedWorkerReady());
-  blocker.textContent = failed
-    ? '当前轨迹未通过所选 Worker 的筛查。请调整轨迹或重新筛查后再提交。'
-    : '预置和自由编排需在所选 Worker 通过筛查后才能提交。';
+  byId('reference-screen-blocker').hidden = !failed;
   motion.setLocked(editing || checking);
   file.disabled = editing || !calibration;
   appendFile.disabled = editing || !clips.length || clips.length >= MAX_REFERENCE_CLIPS;
@@ -435,7 +433,7 @@ byId('reference-form').addEventListener('submit', async (event) => {
   const reference = currentReference();
   const passed = screenings.get(currentScreenKey());
   if (submitting || checking || preparing || screening || !selectedWorkerReady() || !reference ||
-      passed === false || (!motion.isUpload() && passed !== true)) return;
+      passed === false) return;
   submitting = true;
   refresh();
   showError(trainingError);
@@ -462,6 +460,9 @@ byId('reference-form').addEventListener('submit', async (event) => {
     url.searchParams.set('runId', runId);
     location.assign(url.href);
   } catch (cause) {
+    if (cause.code === 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED' && cause.retryable === false) {
+      screenDetails.open = true;
+    }
     showError(trainingError, cause.message);
   } finally {
     submitting = false;

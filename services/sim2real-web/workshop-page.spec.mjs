@@ -1056,20 +1056,55 @@ test('reference choreography submit errors stay visible when trajectory import i
   assert.equal(trainingError.closest('[hidden]'), null);
 });
 
+function referencePageFixture(t, page, url, fetchImpl) {
+  const { window } = new JSDOM(page, { url });
+  const navigations = [];
+  const globals = {
+    document: window.document,
+    location: {
+      href: window.location.href,
+      search: window.location.search,
+      assign: (value) => navigations.push(value),
+    },
+    Option: window.Option,
+    Event: window.Event,
+    fetch: fetchImpl,
+  };
+  const original = Object.fromEntries(
+    Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+  );
+  for (const [key, value] of Object.entries(globals))
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  t.after(() => {
+    for (const [key, descriptor] of Object.entries(original)) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+    window.close();
+  });
+  return {
+    window,
+    navigations,
+    get: (name) => window.document.getElementById('reference-' + name),
+  };
+}
+
+const readyReferenceWorker = {
+  id: 'classroom',
+  name: 'Classroom GPU',
+  source: 'server-runner',
+  status: 'online',
+  mock: false,
+  cuda: true,
+  engines: ['originman-reference-ppo'],
+};
+
 test('reference choreography keeps an eligible linked Worker and never substitutes a rejected selection', async (t) => {
   const page = await fs.readFile(
     new URL('./public/originman-reference.html', import.meta.url),
     'utf8',
   );
-  const ready = {
-    id: 'classroom',
-    name: 'Classroom GPU',
-    source: 'server-runner',
-    status: 'online',
-    mock: false,
-    cuda: true,
-    engines: ['originman-reference-ppo'],
-  };
+  const ready = readyReferenceWorker;
   const incomplete = { ...ready, id: 'offline', status: 'offline' };
   const starter = { ...ready, id: 'starter', engines: ['starter-ppo'] };
   const expected = [
@@ -1083,7 +1118,6 @@ test('reference choreography keeps an eligible linked Worker and never substitut
     await t.test(id || 'no preselection', async (testContext) => {
       const url = new URL('https://platform.test/course/originman-reference.html');
       if (id) url.searchParams.set('computeResourceId', id);
-      const { window } = new JSDOM(page, { url });
       const fixtures = {
         'originman-reference': {
           calibration: { robot: { jointOrder: [], massKg: 1 }, source: {}, servoMap: [] },
@@ -1091,32 +1125,13 @@ test('reference choreography keeps an eligible linked Worker and never substitut
         'compute-resources': { computeResources: resources },
         'originman-motion/catalog': { motions: [], presets: [] },
       };
-      const globals = {
-        document: window.document,
-        location: window.location,
-        Option: window.Option,
-        Event: window.Event,
-        fetch: async (target) => {
-          const endpoint = target.pathname.split('/api/v1/duck/')[1];
-          assert.ok(fixtures[endpoint], 'Unexpected request to ' + endpoint);
-          return Response.json({ ok: true, ...fixtures[endpoint] });
-        },
-      };
-      const original = Object.fromEntries(
-        Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
-      );
-      for (const [key, value] of Object.entries(globals))
-        Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
-      testContext.after(() => {
-        for (const [key, descriptor] of Object.entries(original)) {
-          if (descriptor) Object.defineProperty(globalThis, key, descriptor);
-          else delete globalThis[key];
-        }
-        window.close();
+      const { window, get } = referencePageFixture(testContext, page, url, async (target) => {
+        const endpoint = target.pathname.split('/api/v1/duck/')[1];
+        assert.ok(fixtures[endpoint], 'Unexpected request to ' + endpoint);
+        return Response.json({ ok: true, ...fixtures[endpoint] });
       });
       await import('./public/originman-reference-page.mjs?worker-preselection=' + id);
       await settle();
-      const get = (name) => window.document.getElementById('reference-' + name);
       const select = get('worker');
       const hint = get('worker-hint');
       assert.equal(select.value, selected);
@@ -1128,6 +1143,185 @@ test('reference choreography keeps an eligible linked Worker and never substitut
         select.dispatchEvent(new window.Event('change'));
         assert.doesNotMatch(hint.textContent, /原先指定的算力/);
       }
+    });
+  }
+});
+
+test('preset and free choreography submit a verified preview directly and keep it on a screening rejection', async (t) => {
+  const page = await fs.readFile(
+    new URL('./public/originman-reference.html', import.meta.url),
+    'utf8',
+  );
+  const digest = 'a'.repeat(64);
+  const catalog = {
+    presets: [
+      { id: 'original', displayName: '原版舞蹈', seconds: 4, referenceMode: 'source-exact' },
+    ],
+    motions: [{ id: 'bow', displayName: '鞠躬', category: '上肢', frames: 120 }],
+  };
+  for (const mode of ['preset', 'blocks']) {
+    await t.test(mode, async (context) => {
+      const requests = [];
+      const runs = [];
+      let manualScreens = 0;
+      const stanceProfile = mode === 'preset' ? 'source-neutral-v1' : undefined;
+      const composition =
+        mode === 'preset'
+          ? { presetId: 'original' }
+          : { blocks: [{ id: 'bow', repeats: 2 }], bpm: 116, transitionSeconds: 0.4 };
+      const rejection =
+        mode === 'preset'
+          ? '算力正在筛查另一条轨迹，请稍后重试。'
+          : '编排未通过物理筛查，请调整当前轨迹。';
+      const url =
+        'https://platform.test/course/originman-reference.html?mode=' +
+        mode +
+        '&computeResourceId=classroom';
+      const { window, get, navigations } = referencePageFixture(
+        context,
+        page,
+        url,
+        async (target, options) => {
+          const route = target.pathname.split('/api/v1/duck/')[1];
+          const body = options.body ? JSON.parse(options.body) : undefined;
+          requests.push({ route, body });
+          if (route === 'runs') {
+            runs.push([body, options.headers]);
+            return runs.length === 1
+              ? Response.json(
+                  { ok: false, error: 'ORIGINMAN_REFERENCE_SCREEN_REQUIRED', message: rejection },
+                  { status: 409 },
+                )
+              : Response.json({ ok: true, run: { id: 'same-workshop-run' } }, { status: 201 });
+          }
+          if (route === 'originman-reference/screen') {
+            manualScreens++;
+            const passed = manualScreens === 2;
+            return Response.json({
+              ok: true,
+              result: {
+                passed,
+                trajectorySha256: digest,
+                stanceProfile,
+                maxTiltDeg: passed ? 12 : 33,
+                framesExpected: 200,
+                framesEvaluated: passed ? 200 : 92,
+                firstFailedFrame: passed ? null : 92,
+              },
+            });
+          }
+          const fixtures = {
+            'originman-reference': {
+              draftScope: 'b'.repeat(64),
+              calibration: { robot: { jointOrder: [], massKg: 1 }, source: {}, servoMap: [] },
+            },
+            'compute-resources': { computeResources: [readyReferenceWorker] },
+            'originman-motion/catalog': catalog,
+            'originman-motion/preview': {
+              preview: {
+                trajectorySha256: digest,
+                stanceProfile,
+                frames: 200,
+                seconds: 4,
+                beats: 8,
+                joints: [{ name: '肩关节', min: 0, max: 0.2, values: [0, 0.2] }],
+              },
+            },
+            'originman-reference/model': { modelId: 'reference-model' },
+          };
+          assert.ok(fixtures[route], 'Unexpected request to ' + route);
+          return Response.json({ ok: true, ...fixtures[route] });
+        },
+      );
+      await import('./public/originman-reference-page.mjs?direct-screen-submit=' + mode);
+      await settle();
+
+      const submit = get('submit');
+      assert.equal(get('worker').value, readyReferenceWorker.id);
+      assert.equal(submit.disabled, true, 'preview is required');
+      const input = (field, value) => {
+        field.value = value;
+        field.dispatchEvent(new window.Event('input'));
+      };
+      if (mode === 'blocks') {
+        get('motion-add').click();
+        input(get('motion-sequence').querySelector('input'), '2');
+        input(get('motion-bpm'), '116');
+      }
+      get('envs').value = '4';
+      get('motion-prepare').click();
+      await settle();
+      const preview = get('motion-result');
+      const error = get('training-error');
+      assert.equal(preview.hidden, false);
+      assert.equal(submit.disabled, false, 'manual screening is optional');
+      submit.click();
+      await settle();
+      assert.equal(manualScreens, 0);
+      assert.equal(runs.length, 1);
+      assert.equal(error.hidden, false);
+      assert.equal(error.textContent, rejection);
+      assert.equal(preview.hidden, false, 'keep the prepared trajectory');
+      assert.equal(submit.disabled, false, 'server rejection does not clear the retry');
+      assert.equal(get('worker').value, readyReferenceWorker.id);
+      assert.equal(get('envs').value, '4');
+      assert.equal(navigations.length, 0);
+      if (mode === 'blocks') {
+        assert.equal(get('motion-sequence').querySelector('input').value, '2');
+        assert.equal(get('motion-bpm').value, '116');
+        get('screen-current').click();
+        await settle();
+        assert.equal(
+          submit.disabled,
+          true,
+          'a current manual failure is displayed and blocks submission',
+        );
+        get('screen-current').click();
+        await settle();
+        assert.equal(submit.disabled, false, 'a successful optional rescreen clears the failure');
+      }
+      submit.click();
+      await settle();
+
+      assert.deepEqual(
+        requests.filter(({ route }) => route === 'originman-motion/preview'),
+        [{ route: 'originman-motion/preview', body: composition }],
+      );
+      assert.equal(runs.length, 2);
+      assert.deepEqual(
+        runs[1],
+        runs[0],
+        'retry preserves the exact payload and idempotency header',
+      );
+      assert.ok(runs[0][1]['Idempotency-Key']);
+      assert.equal(runs[0][1]['X-RDK-Reference-Trajectory'], '1');
+      assert.deepEqual(runs[0][0], {
+        requestedVia: 'workbench',
+        modelId: 'reference-model',
+        computeResourceId: 'classroom',
+        backend: 'local',
+        taskId: 'originman-reference-track',
+        label: 'OriginMan · 参考轨迹跟跳',
+        training: {
+          profile: 'smoke',
+          algorithm: 'ppo',
+          engine: 'originman-reference-ppo',
+          video: true,
+          maxIterations: 2,
+          numEnvs: 4,
+          originmanReference: {
+            composition,
+            expectedTrajectorySha256: digest,
+            ...(stanceProfile && { expectedStanceProfile: stanceProfile }),
+            trainingSteps: 8192,
+            seed: 7,
+          },
+        },
+      });
+      assert.equal(error.hidden, true);
+      assert.deepEqual(navigations, [
+        'https://platform.test/course/originman-reference-run.html?runId=same-workshop-run',
+      ]);
     });
   }
 });
@@ -1191,7 +1385,7 @@ test('free choreography restores only the matching account draft and needs a fre
   );
   assert.equal(restored.get('motion-bpm').value, '118');
   assert.equal(restored.get('motion-transition').value, '0.6');
-  assert.match(restored.get('motion-draft-status').textContent, /已恢复.*重新预览和筛查/);
+  assert.equal(restored.get('motion-draft-status').textContent, '已恢复草稿。请重新预览后提交。');
   assert.equal(restored.editor.submission(), undefined);
   assert.equal(restored.get('motion-prepare').disabled, false);
 

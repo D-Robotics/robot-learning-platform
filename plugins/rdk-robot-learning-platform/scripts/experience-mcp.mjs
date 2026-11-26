@@ -1612,9 +1612,9 @@ export function experienceProxy(
             studentReply: input.runId
               ? '打开右侧查看这条跟跳 Run 的评测、回放和 ONNX 下载。'
               : {
-                  preset: '在右侧选择预置舞蹈，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                  preset: '在右侧选择预置舞蹈，预览并选好算力后，可开始仿真训练。平台会自动筛查。',
                   blocks:
-                    '在右侧搜索动作并加入编排，预览后选择 Worker 并筛查，通过后可开始仿真训练。',
+                    '在右侧搜索动作并加入编排，预览并选好算力后，可开始仿真训练。平台会自动筛查。',
                   upload:
                     '在右侧导入自己的 NPZ 或 JSON 轨迹，也可先加载示例体验。校验后可选择 Worker 开始仿真训练。',
                 }[input.mode ?? 'upload'],

@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-11"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=motion-12"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -110,9 +110,9 @@
             <p id="reference-budget-hint" role="status" hidden></p>
             <p id="reference-worker-hint" role="status"></p>
             <p id="reference-worker-suggestion-panel" hidden><button id="reference-worker-suggestion" type="button"></button></p>
-            <details id="reference-screen-details" class="experiment-details" open>
-              <summary>训练前物理筛查</summary>
-              <p>用所选 Worker 检查关节限位和仿真稳定性。筛查与本次配方及所选 Worker 绑定。</p>
+            <details id="reference-screen-details" class="experiment-details">
+              <summary>提前筛查或定位问题</summary>
+              <p>训练前会自动检查轨迹。这里也可以提前查看关节超限和首个失败帧。</p>
               <p><button id="reference-screen-current" type="button" disabled>筛查当前轨迹</button></p>
               <p id="reference-screen-file-control"><label for="reference-screen-files">批量筛查轨迹（最多 8 个文件）</label>
                 <input id="reference-screen-files" type="file" accept=".npz,.json" multiple disabled /></p>

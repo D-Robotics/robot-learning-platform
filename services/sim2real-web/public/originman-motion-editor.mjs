@@ -80,9 +80,9 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
         input.value = String(value);
         if (!input.validity.valid) input.value = initialValue;
       }
-      if (blocks.length) draftStatus.textContent = '已恢复草稿。提交前请重新预览和筛查。';
+      if (blocks.length) draftStatus.textContent = '已恢复草稿。请重新预览后提交。';
       if (blocks.length !== saved.blocks.length) {
-        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览和筛查。';
+        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览后提交。';
       }
       renderSequence();
       if (mode.value === 'blocks') invalidate();
