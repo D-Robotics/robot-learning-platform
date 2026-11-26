@@ -4166,15 +4166,43 @@ function recordKindLabel(record) {
   return mode ? `${type} · ${mode}` : type;
 }
 
+function runRecordTitle(run) {
+  return run.training?.originmanDance?.title || ACTION_TASKS[run.taskId]?.label ||
+    runTaskLabel(run) || run.modelId || '运行';
+}
+
+function runRecordTime(run) {
+  return run.finishedAt || run.createdAt || '';
+}
+
 function renderHistory() {
   const root = $('history-list');
   if (!root) return;
   const query = state.recordsQuery.trim().toLowerCase();
-  const records = recordCollection()
+  const collection = recordCollection();
+  const latest = !query && ['all', 'run'].includes(state.recordsTab)
+    ? collection.reduce((recent, record) => {
+        if (record.recordType !== 'run' || record.status !== 'completed') return recent;
+        return !recent || String(runRecordTime(record)) > String(runRecordTime(recent)) ? record : recent;
+      }, null)
+    : null;
+  const recent = $('records-recent');
+  if (recent) recent.hidden = !latest;
+  if (latest) {
+    setText('records-recent-title', runRecordTitle(latest));
+    setText('records-recent-meta', [latest.modelId, formatDate(runRecordTime(latest)),
+      'Run ' + latest.id.slice(0, 8), latest.mock ? '协议演示' :
+        latest.evaluation?.replay?.source === 'demo-fixture' ? '演示样例' : ''].filter(Boolean).join(' · '));
+    $('records-recent-open').onclick = () => openRecordDetails(latest);
+  }
+  const records = collection
     .filter((record) => state.recordsTab === 'all' || record.recordType === state.recordsTab)
     .filter((record) => {
       if (!query) return true;
       return [
+        record.id,
+        record.recordType === 'run' && 'Run ' + record.id,
+        record.runId,
         record.kind,
         recordKindLabel(record),
         record.recordType === 'run' && runTaskLabel(record),
@@ -4191,6 +4219,8 @@ function renderHistory() {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(query));
     })
+    .sort((a, b) => String(b.recordType === 'run' ? runRecordTime(b) : b.createdAt || '')
+      .localeCompare(String(a.recordType === 'run' ? runRecordTime(a) : a.createdAt || '')))
     .slice(0, 30);
   setText(
     'records-count',
@@ -4212,7 +4242,7 @@ function renderHistory() {
         ? '还没有运行记录。先校验契约或打开浏览器仿真。'
         : '还没有运行记录。先登记模型契约，再发起本地或 GPU 训练。';
     root.innerHTML = query
-      ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试模型名、状态或后端，或清空筛选查看全部。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
+      ? '<div class="empty-state records-empty"><strong>没有匹配的记录</strong><span>试试任务名、运行编号、模型或状态，或清空搜索查看当前分类。</span><button type="button" class="button button-ghost button-small" data-empty-action="clear-search">清空搜索</button></div>'
       : `<div class="empty-state records-empty"><strong>${escapeHtml(emptyHint)}</strong><span>每条记录都会关联当前任务、模型和时间，可从这里打开详情或进入下一步。</span><div class="records-empty-actions"><button type="button" class="button button-primary button-small" data-empty-action="simulate">打开仿真录制</button><button type="button" class="button button-ghost button-small" data-empty-action="train">去发起训练</button></div></div>`; // escape-audit:allow emptyHint has been escaped via escapeHtml above
     root.querySelectorAll('[data-empty-action]').forEach((button) => button.addEventListener('click', () => {
       const action = button.dataset.emptyAction;
@@ -4228,6 +4258,7 @@ function renderHistory() {
     row.dataset.recordId = record.id;
     row.dataset.recordType = record.recordType;
     const status = String(record.status || 'unknown');
+    const isRun = record.recordType === 'run';
     const mockRun = record.recordType === 'run' && record.mock === true;
     const syntheticRun =
       record.recordType === 'run' && record.evaluation?.replay?.source === 'demo-fixture';
@@ -4245,19 +4276,20 @@ function renderHistory() {
         : '';
     row.innerHTML =
       '<span class="history-time">' +
-      escapeHtml(formatDate(record.createdAt)) +
+      escapeHtml(formatDate(isRun ? runRecordTime(record) : record.createdAt)) +
       '</span><span class="history-kind">' +
       escapeHtml(
         recordKindLabel(record),
       ) +
       '</span><span class="history-summary">' +
-      escapeHtml((record.recordType === 'run' && runTaskLabel(record)) || record.summary || record.modelId || '') +
+      escapeHtml(isRun ? runRecordTitle(record) : record.summary || record.modelId || '') +
       (physicsChip
         ? '<span class="history-physics">' + escapeHtml(physicsChip) + '</span>'
         : '') +
       (sceneChip
         ? '<span class="history-physics">' + escapeHtml(sceneChip) + '</span>'
         : '') +
+      (isRun ? '<span class="history-run-id">Run ' + escapeHtml(record.id.slice(0, 8)) + '</span>' : '') +
       '</span><span class="history-status history-status-' +
       escapeHtml(status) +
       '">' +
@@ -4382,9 +4414,8 @@ function formatMetricNumber(value, digits) {
   return SimTelemetryCore.formatMetricNumber(value, digits);
 }
 
-function renderRunMetricCards(record) {
-  const metrics = record.metrics || {};
-  const cards = RUN_METRIC_CARDS.filter(([key]) => metrics[key] != null).map(
+function renderRunMetricCards(metrics, definitions = RUN_METRIC_CARDS) {
+  const cards = definitions.filter(([key]) => metrics[key] != null).map(
     ([key, label, format]) =>
       '<div class="run-metric-card' +
       (key === 'fallRate' && Number(metrics.fallRate) > 0.2 ? ' is-warn' : '') +
@@ -4397,9 +4428,9 @@ function renderRunMetricCards(record) {
   );
   if (!cards.length) return '';
   return (
-    '<div><strong class="run-detail-block-title">指标</strong><div class="run-metric-grid">' +
+    '<div class="run-metric-grid">' +
     cards.join('') +
-    '</div></div>'
+    '</div>'
   );
 }
 
@@ -4416,10 +4447,213 @@ function renderRunMetricsRaw(record) {
   );
 }
 
+const RUN_RESULT_METRIC_KEYS = new Set([
+  'contractValid', 'successRate', 'evaluationEpisodes', 'meanReturn', 'fallRate',
+  'reward', 'episodeLength', 'controlLatencyMs', 'validationChunkMse',
+]);
+const RUN_RESULT_METRICS = RUN_METRIC_CARDS.filter(([key]) => RUN_RESULT_METRIC_KEYS.has(key));
+const RUN_DIAGNOSTIC_METRICS = RUN_METRIC_CARDS.filter(([key]) => !RUN_RESULT_METRIC_KEYS.has(key));
+const RECORDED_VIDEO_TASKS = new Set(['originman-reference-track', 'originman-dance', 'originman-recovery']);
+
+function runResultSection(id, title) {
+  const section = retrainingElement('section', 'run-result-section');
+  const heading = retrainingElement('h3', 'run-detail-block-title', title);
+  heading.id = id;
+  heading.tabIndex = -1;
+  section.setAttribute('aria-labelledby', id);
+  section.append(heading);
+  return section;
+}
+
+function renderRecordEvaluation(section, run) {
+  const demo = run.mock || run.evaluation?.replay?.source === 'demo-fixture';
+  const metrics = demo
+    ? { contractValid: run.metrics?.contractValid }
+    : run.metrics || {};
+  const cards = renderRunMetricCards(metrics, RUN_RESULT_METRICS);
+  const gate = !demo && run.taskEvaluation?.qualityGate;
+  const evaluation = run.evaluation;
+  if (typeof gate?.passed === 'boolean') {
+    section.append(retrainingElement('strong', gate.passed ? 'run-result-pass' : 'run-result-fail',
+      gate.passed ? '评测质量门通过' : '评测质量门未通过'));
+    for (const reason of gate.errors || []) section.append(retrainingElement('p', 'small-note', reason));
+  }
+  if (cards) {
+    section.insertAdjacentHTML('beforeend', cards); // escape-audit:allow renderRunMetricCards escapes all fields
+    if (demo) section.append(retrainingElement('p', 'small-note', '演示运行，仅展示契约状态。'));
+  }
+  if (evaluation?.evaluatedAt) {
+    const source = demo ? '演示遥测' : evaluation.replay?.attested ? '来源已验证' : '来源未验证';
+    section.append(retrainingElement('p', 'small-note',
+      `遥测评测 · ${evaluation.sampleCount ?? 0} 条样本 · ${source} · ${formatDate(evaluation.evaluatedAt)}`));
+  }
+  if (!cards && !evaluation?.evaluatedAt && typeof gate?.passed !== 'boolean') {
+    section.append(retrainingElement('p', 'small-note', '这次运行还没有评测结果。'));
+  }
+}
+
+function renderRecordReplay(section, run, signal) {
+  const available = canOpenRunReplay(run) || (run.status === 'completed' && !run.mock);
+  const hasVideoPage = RECORDED_VIDEO_TASKS.has(run.taskId);
+  const note = retrainingElement('p', 'small-note',
+    available ? '查看这次运行保存的仿真画面或遥测采样。' : '这次运行还没有可加载的回放。');
+  note.setAttribute('role', 'status');
+  section.append(note);
+  if (hasVideoPage) {
+    const link = retrainingElement('a', 'button button-ghost button-small', '打开本次任务报告');
+    link.href = recordedRunLink(run);
+    section.append(link);
+  }
+  if (!available) return;
+
+  const button = retrainingElement('button', 'button button-ghost button-small', '加载本次回放');
+  button.type = 'button';
+  section.append(button);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    note.textContent = '正在读取本次回放…';
+    const path = '/runs/' + encodeURIComponent(run.id);
+    try {
+      const detail = await request('/sim2real' + path, { signal });
+        if (signal.aborted) return;
+      if (detail?.run?.id !== run.id) throw new Error('响应的运行编号与当前记录不一致');
+      if (hasVideoPage && detail.run.links?.danceVideo) {
+        const video = document.createElement('video');
+        video.controls = true;
+        video.preload = 'metadata';
+        video.setAttribute('aria-label', '本次仿真回放');
+        video.addEventListener('error', () => {
+          video.remove();
+          note.textContent = '仿真视频暂时无法播放，请重试或打开本次任务报告。';
+          button.hidden = false;
+        });
+        section.append(video);
+        video.src = apiPath('/sim2real' + path + '/dance-video');
+        note.textContent = '本次仿真回放';
+        button.hidden = true;
+        return;
+      }
+      const inspector = document.createElement('rdk-run-inspector');
+      section.append(inspector);
+      inspector.configure({
+        fixedRun: true,
+        runs: [run],
+        manifests: Object.fromEntries((state.overview?.models || []).map((model) => [model.id, model.manifest])),
+        requestJson: (url, options) => url === path ? detail : request('/sim2real' + url, options),
+      });
+      const loaded = await inspector.load(run.id);
+      if (signal.aborted) return;
+      if (!loaded) {
+        const message = inspector.status.textContent;
+        inspector.remove();
+        note.textContent = message;
+        return;
+      }
+      note.textContent = '本次遥测回放';
+      button.hidden = true;
+    } catch (error) {
+      if (!signal.aborted) note.textContent = friendlyError(error, '暂时无法加载回放，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+function renderRecordArtifact(section, run, signal) {
+  const artifact = run.artifact;
+  if (!artifact) {
+    section.append(retrainingElement('p', 'small-note', '这次运行还没有制品。'));
+    return;
+  }
+  const format = String(artifact.format || '').toUpperCase();
+  const meta = [format, artifact.sizeBytes == null ? '' : formatBytes(artifact.sizeBytes),
+    artifact.sha256 && 'SHA-256 ' + artifact.sha256].filter(Boolean);
+  section.append(retrainingElement('strong', '', format === 'ONNX' ? '策略模型' : '运行制品'),
+    retrainingElement('p', 'run-result-metadata small-note', meta.join(' · ')));
+  if (artifact.artifactRef) section.append(retrainingElement('p', 'run-result-metadata small-note', artifact.artifactRef));
+  const note = retrainingElement('p', 'small-note');
+  note.setAttribute('role', 'status');
+  if (run.status !== 'completed' || run.mock || run.backend !== 'local' || !run.externalRunId ||
+      format !== 'ONNX' || !/^[a-f0-9]{64}$/.test(artifact.sha256 || '')) {
+    note.textContent = '当前制品仅提供元数据。';
+    section.append(note);
+    return;
+  }
+  const button = retrainingElement('button', 'button button-ghost button-small', '下载 ONNX');
+  button.type = 'button';
+  section.append(button, note);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    note.textContent = '正在读取本次策略文件…';
+    try {
+      const response = await fetch(apiPath('/sim2real/runs/' + encodeURIComponent(run.id) + '/artifact'), {
+        credentials: 'same-origin', signal,
+      });
+      if (response.status === 401 || (response.headers.get('content-type') || '').includes('text/html')) {
+        setAuthGate(null);
+        throw new Error('登录已过期，请重新登录。');
+      }
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.message || '暂时无法下载制品，请重试。');
+      }
+      if (response.headers.get('X-Artifact-Sha256') !== artifact.sha256) {
+        throw new Error('制品摘要与本次运行不一致。');
+      }
+      const blob = await response.blob();
+      if (signal.aborted) return;
+      const href = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = href;
+      link.download = 'policy-' + run.id + '.onnx';
+      section.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 1000);
+      note.textContent = '已开始下载本次策略文件。';
+    } catch (error) {
+      if (!signal.aborted) note.textContent = friendlyError(error, '暂时无法下载制品，请重试。');
+    } finally {
+      button.disabled = false;
+    }
+  });
+}
+
+let recordDetailController;
+
+function mountRunResult(body, run, signal) {
+  const metadata = retrainingElement('p', 'run-result-metadata small-note',
+    [run.modelId, run.finishedAt ? '完成于 ' + formatDate(run.finishedAt) : '创建于 ' + formatDate(run.createdAt),
+      'Run ' + run.id].filter(Boolean).join(' · '));
+  const nav = retrainingElement('div', 'run-result-nav');
+  nav.setAttribute('role', 'group');
+  nav.setAttribute('aria-label', '运行结果');
+  const evaluation = runResultSection('run-result-evaluation', '评测');
+  const replay = runResultSection('run-result-replay', '回放');
+  const artifact = runResultSection('run-result-artifact', '制品');
+  for (const section of [evaluation, replay, artifact]) {
+    const heading = section.firstElementChild;
+    const button = retrainingElement('button', 'button button-ghost button-small', heading.textContent);
+    button.type = 'button';
+    button.addEventListener('click', () => heading.focus());
+    nav.append(button);
+  }
+  renderRecordEvaluation(evaluation, run);
+  renderRecordReplay(replay, run, signal);
+  renderRecordArtifact(artifact, run, signal);
+  const details = retrainingElement('details', 'run-result-technical');
+  const technical = retrainingElement('div', 'run-result-technical-body');
+  technical.append(...body.childNodes);
+  details.append(retrainingElement('summary', '', '运行参数与诊断'), technical);
+  body.append(metadata, nav, evaluation, replay, artifact, details);
+}
+
 function openRecordDetails(record) {
   const dialog = $('run-detail-dialog');
   const body = $('run-detail-body');
   if (!dialog || !body) return;
+  recordDetailController?.abort();
+  recordDetailController = new AbortController();
   const isRun = record.recordType === 'run';
   const isArtifact = record.recordType === 'artifact';
   const isTelemetry = record.recordType === 'telemetry';
@@ -4499,7 +4733,7 @@ function openRecordDetails(record) {
   setText(
     'run-detail-title',
     isRun
-      ? '运行详情'
+      ? runRecordTitle(record)
       : isArtifact
         ? '制品详情'
         : isTelemetry
@@ -4539,7 +4773,7 @@ function openRecordDetails(record) {
     escapeHtml(record.placeholder ? record.detail : record.summary || '没有附加说明。') +
     '</div>' +
     (isRun && record.metrics && !syntheticRun
-      ? renderRunMetricCards(record) + renderRunMetricsRaw(record)
+      ? renderRunMetricCards(record.metrics, RUN_DIAGNOSTIC_METRICS) + renderRunMetricsRaw(record)
       : '') +
     (isRun && runProgressPoints(record).length
       ? '<div class="run-detail-live-chart"><strong class="run-detail-block-title">训练曲线（引擎回报）</strong>' +
@@ -4550,23 +4784,6 @@ function openRecordDetails(record) {
       ? '<div><strong class="run-detail-block-title">Checkpoint</strong><pre class="run-detail-code">' +
         escapeHtml(JSON.stringify(record.checkpoint, null, 2)) +
         '</pre></div>'
-      : '') +
-    (isRun && record.artifact
-      ? '<div><strong class="run-detail-block-title">平台导出制品</strong>' +
-        '<div class="run-artifact-summary"><span class="artifact-state is-ready">' +
-        escapeHtml(String(record.artifact.format || 'model').toUpperCase()) +
-        '</span><span>' +
-        escapeHtml(record.artifact.artifactRef || 'artifact:// 未提供') +
-        '</span>' +
-        (record.artifact.sizeBytes != null
-          ? '<span>' + escapeHtml(formatBytes(record.artifact.sizeBytes)) + '</span>'
-          : '') +
-        (record.artifact.sha256
-          ? '<span>SHA-256 ' + escapeHtml(shortDigest(record.artifact.sha256)) + '</span>'
-          : '') +
-        '<a class="button button-ghost button-small" href="' +
-        apiPath('/sim2real/runs/' + encodeURIComponent(record.id) + '/policy.onnx') +
-        '" download="policy.onnx">下载 ONNX</a></div></div>'
       : '') +
     (isArtifact
       ? '<div><strong class="run-detail-block-title">制品元数据</strong><pre class="run-detail-code">' +
@@ -4640,14 +4857,12 @@ function openRecordDetails(record) {
         '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
         '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
-  const replayId = isRun && canOpenRunReplay(record)
-    ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
-  if ((isRun && ['originman-reference-track', 'originman-dance', 'originman-recovery'].includes(record.taskId)) ||
-      (isArtifact && record.runId)) {
+  const replayId = (isTelemetry || isEvaluation) ? record.runId : '';
+  if (isArtifact && record.runId) {
     const result = document.createElement('a');
     result.className = 'button button-primary button-small';
-    result.textContent = isArtifact ? '打开产出该策略的 Run →' : '查看本轮结果 →';
-    result.href = recordedRunLink({ id: isArtifact ? record.runId : record.id, taskId: record.taskId });
+    result.textContent = '打开产出该策略的 Run →';
+    result.href = recordedRunLink({ id: record.runId, taskId: record.taskId });
     body.prepend(result);
   }
   if (replayId) {
@@ -4656,10 +4871,17 @@ function openRecordDetails(record) {
     inspect.addEventListener('click', () => { dialog.close(); openRunReplay(replayId); });
     body.prepend(inspect);
   }
+  dialog.classList.toggle('run-result-dialog', isRun);
+  if (isRun) mountRunResult(body, record, recordDetailController.signal);
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
+  dialog.scrollTop = 0;
   const detailCanvas = $('run-detail-progress-canvas');
-  if (detailCanvas) drawRunProgressChart(detailCanvas, runProgressPoints(record));
+  if (detailCanvas) {
+    body.querySelector('.run-result-technical').addEventListener('toggle', (event) => {
+      if (event.currentTarget.open) drawRunProgressChart(detailCanvas, runProgressPoints(record));
+    }, { once: true });
+  }
   if ($('run-retrain-card')) wireRunRetrainingAdvice(record);
   if ($('run-board-sessions')) wireRunBoardSessions(record);
   wireRunRecordFeedback(record);
@@ -12383,6 +12605,14 @@ function wireEvents() {
     const dialog = $('run-detail-dialog');
     if (dialog?.open && typeof dialog.close === 'function') dialog.close();
     else dialog?.removeAttribute('open');
+  });
+  $('run-detail-dialog')?.addEventListener('close', (event) => {
+    if (event.target.open) return;
+    recordDetailController?.abort();
+    $('run-result-replay')?.parentElement.querySelectorAll('rdk-run-inspector, video').forEach((player) => {
+      if (player instanceof HTMLVideoElement) player.pause();
+      player.remove();
+    });
   });
   $('product-select')?.addEventListener('change', async (event) => {
     const next = event.target.value;
