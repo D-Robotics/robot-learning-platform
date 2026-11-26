@@ -45,6 +45,20 @@ assert.match(html, /<option value="originman-dance" selected>预置舞蹈<\/opti
 assert.match(html, /<option value="originman-dance-custom">动作组自由编排<\/option>/);
 assert.match(app, /OriginMan 模板尚未载入。请先选择「舞蹈编排 · PPO」/);
 
+assert.match(
+  html,
+  /<section[^>]+id="evaluation-empty"[^>]+aria-labelledby="evaluation-empty-title"/,
+);
+assert.match(
+  html,
+  /id="evaluation-empty-import"[\s\S]+id="evaluation-empty-demo"[\s\S]+id="evaluation-empty-run"/,
+);
+assert.match(
+  html,
+  /<details[^>]+id="station-studio-entry"[\s\S]+<details[^>]+id="station-address-entry"/,
+);
+assert.match(html, /<details[^>]+id="station-connection-diagnostics"[^>]+hidden/);
+
 // ---- accessibility anchors ----
 // Every labelled region must resolve to a real heading. A stale aria-labelledby
 // silently removes the region from a screen reader's landmark tree, so keep the
