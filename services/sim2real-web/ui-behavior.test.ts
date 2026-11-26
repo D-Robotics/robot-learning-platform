@@ -932,14 +932,15 @@ describe('Sim2Real workbench DOM behavior', () => {
     expect(errors).toEqual([]);
   });
 
-  it('keeps the ONNX download link under the configured /sim2real mount', async () => {
+  it('requests the exact ONNX under the configured /sim2real mount and rejects an unverified response', async () => {
     const selectedModel = model();
-    const { window, errors } = await boot({
+    const { window, errors, requests } = await boot({
       runs: [
         {
           id: 'real-onnx-run',
           modelId: selectedModel.id,
           backend: 'local',
+          externalRunId: 'worker-onnx-run',
           status: 'completed',
           summary: 'real ONNX run',
           mock: false,
@@ -961,12 +962,22 @@ describe('Sim2Real workbench DOM behavior', () => {
     const row = window.document.querySelector<HTMLButtonElement>('.history-row');
     expect(row).toBeTruthy();
     row?.click();
-    const link = window.document.querySelector<HTMLAnchorElement>(
-      '#run-detail-body a[download="policy.onnx"]',
-    );
-    expect(link?.getAttribute('href')).toBe(
-      '/sim2real/api/sim2real/runs/real-onnx-run/policy.onnx',
-    );
+    const section = window.document.querySelector('[aria-labelledby="run-result-artifact"]');
+    const button = section?.querySelector<HTMLButtonElement>('button');
+    expect(button?.textContent).toBe('下载 ONNX');
+    button?.click();
+    await vi.waitFor(() => {
+      expect(requests).toContainEqual(
+        expect.objectContaining({
+          method: 'GET',
+          url: '/sim2real/api/sim2real/runs/real-onnx-run/artifact',
+        }),
+      );
+      expect(section?.querySelector('[role="status"]')?.textContent).toContain(
+        '制品摘要与本次运行不一致',
+      );
+      expect(button?.disabled).toBe(false);
+    });
     expect(errors).toEqual([]);
   });
 

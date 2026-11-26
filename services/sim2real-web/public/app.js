@@ -4168,7 +4168,7 @@ function recordKindLabel(record) {
 
 function runRecordTitle(run) {
   return run.training?.originmanDance?.title || ACTION_TASKS[run.taskId]?.label ||
-    runTaskLabel(run) || run.modelId || '运行';
+    runTaskLabel(run) || run.summary || run.modelId || '运行';
 }
 
 function runRecordTime(run) {
