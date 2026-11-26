@@ -439,7 +439,7 @@ const state = {
     return ['smoke', 'low-vram', 'standard', 'high-vram'].includes(value) ? value : '';
   })(),
   recordsQuery: '',
-  selectedRecord: null,
+  submittedTraining: null,
   telemetry: null,
   replay: { runId: '', frames: [], index: 0, timer: null, speed: 1, loaded: false },
   publishingTelemetry: false,
@@ -637,6 +637,7 @@ function renderProjectWorkspace() {
   const modelCount = Number(counts.models || 0);
   setText('workspace-asset-count', `${modelCount} 个模型`);
   setText('workspace-asset-meta', modelCount ? '含 manifest 与运行时契约' : '登记 manifest 后可追溯');
+  $('overview-recent-run')?.toggleAttribute('hidden', !run);
   if (run) {
     setText('workspace-latest-run', statusLabel(run.status));
     setText('workspace-latest-run-meta', `${run.summary || run.taskId || run.backend || '最近一次运行'} · ${formatDate(run.createdAt)}`);
@@ -3537,6 +3538,20 @@ function renderIntegrations() {
   }
   $('contract-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model);
   $('local-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !storageReady || (!localConfigured && !selectedComputeResource));
+  const configSubmit = $('training-config-submit');
+  if (configSubmit) {
+    setText('training-config-context', model
+      ? `${model.manifest?.displayName || model.id} · ${selectedTask().label}`
+      : '尚未选择模型');
+    configSubmit.textContent = state.runSubmitting ? '正在提交…' : '检查并提交训练';
+    const resource = localTrainingResource($('training-engine')?.value);
+    setText('training-config-submit-hint', !model ? '先选择模型或登记契约。'
+      : !storageReady ? '工作区存储尚不可写。'
+        : !(resource?.status === 'online' || localReady) ? '请选择可用的训练资源，或打开其他训练方式。'
+          : !resource && local.mock ? '当前算力为 Mock，仅验证流程，训练结束后没有回放。' : '');
+    configSubmit.disabled = state.runSubmitting || !model || !storageReady ||
+      !(resource ? resource.status === 'online' : localReady);
+  }
   $('robogo-run-button')?.toggleAttribute('disabled', state.runSubmitting || !model || !storageReady || !robogoRunnerAvailable);
   const simulatorFrame = $('simulator-frame');
   const simulatorTitle = $('simulator-title');
@@ -4434,6 +4449,7 @@ function openRecordDetails(record) {
   const syntheticRun = isRun && record.evaluation?.replay?.source === 'demo-fixture';
   const demoTelemetry = isTelemetry && record.source === 'demo-fixture';
   const fields = [
+    ...(isRun ? [['运行编号', record.id]] : []),
     [
       '记录类型',
       isRun
@@ -4645,7 +4661,7 @@ function openRecordDetails(record) {
         '<div class="run-retrain-body" id="run-retrain-body" role="status" aria-live="polite">' +
         '尚未分析。点击「查看重训建议」读取板端遥测漂移信号。</div></div>'
       : '');
-  const replayId = isRun && (hasPersistedEvaluation(record) || currentTelemetry()?.publishedRunId === record.id)
+  const replayId = isRun && canOpenRunReplay(record)
     ? record.id : (isTelemetry || isEvaluation) ? record.runId : '';
   if ((isRun && ['originman-reference-track', 'originman-dance', 'originman-recovery'].includes(record.taskId)) ||
       (isArtifact && record.runId)) {
@@ -4658,7 +4674,7 @@ function openRecordDetails(record) {
   if (replayId) {
     const inspect = document.createElement('button');
     inspect.type = 'button'; inspect.className = 'button button-ghost button-small'; inspect.textContent = '查看遥测回放 →';
-    inspect.addEventListener('click', () => { dialog.close(); setView('evaluate'); applyFlowChildDestination(FLOW_CHILD_CONTEXTS['evaluation-run']); setFlowChild('evaluation-run'); void fetchAndMountReplay(replayId, { interactive: true }); });
+    inspect.addEventListener('click', () => { dialog.close(); openRunReplay(replayId); });
     body.prepend(inspect);
   }
   if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -5630,6 +5646,11 @@ function hasPersistedEvaluation(run) {
   return SimTelemetryCore.hasPersistedEvaluation(run);
 }
 
+function canOpenRunReplay(run) {
+  return hasPersistedEvaluation(run) || currentTelemetry()?.publishedRunId === run.id ||
+    (run.status === 'completed' && run.backend === 'local' && run.mock === false);
+}
+
 function hasRealEvaluation(evidence, run) {
   return SimTelemetryCore.hasRealEvaluation(evidence, run);
 }
@@ -6273,6 +6294,8 @@ function renderReplayPlayer() {
   const seek = $('replay-seek');
   if (!select || !play || !stop || !seek) return;
   const runs = replayRuns();
+  const requested = state.replay.requestedRunId && runsForCurrentModel().find((run) => run.id === state.replay.requestedRunId);
+  if (requested && !runs.some((run) => run.id === requested.id)) runs.unshift(requested);
   const current = state.replay.runId || runs[0]?.id || '';
   syncSelect(
     select,
@@ -6286,10 +6309,16 @@ function renderReplayPlayer() {
   play.disabled = !loaded || !state.replay.frames.length;
   stop.disabled = !loaded || !state.replay.frames.length;
   play.textContent = state.replay.timer ? '❚❚ 暂停' : '▶ 播放';
+  play.classList.toggle('button-primary', loaded);
+  play.classList.toggle('button-ghost', !loaded);
+  const load = $('replay-load-button');
+  load?.classList.toggle('button-primary', !loaded);
+  load?.classList.toggle('button-ghost', loaded);
   const frame = state.replay.frames[state.replay.index];
   setText('replay-frame-label', `${state.replay.frames.length ? state.replay.index + 1 : 0} / ${state.replay.frames.length} 帧`);
   setText('replay-time-label', frame ? formatTelemetrySeconds(frame.t) : '0.00s');
-  setText('replay-status', loaded ? `已加载 ${state.replay.frames.length} 帧` : (runs.length ? '选择运行并加载回放' : '暂无可回放运行'));
+  setText('replay-status', loaded ? `已加载 ${state.replay.frames.length} 帧`
+    : state.replay.message || (runs.length ? '选择运行并加载回放' : '暂无可回放运行'));
   setText('replay-frame-detail', frame ? `当前帧 ${state.replay.index + 1} · observation ${frame.observation?.length || 0}D · action ${frame.action?.length || 0}D` : '加载后可拖动时间轴；回放帧会同步发送到嵌入仿真器。');
   renderReplayCameraFrame(frame);
 }
@@ -6555,7 +6584,7 @@ function invalidateReplayEvidence() {
   stopPolicyTrial();
   stopReplay();
   state.telemetry = null;
-  state.replay = { ...state.replay, runId: '', frames: [], loaded: false, index: 0, autoLoadedFor: '' };
+  state.replay = { ...state.replay, runId: '', frames: [], loaded: false, index: 0, autoLoadedFor: '', requestedRunId: '', message: '' };
   mountReplayVideo('', null);
   $('run-inspector')?.clear?.();
   try { $('simulator-frame')?.contentWindow?.postMessage({ type: 'rdk-replay-clear' }, window.location.origin); } catch { /* frame may be unavailable */ }
@@ -6588,11 +6617,39 @@ function toggleReplay() {
   sendReplayFrame();
 }
 
-async function loadRunReplay() {
-  const select = $('replay-run-select');
-  const runId = String(select?.value || '').trim();
+function openRunReplay(runId) {
+  setView('evaluate');
+  applyFlowChildDestination(FLOW_CHILD_CONTEXTS['evaluation-run']);
+  setFlowChild('evaluation-run', { focus: false });
+  const player = $('replay-player');
+  const panel = player?.closest('details');
+  if (panel) panel.open = true;
+  player?.focus({ preventScroll: true });
+  player?.scrollIntoView({ block: 'start' });
+  void loadRunReplay(runId);
+}
+
+async function loadRunReplay(runId = String($('replay-run-select')?.value || '').trim()) {
   if (!runId) { showToast('请选择包含遥测的运行记录', 'error'); return; }
-  await fetchAndMountReplay(runId, { interactive: true });
+  ensureReplayScope();
+  if (!runsForCurrentModel().some((run) => run.id === runId)) {
+    showToast('当前工作区找不到这次运行。请检查所选模型和项目。', 'normal');
+    return;
+  }
+  if (state.replay.runId !== runId) invalidateReplayEvidence();
+  state.replay.requestedRunId = runId;
+  state.replay.runId = runId;
+  state.replay.message = '正在读取本次运行的回放…';
+  renderReplayPlayer();
+  const generation = replayLoadGeneration + 1;
+  try {
+    const loaded = await fetchAndMountReplay(runId, { interactive: true });
+    if (!loaded && generation === replayLoadGeneration) {
+      state.replay.message = '未能加载本次运行的回放。若该任务有遥测，可重试加载。';
+    }
+  } finally {
+    if (generation === replayLoadGeneration) renderReplayPlayer();
+  }
 }
 
 // Server-side completion already auto-attached the engine's evaluation
@@ -6600,7 +6657,7 @@ async function loadRunReplay() {
 // a 404/empty on the first attempt is expected and re-attempted a few times
 // with backoff, not surfaced as an error.
 async function autoLoadRunReplay(runId, { interactive = false } = {}) {
-  if (state.replay.autoLoadedFor === runId) return;
+  if (state.replay.requestedRunId || state.replay.autoLoadedFor === runId) return;
   const scope = replayContextKey();
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const expectedGeneration = replayLoadGeneration + 1;
@@ -6627,7 +6684,7 @@ async function fetchAndMountReplay(runId, { interactive = false, mountInspector 
       return false;
     }
     stopReplay();
-    state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId };
+    state.replay = { ...state.replay, runId, frames, index: 0, loaded: true, timer: null, autoLoadedFor: runId, message: '' };
     const evidence = parseTelemetryText(frames.map((frame) => JSON.stringify(frame)).join('\n'));
     // The same accepted raw frames drive camera, scalar plots and the heatmaps.
     evidence.samples = frames;
@@ -7624,8 +7681,19 @@ function renderNextAction() {
   }
   setText('next-action-title', title);
   setText('next-action-copy', copy);
+  const example = !state.authRequired && !latest && state.productId === 'microduck' &&
+    state.taskId === 'walk' && model?.builtin === true;
+  if (example) {
+    view = 'train';
+    title = '用示例完成第一次训练';
+    copy = '使用内置 MicroDuck 步行模型。先核对参数和算力，有遥测时可在同一条运行记录里打开回放。';
+    label = '配置示例训练';
+    setText('next-action-title', title);
+    setText('next-action-copy', copy);
+  }
   const button = $('next-action-button');
   if (button) {
+    button.toggleAttribute('data-training-example', example);
     button.dataset.viewTarget = view;
     if (state.productId === 'originman' && view === 'train') button.dataset.originmanConfigure = '';
     else delete button.dataset.originmanConfigure;
@@ -7956,7 +8024,9 @@ function renderOnboardChecklist() {
   if (!list) return;
   const guest = state.authRequired === true;
   const progress = onboardingProgress();
-  const currentKey = progress.currentKey;
+  const primary = $('next-action-button');
+  const example = primary?.hasAttribute('data-training-example');
+  const currentKey = example ? 'train' : progress.currentKey;
   const doneCount = progress.doneCount;
   const stepMeta = {
     simulate: { view: 'simulate', cta: '打开仿真 →', copy: '运行仿真，录制一段可回放轨迹', originman: '在舞蹈 Workshop 查看动作示意' },
@@ -7970,7 +8040,9 @@ function renderOnboardChecklist() {
     if (!step) return;
     const originman = state.productId === 'originman';
     const description = item.querySelector('.onboard-item-body span');
-    if (description) description.textContent = originman ? stepMeta[step.key].originman : stepMeta[step.key].copy;
+    if (description) description.textContent = originman ? stepMeta[step.key].originman
+      : example && step.key === 'simulate' ? '也可以先运行仿真并录制轨迹'
+        : stepMeta[step.key].copy;
     const isCurrent = step.key === currentKey && !foundCurrent;
     if (isCurrent) foundCurrent = true;
     item.classList.toggle('is-complete', step.done);
@@ -7989,7 +8061,7 @@ function renderOnboardChecklist() {
         locked.className = 'onboard-locked';
         locked.textContent = '需登录';
         meta.append(locked);
-      } else {
+      } else if (stepMeta[step.key].view !== primary?.dataset.viewTarget) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'onboard-cta';
@@ -8074,6 +8146,7 @@ function renderOriginmanTrainingWorkbench() {
   const contractType = active ? originmanContractType() : '';
   const generic = $('browser-run-button')?.parentElement;
   if (generic) generic.hidden = active && (danceGoal || !selectedModel() || Boolean(contractType));
+  $('training-config-submit-panel')?.toggleAttribute('hidden', Boolean(generic?.hidden));
   const genericHint = $('run-action-hint');
   if (genericHint) genericHint.hidden = Boolean(generic?.hidden);
   $('training-basic-settings').hidden = Boolean(active && danceGoal);
@@ -8343,29 +8416,39 @@ function bindOriginmanTrainingWorkbench() {
 function renderRunProgress() {
   const card = $('run-progress-card');
   if (!card) return;
-  const runs = [...runsForCurrentModel()].sort((a, b) =>
-    String(b.createdAt || '').localeCompare(String(a.createdAt || '')),
-  );
+  const submitted = state.submittedTraining;
   const latest = state.productId === 'originman'
     ? originmanTrainingRuns().find((run) => run.id === originmanRunState.id)
-    : runs[0];
+    : submitted?.scope === replayContextKey()
+      ? runsForCurrentModel().find((run) => run.id === submitted.id)
+      : latestRun();
   if (!latest) {
     card.hidden = true;
-    state.selectedRecord = null;
+    delete card.dataset.runId;
     return;
   }
   card.hidden = false;
-  state.selectedRecord = Object.assign({}, latest, { recordType: 'run' });
+  card.dataset.runId = latest.id;
+  const completed = ['completed', 'ready'].includes(latest.status);
+  const hasReplay = canOpenRunReplay(latest);
+  const replay = $('run-progress-replay');
+  if (replay) replay.hidden = !completed || !hasReplay;
+  const replayNote = $('run-progress-replay-note');
+  if (replayNote) {
+    replayNote.hidden = !completed || hasReplay || latest.mock === true;
+    replayNote.textContent = replayNote.hidden ? '' : '此运行还没有可回放的遥测。可打开运行详情查看已生成的结果。';
+  }
   setText('run-progress-title', latest.summary || latest.modelId || '最新运行');
   const status = $('run-progress-status');
   if (status) {
     status.className =
       'state-badge ' + (latest.mock === true ? 'state-demo' : stateClass(latest.status));
-    status.textContent = latest.mock === true ? '协议演示' : statusLabel(latest.status);
+    status.textContent = latest.mock === true ? `${statusLabel(latest.status)} · Mock` : statusLabel(latest.status);
   }
   const meta = $('run-progress-meta');
   if (meta) {
     const chips = [
+      `运行 · ${latest.id.slice(0, 8)}`,
       latest.taskId && ACTION_TASKS[latest.taskId]
         ? '动作 · ' + ACTION_TASKS[latest.taskId].label
         : '',
@@ -8375,7 +8458,7 @@ function renderRunProgress() {
         ? '物理 · ' + (PHYSICS_BACKEND_LABELS[latest.metrics.physicsBackend] || latest.metrics.physicsBackend)
         : '',
       latest.training?.profile ? '档位 · ' + latest.training.profile : '',
-      latest.training?.numEnvs ? '环境 · ' + latest.training.numEnvs : '',
+      latest.training?.numEnvs ? '配置环境数 · ' + latest.training.numEnvs : '',
       latest.checkpoint?.iteration != null ? 'checkpoint · ' + latest.checkpoint.iteration : '',
       latest.createdAt ? '创建 · ' + formatDate(latest.createdAt) : '',
     ].filter(Boolean);
@@ -9662,7 +9745,45 @@ async function relayTrainingRun(run, model, requestBody) {
   void poll();
 }
 
-async function runModel(backend) {
+function localTrainingResource(engine) {
+  const resources = state.overview?.computeResources || [];
+  if (state.selectedComputeResourceId) {
+    return resources.find((resource) => resource.id === state.selectedComputeResourceId);
+  }
+  const eligible = resources.filter((resource) =>
+    engine ? !resource.engines?.length || resource.engines.includes(engine)
+      : !resource.id.startsWith('c1a55-'));
+  return pickLeastBusyResource(eligible) ?? eligible.find((resource) => resource.status === 'online');
+}
+
+async function submitConfiguredTraining() {
+  const button = $('training-config-submit');
+  if (!button || button.disabled) return;
+  const scope = replayContextKey();
+  const task = selectedTask();
+  const selectLabel = (id) => $(id)?.selectedOptions[0]?.textContent.trim();
+  const resource = localTrainingResource($('training-engine')?.value);
+  const approved = await confirmAction({
+    title: '确认训练配置',
+    note: $('training-config-submit-hint')?.textContent || '提交后将打开本次运行的进度。',
+    approveLabel: '提交训练',
+    details: [
+      { label: '模型', value: selectLabel('model-select') },
+      { label: '任务', value: task.label },
+      { label: '训练档位', value: selectLabel('training-profile') },
+      { label: '算法', value: selectLabel('training-algorithm') },
+      { label: '引擎', value: selectLabel('training-engine') },
+      { label: '算力', value: resource?.name || selectLabel('compute-resource-select') },
+      { label: '续训 checkpoint', value: $('resume-checkpoint-id')?.value.trim() },
+      { label: '续训制品引用', value: $('resume-artifact-ref')?.value.trim() },
+    ].filter((item) => item.value),
+  });
+  if (approved && !button.disabled && scope === replayContextKey() && task === selectedTask()) {
+    await runModel('local', { showProgress: true, computeResourceId: resource?.id || '' });
+  }
+}
+
+async function runModel(backend, { showProgress = false, computeResourceId } = {}) {
   if (trainingPlans?.hasDance()) {
     showToast('这套方案含舞蹈配方，请在 Studio 对话中用该方案确认提交舞蹈训练。', 'error');
     return;
@@ -9677,6 +9798,7 @@ async function runModel(backend) {
     showToast('请先选择模型', 'error');
     return;
   }
+  const scope = replayContextKey();
   state.runSubmitting = true;
   renderIntegrations();
   try {
@@ -9692,15 +9814,8 @@ async function runModel(backend) {
     };
     const engine = $('training-engine')?.value;
     if (backend === 'local') {
-      if (state.selectedComputeResourceId) {
-        body.computeResourceId = state.selectedComputeResourceId;
-      } else {
-        const resources = (state.overview?.computeResources || []).filter((resource) =>
-          engine ? (!resource.engines?.length || resource.engines.includes(engine))
-            : !resource.id.startsWith('c1a55-'));
-        const online = pickLeastBusyResource(resources) ?? resources.find((resource) => resource.status === 'online');
-        if (online) body.computeResourceId = online.id;
-      }
+      const resourceId = computeResourceId ?? (state.selectedComputeResourceId || localTrainingResource(engine)?.id);
+      if (resourceId) body.computeResourceId = resourceId;
     }
     const profile = $('training-profile')?.value;
     const algorithm = $('training-algorithm')?.value;
@@ -9729,8 +9844,20 @@ async function runModel(backend) {
       body: JSON.stringify(body),
     });
     const run = payload.run || {};
-    if (state.productId === 'originman' && run.id && ['local', 'robogo'].includes(backend))
-      selectOriginmanRun(run.id);
+    const sameWorkspace = scope === replayContextKey();
+    if (sameWorkspace && run.id && ['local', 'robogo'].includes(backend)) {
+      state.submittedTraining = { id: run.id, scope };
+      if (state.productId === 'originman') selectOriginmanRun(run.id);
+      if (showProgress && body.taskId === state.taskId && document.body.dataset.activeView === 'train' && state.trainModule === 'config') {
+        state.overview = {
+          ...state.overview,
+          runs: [run, ...(state.overview?.runs || []).filter((item) => item.id !== run.id)],
+        };
+        showTrainStep('submit');
+        renderRunProgress();
+        $('run-progress-card')?.focus({ preventScroll: true });
+      }
+    }
     if (backend === 'local' && run.relayAgentUrl) {
       void relayTrainingRun(run, model, body).catch((error) => {
         setText('simulator-run-status', error instanceof Error ? `本机 Agent 训练提交失败：${error.message}` : '本机 Agent 训练提交失败');
@@ -11803,8 +11930,30 @@ function wireStationEvents() {
 
 function wireEvents() {
   document.querySelectorAll('[data-view-target]').forEach((control) => {
-    control.addEventListener('click', () => setView(control.dataset.viewTarget));
+    control.addEventListener('click', () => {
+      if (control.hasAttribute('data-training-example')) {
+        $('training-profile').value = 'smoke';
+        document.querySelector('[data-training-profile-note]')?.setAttribute('hidden', '');
+        const local = state.overview?.integrations?.simulator?.local;
+        $('training-engine').value = local?.mock || local?.engines?.includes('starter-ppo') ||
+          localTrainingResource('starter-ppo')?.engines?.includes('starter-ppo') ? 'starter-ppo' : '';
+        $('training-algorithm').value = 'ppo';
+        renderIntegrations();
+        renderEngineCapability();
+        renderDemonstrations();
+        renderTaskEngineCompatibility();
+        showTrainStep('configure');
+        return;
+      }
+      setView(control.dataset.viewTarget);
+    });
   });
+  $('overview-recent-run')?.addEventListener('click', () => {
+    const run = latestRun();
+    if (run) openRecordDetails({ ...run, recordType: 'run' });
+  });
+  $('training-config-submit')?.addEventListener('click', () => void submitConfiguredTraining());
+  $('training-config-options')?.addEventListener('click', () => showTrainStep('submit'));
   wireTopMenu();
   wireSidebarDrawer();
   wireTablists();
@@ -12026,6 +12175,7 @@ function wireEvents() {
     });
   });
   $('training-engine')?.addEventListener('change', () => {
+    renderIntegrations();
     renderEngineCapability();
     renderDemonstrations();
     renderTaskEngineCompatibility();
@@ -12146,7 +12296,14 @@ function wireEvents() {
   $('replay-play-button')?.addEventListener('click', toggleReplay);
   $('replay-stop-button')?.addEventListener('click', () => { state.replay.index = 0; stopReplay(); sendReplayFrame(); });
   $('replay-video-render')?.addEventListener('click', () => { void renderReplayVideo(); });
-  $('replay-run-select')?.addEventListener('change', (event) => { state.replay.runId = String(event.target.value || ''); state.replay.loaded = false; state.replay.frames = []; state.replay.index = 0; stopReplay(); renderReplayPlayer(); });
+  $('replay-run-select')?.addEventListener('change', (event) => {
+    const runId = String(event.target.value || '');
+    invalidateReplayEvidence();
+    state.replay.runId = runId;
+    state.replay.requestedRunId = runId;
+    renderTelemetryEvidence();
+    renderReplayPlayer();
+  });
   $('replay-speed-select')?.addEventListener('change', (event) => { state.replay.speed = Number(event.target.value || 1); if (state.replay.timer) { stopReplay(); toggleReplay(); } });
   $('replay-seek')?.addEventListener('input', (event) => { state.replay.index = Number(event.target.value || 0); sendReplayFrame(); });
   // 统一时间轴与逐帧回放共用 state.replay.index 作为唯一位置源：从任一控件
@@ -12195,7 +12352,12 @@ function wireEvents() {
     $('telemetry-file-input')?.click();
   });
   $('run-progress-detail')?.addEventListener('click', () => {
-    if (state.selectedRecord) openRecordDetails(state.selectedRecord);
+    const run = runsForCurrentModel().find((item) => item.id === $('run-progress-card')?.dataset.runId);
+    if (run) openRecordDetails({ ...run, recordType: 'run' });
+  });
+  $('run-progress-replay')?.addEventListener('click', () => {
+    const runId = $('run-progress-card')?.dataset.runId;
+    if (runId) openRunReplay(runId);
   });
   $('run-detail-close')?.addEventListener('click', () => {
     const dialog = $('run-detail-dialog');
