@@ -8,6 +8,11 @@ export const ORIGINMAN_REFERENCE_JOINTS = originmanReferenceCalibration.robot.jo
 const { fps, maxAbsRad, maxSpeedRadPerS } = originmanReferenceCalibration.trajectory;
 const ROUNDING_TOLERANCE = 1e-4;
 export const ORIGINMAN_REFERENCE_MAX_FRAMES = 12_000;
+export const ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES = 2;
+export const ORIGINMAN_REFERENCE_MAX_COMPOSITION_BLOCKS = 128;
+export const ORIGINMAN_REFERENCE_MAX_BLOCK_REPEATS = 8;
+export const ORIGINMAN_REFERENCE_MAX_COMPOSITION_SECTIONS =
+  ORIGINMAN_REFERENCE_MAX_COMPOSITION_BLOCKS * ORIGINMAN_REFERENCE_MAX_BLOCK_REPEATS;
 export const ORIGINMAN_SOURCE_STANCE = 'source-neutral-v1';
 
 export interface OriginmanReferenceTrajectory {
@@ -47,7 +52,7 @@ export function validateOriginmanReferenceTrajectory(
   value: unknown,
   purpose: 'training' | 'motion-block' = 'training',
 ): OriginmanReferenceTrajectory {
-  const minimumFrames = purpose === 'motion-block' ? 2 : 50;
+  const minimumFrames = purpose === 'motion-block' ? ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES : fps;
   if (!isRecord(value) || value.schemaVersion !== 1 || value.fps !== fps)
     throw Error('参考轨迹须使用 schemaVersion 1，采样频率为 50 Hz。');
   const names = value.joint_names;

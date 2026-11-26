@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=11';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=12';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   anotherWorkshopWorker, freshWorkshopWorkerLoad, workshopWorkerReady,

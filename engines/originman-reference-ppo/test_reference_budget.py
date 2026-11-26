@@ -55,6 +55,16 @@ class TestReferenceBudget(unittest.TestCase):
             )
         return steps, result["selectedCheckpointSteps"], [item["steps"] for item in checkpoints]
 
+    def test_long_composition_accepts_every_range_including_a_short_pose(self):
+        ranges = [{"id": "short", "from": 0, "to": 2}]
+        ranges.extend({"id": "arms", "from": index, "to": index + 100}
+                      for index in range(2, 11_902, 100))
+        ranges.append({"id": "end", "from": 11_902, "to": 12_000})
+        training = {"originmanReferenceComposition": {"ranges": ranges}}
+        self.assertEqual(worker.composition_ranges(training, 12_000), ranges)
+        with self.assertRaisesRegex(ValueError, "frame boundaries"):
+            worker.composition_ranges(training, 11_999)
+
     def test_source_preset_without_choreography_ranges_runs_the_chosen_budget(self):
         self.assertEqual(self.run_checkpoints(False), (65_536, 32_768, [32_768, 65_536]))
 

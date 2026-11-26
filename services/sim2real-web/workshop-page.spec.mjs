@@ -1153,11 +1153,13 @@ test('preset and free choreography submit a verified preview directly and keep i
     'utf8',
   );
   const digest = 'a'.repeat(64);
+  const blockFrames = 625;
   const catalog = {
     presets: [
       { id: 'original', displayName: '原版舞蹈', seconds: 4, referenceMode: 'source-exact' },
     ],
-    motions: [{ id: 'bow', displayName: '鞠躬', category: '上肢', frames: 120 }],
+    motions: [{ id: 'bow', displayName: '鞠躬', category: '上肢', frames: blockFrames }],
+    limits: { maxSeconds: 240 },
   };
   for (const mode of ['preset', 'blocks']) {
     await t.test(mode, async (context) => {
@@ -1168,7 +1170,8 @@ test('preset and free choreography submit a verified preview directly and keep i
       const composition =
         mode === 'preset'
           ? { presetId: 'original' }
-          : { blocks: [{ id: 'bow', repeats: 2 }], bpm: 116, transitionSeconds: 0.4 };
+          : { blocks: [{ id: 'bow', repeats: 8 }], bpm: 116, transitionSeconds: 0.4 };
+      const frames = mode === 'blocks' ? 8 * blockFrames + 7 * 19 : 200;
       const rejection =
         mode === 'preset'
           ? '算力正在筛查另一条轨迹，请稍后重试。'
@@ -1204,8 +1207,8 @@ test('preset and free choreography submit a verified preview directly and keep i
                 trajectorySha256: digest,
                 stanceProfile,
                 maxTiltDeg: passed ? 12 : 33,
-                framesExpected: 200,
-                framesEvaluated: passed ? 200 : 92,
+                framesExpected: frames,
+                framesEvaluated: passed ? frames : 92,
                 firstFailedFrame: passed ? null : 92,
               },
             });
@@ -1221,9 +1224,9 @@ test('preset and free choreography submit a verified preview directly and keep i
               preview: {
                 trajectorySha256: digest,
                 stanceProfile,
-                frames: 200,
-                seconds: 4,
-                beats: 8,
+                frames,
+                seconds: frames / 50,
+                beats: ((frames / 50) * (composition.bpm ?? 100)) / 60,
                 joints: [{ name: '肩关节', min: 0, max: 0.2, values: [0, 0.2] }],
               },
             },
@@ -1244,8 +1247,17 @@ test('preset and free choreography submit a verified preview directly and keep i
         field.dispatchEvent(new window.Event('input'));
       };
       if (mode === 'blocks') {
-        get('motion-add').click();
-        input(get('motion-sequence').querySelector('input'), '2');
+        const sequence = get('motion-sequence');
+        for (let block = 0; block < 3; block++) {
+          get('motion-add').click();
+          input(sequence.lastElementChild.querySelector('input'), '8');
+        }
+        assert.equal(get('motion-prepare').disabled, true, 'the recipe exceeds 240 seconds');
+        assert.match(get('motion-status').textContent, /超过 240 秒/);
+        sequence.querySelector('[aria-label="第 3 段移除"]').click();
+        sequence.querySelector('[aria-label="第 2 段移除"]').click();
+        assert.match(get('motion-estimate').textContent, /102\.66 秒/);
+        assert.equal(get('motion-prepare').disabled, false, 'long choreography can be previewed');
         input(get('motion-bpm'), '116');
       }
       get('envs').value = '4';
@@ -1267,7 +1279,7 @@ test('preset and free choreography submit a verified preview directly and keep i
       assert.equal(get('envs').value, '4');
       assert.equal(navigations.length, 0);
       if (mode === 'blocks') {
-        assert.equal(get('motion-sequence').querySelector('input').value, '2');
+        assert.equal(get('motion-sequence').querySelector('input').value, '8');
         assert.equal(get('motion-bpm').value, '116');
         get('screen-current').click();
         await settle();

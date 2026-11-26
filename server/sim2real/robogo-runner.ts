@@ -6,6 +6,9 @@ import {
 import {
   originmanReferenceCalibration,
   ORIGINMAN_REFERENCE_ENGINE,
+  ORIGINMAN_REFERENCE_MAX_COMPOSITION_SECTIONS,
+  ORIGINMAN_REFERENCE_MAX_FRAMES,
+  ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES,
   ORIGINMAN_REFERENCE_TASK,
   ORIGINMAN_SOURCE_STANCE,
   type OriginmanReferenceTrajectory,
@@ -568,9 +571,20 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   };
 }
 
-function safeReferenceSections(value: unknown) {
-  if (!Array.isArray(value) || !value.length || value.length > 90) return undefined;
+function safeReferenceSections(
+  value: unknown,
+  totalFramesExpected: number,
+  totalFramesEvaluated: number,
+) {
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    value.length > ORIGINMAN_REFERENCE_MAX_COMPOSITION_SECTIONS
+  )
+    return undefined;
   const rows: NonNullable<NonNullable<Sim2RealRunMetrics['originmanReference']>['sections']> = [];
+  let sectionFramesExpected = 0;
+  let sectionFramesEvaluated = 0;
   for (const item of value) {
     if (!item || typeof item !== 'object') return undefined;
     const { id, framesExpected, framesEvaluated, completed } = item;
@@ -578,12 +592,19 @@ function safeReferenceSections(value: unknown) {
       typeof id !== 'string' ||
       !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id) ||
       !Number.isSafeInteger(framesExpected) ||
-      framesExpected < 50 ||
-      framesExpected > 4500 ||
+      framesExpected < ORIGINMAN_REFERENCE_MIN_MOTION_FRAMES ||
       !Number.isSafeInteger(framesEvaluated) ||
       framesEvaluated < 0 ||
       framesEvaluated > framesExpected ||
       typeof completed !== 'boolean'
+    )
+      return undefined;
+    sectionFramesExpected += framesExpected;
+    sectionFramesEvaluated += framesEvaluated;
+    // Transitions are evaluated but are outside the action ranges.
+    if (
+      sectionFramesExpected > totalFramesExpected ||
+      sectionFramesEvaluated > totalFramesEvaluated
     )
       return undefined;
     const row: (typeof rows)[number] = {
@@ -649,7 +670,7 @@ function safeReferenceMetrics(
     typeof framesEvaluated !== 'number' ||
     !Number.isSafeInteger(framesEvaluated) ||
     framesExpected < 50 ||
-    framesExpected > 12_000 ||
+    framesExpected > ORIGINMAN_REFERENCE_MAX_FRAMES ||
     framesEvaluated < 1 ||
     framesEvaluated > framesExpected ||
     typeof trackingMaeRad !== 'number' ||
@@ -668,7 +689,7 @@ function safeReferenceMetrics(
     ![referenceSha256, sceneSha256].every((digest) => /^[a-f0-9]{64}$/.test(digest))
   )
     return undefined;
-  const sections = safeReferenceSections(rawSections);
+  const sections = safeReferenceSections(rawSections, framesExpected, framesEvaluated);
   return {
     framesExpected,
     framesEvaluated,

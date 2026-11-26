@@ -56,11 +56,11 @@ proxy imposes a lower limit. Other training uploads use the standard limit.
 The Workshop and the Studio MCP can preview an existing preset or an ordered
 list of motion IDs with repeat counts. The platform compiles the same references
 at submission, checks the preview SHA-256 and records the recipe and source
-digests with the Run. Action groups composed in the editor have a 90-second
-limit. Approved full-length presets retain their recorded duration, up to
-12,000 frames at 50 Hz. The simulation reports tracking RMSE, per-block
-completion and ONNX parity. The
-legacy dance recipe and the direct reference file upload retain their contracts.
+digests with the Run. Free compositions support up to 12,000 frames at 50 Hz
+(240 seconds), including transitions. Approved full-length presets retain their
+recorded timing within the same frame budget. The simulation reports tracking
+RMSE, completion for each action occurrence and ONNX parity. The legacy dance
+recipe and the direct reference file upload retain their contracts.
 
 The built-in catalog includes a teaching example. To enable an approved shared
 library, prepare a source `catalog.json` with `schemaVersion: 1`, `motions` and

@@ -225,7 +225,7 @@ describe('OriginMan reference choreography', () => {
     preset.reference.sha256 = await writeTrajectory();
     await saveCatalog();
     await expect(prepareOriginmanMotion(selection)).rejects.toMatchObject({ status: 422 });
-    preset.reference.frames = 4_501;
+    preset.reference.frames = 12_001;
     await saveCatalog();
     await expect(listOriginmanMotion()).rejects.toMatchObject({ status: 503 });
     preset.reference.frames = 200;
@@ -299,6 +299,23 @@ describe('OriginMan reference choreography', () => {
     await expect(listOriginmanMotion()).rejects.toMatchObject({ status: 503 });
   });
 
+  it('compiles a four-minute composition and retains each of its 120 action ranges', async () => {
+    await library();
+    expect((await listOriginmanMotion()).limits.maxSeconds).toBe(240);
+    const recipe = {
+      blocks: Array.from({ length: 15 }, () => ({ id: 'arms', repeats: 8 })),
+      transitionSeconds: 0,
+    };
+    const prepared = await prepareOriginmanMotion(recipe);
+    expect(prepared.trajectory.joint_pos).toHaveLength(12_000);
+    expect(prepared.provenance.ranges).toHaveLength(120);
+    expect(prepared.provenance.ranges.at(-1)).toEqual({ id: 'arms', from: 11_900, to: 12_000 });
+    expect(summarizeOriginmanMotion(prepared)).toMatchObject({ frames: 12_000, seconds: 240 });
+    await expect(prepareOriginmanMotion({ ...recipe, transitionSeconds: 0.04 })).rejects.toThrow(
+      '240 秒',
+    );
+  });
+
   it('rejects mutually exclusive inputs, unknown IDs, excessive duration and altered files', async () => {
     const directory = await library();
     await expect(
@@ -312,9 +329,9 @@ describe('OriginMan reference choreography', () => {
     );
     await expect(
       prepareOriginmanMotion({
-        blocks: Array.from({ length: 6 }, () => ({ id: 'arms', repeats: 8 })),
+        blocks: Array.from({ length: 13 }, () => ({ id: 'arms', repeats: 8 })),
       }),
-    ).rejects.toThrow('90 秒');
+    ).rejects.toThrow('240 秒');
     await writeFile(path.join(directory, 'arms.json'), '{}');
     await expect(prepareOriginmanMotion({ presetId: 'full-dance' })).rejects.toThrow('摘要');
   });
