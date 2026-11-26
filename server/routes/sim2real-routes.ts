@@ -725,7 +725,7 @@ export function workspacePackageVersion(
 }
 
 /** Shared deployments fail closed when no SSO owner is present. */
-function requestOwner(
+export function requestOwner(
   request: Request,
   response: Response,
   auth: Sim2RealAuthPort,

@@ -45,6 +45,7 @@ let checking = false;
 let submitting = false;
 let screening;
 let resources = [];
+let requestedWorkerUnavailable = false;
 
 async function api(path, body, idempotencyKey, signal) {
   const response = await fetch(new URL('./api/v1/duck/' + path, location.href), {
@@ -157,10 +158,12 @@ function selectedWorkerReady() {
 function showWorkerHint() {
   const selected = resources.find(({ id }) => id === worker.value);
   const load = freshWorkshopWorkerLoad(selected);
-  if (!resources.length) {
+  if (requestedWorkerUnavailable) {
+    workerHint.textContent = '原先指定的算力当前无法用于参考舞蹈。请选择在线的课堂共享 GPU，或在「执行资源」检查原算力。';
+  } else if (!resources.length) {
     workerHint.textContent = '当前账号未找到支持本课程的算力。可在工作台的「执行资源」中核对。';
   } else if (!selected?.ready) {
-    workerHint.textContent = '选择算力并检查连接，确认支持参考轨迹训练。';
+    workerHint.textContent = '请选择在线的课堂共享 GPU，或检查自建算力是否支持参考舞蹈训练。';
   } else if (load && load.activeJobs === load.maxConcurrentJobs) {
     workerHint.textContent = '查询时所选算力的运行名额已满。提交后以 Worker 的当前队列为准。';
   } else if (load?.queuedJobs > 0) {
@@ -185,8 +188,9 @@ function showWorkerSuggestion() {
   workerSuggestion.textContent = alternative ? '选择 ' + alternative.name + '（最近有空位）' : '';
 }
 
-async function loadWorkers(selection) {
+async function loadWorkers(selection, { fromLink = false } = {}) {
   const { computeResources } = await api('compute-resources');
+  const previous = worker.value;
   resources = computeResources
     .filter(({ source, mock, engines }) => source !== 'local-agent' && mock !== true &&
       (!engines?.length || engines.includes('originman-reference-ppo')))
@@ -200,9 +204,10 @@ async function loadWorkers(selection) {
     option.dataset.cuda = String(value.cuda === true);
     worker.append(option);
   }
-  if (resources.some(({ id }) => id === selection)) worker.value = selection;
-  else if (resources.length === 1) worker.value = resources[0].id;
-  if (worker.value !== selection) worker.dispatchEvent(new Event('change'));
+  const canKeep = resources.some(({ id, ready }) => id === selection && (!fromLink || ready));
+  if (selection && !canKeep) requestedWorkerUnavailable = true;
+  worker.value = canKeep ? selection : '';
+  if (worker.value !== previous) worker.dispatchEvent(new Event('change'));
   else showWorkerHint();
 }
 
@@ -258,6 +263,7 @@ async function selectTrajectory(load, nextSpeed) {
 }
 
 worker.addEventListener('change', () => {
+  if (worker.value) requestedWorkerUnavailable = false;
   envs.value = worker.selectedOptions[0]?.dataset.cuda === 'true' ? '64' : '1';
   showWorkerHint();
   refresh();
@@ -472,7 +478,7 @@ try {
   showCalibration(calibration);
   status.textContent = '请选择文件或加载示例。';
   try {
-    await loadWorkers(query.get('computeResourceId'));
+    await loadWorkers(query.get('computeResourceId'), { fromLink: true });
   } catch (cause) {
     workerHint.textContent = cause.message;
   }

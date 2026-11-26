@@ -5,9 +5,29 @@ import time
 
 CONFIG = Path(os.environ.get("RDK_SIM2REAL_NGINX_CONFIG", "/etc/nginx/conf.d/rdkstudio-ssl.conf"))
 MARKER = "    server_name rdkstudio.d-robotics.cc;\n"
+REFERENCE_UPLOAD_ROUTE = """
+    location ~ ^/(robotics-learning|sim2real)/api/(v1/duck|sim2real)/(originman-reference/(validate|screen)|runs)/?$ {
+        client_max_body_size 16m;
+        rewrite ^/(robotics-learning|sim2real)(/.*)$ $2 break;
+        proxy_pass http://127.0.0.1:18102;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_buffering off;
+        proxy_read_timeout 1h;
+    }
+"""
+CANONICAL_ONLY_UPLOAD_ROUTE = (
+    REFERENCE_UPLOAD_ROUTE.replace("^/(robotics-learning|sim2real)/api/", "^/robotics-learning/api/")
+    .replace("^/(robotics-learning|sim2real)(/.*)$ $2", "^/robotics-learning(/.*)$ $1")
+)
+MAIN_LOCATION = "    location /robotics-learning/ {\n"
 ROUTE = """
     # BEGIN RDK_SIM2REAL_MANAGED_ROUTE
     location = /robotics-learning { return 301 /robotics-learning/; }
+""" + REFERENCE_UPLOAD_ROUTE + """
     location /robotics-learning/ {
         proxy_pass http://127.0.0.1:18102/;
         proxy_http_version 1.1;
@@ -25,8 +45,6 @@ ROUTE = """
 """
 
 REQUIRED_ROUTE_PARTS = (
-    "location = /robotics-learning { return 301 /robotics-learning/; }",
-    "location /robotics-learning/ {",
     "proxy_pass http://127.0.0.1:18102/;",
     "proxy_http_version 1.1;",
     "proxy_set_header X-Forwarded-Proto $scheme;",
@@ -43,11 +61,12 @@ def route_matches(content: str) -> bool:
     pointing at a different port.  In that case the installer must stop and
     ask for a reviewed migration instead of claiming success.
     """
-    exact_location_count = sum(
-        line.strip() == "location /robotics-learning/ {" for line in content.splitlines()
-    )
-    return exact_location_count == 1 and all(
-        part in content for part in REQUIRED_ROUTE_PARTS
+    if content.count(MAIN_LOCATION) != 1:
+        return False
+    location = content.split(MAIN_LOCATION, 1)[1].split("\n    }", 1)[0]
+    return (
+        all(part in location for part in REQUIRED_ROUTE_PARTS)
+        and "location = /robotics-learning { return 301 /robotics-learning/; }" in content
     )
 
 
@@ -56,13 +75,10 @@ def target_server_block(content: str) -> str:
     start = content.find(MARKER)
     if start < 0:
         return ""
-    opening = content.find("{", start)
-    if opening < 0:
-        return ""
-    depth = 0
+    depth = 1
     quote = ""
     comment = False
-    for index in range(opening, len(content)):
+    for index in range(start + len(MARKER), len(content)):
         char = content[index]
         if comment:
             if char == "\n":
@@ -92,20 +108,27 @@ def main() -> None:
     block = target_server_block(content)
     if not block:
         raise SystemExit("expected rdkstudio HTTPS server block was not found or is unbalanced")
-    if any(line.strip() == "location /robotics-learning/ {" for line in content.splitlines()):
-        if route_matches(block):
-            print("sim2real route already present and validated")
+    if MAIN_LOCATION in block:
+        if block.count(REFERENCE_UPLOAD_ROUTE) == 1 and CANONICAL_ONLY_UPLOAD_ROUTE not in block:
+            print("sim2real reference upload routes already present")
             return
-        raise SystemExit(
-            "an existing /robotics-learning/ route does not match the managed block; "
-            "review and migrate it manually"
-        )
+        if block.count(CANONICAL_ONLY_UPLOAD_ROUTE) == 1 and REFERENCE_UPLOAD_ROUTE not in block:
+            updated_block = block.replace(CANONICAL_ONLY_UPLOAD_ROUTE, REFERENCE_UPLOAD_ROUTE)
+        elif route_matches(block) and "originman-reference/(validate|screen)" not in block:
+            updated_block = block.replace(MAIN_LOCATION, REFERENCE_UPLOAD_ROUTE + MAIN_LOCATION)
+        else:
+            raise SystemExit(
+                "an existing /robotics-learning/ route does not match the managed block; "
+                "review and migrate it manually"
+            )
+        updated = content.replace(block, updated_block, 1)
+    else:
+        updated = content.replace(MARKER, MARKER + ROUTE, 1)
     mode = CONFIG.stat().st_mode & 0o7777
     backup = CONFIG.with_name(f"{CONFIG.name}.bak-sim2real-{time.time_ns()}")
     with backup.open("x", encoding="utf-8") as handle:
         handle.write(content)
     os.chmod(backup, mode)
-    updated = content.replace(MARKER, MARKER + ROUTE, 1)
     temporary = CONFIG.with_name(f".{CONFIG.name}.codex-sim2real.tmp")
     temporary.write_text(updated)
     os.chmod(temporary, mode)

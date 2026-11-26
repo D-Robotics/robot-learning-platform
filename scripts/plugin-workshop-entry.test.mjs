@@ -11,6 +11,14 @@ const status = {
   baseUrl: 'https://platform.test/learning',
   session: { authenticated: true, accountId: 'alice' },
 };
+const referenceWorker = {
+  id: 'chosen',
+  name: 'Classroom GPU',
+  source: 'server-runner',
+  status: 'online',
+  mock: false,
+  engines: ['originman-reference-ppo'],
+};
 test('short continue/results use shared current without scanning runs or writing submissions', async () => {
   for (const intent of ['continue', 'results']) {
     const calls = [];
@@ -122,8 +130,7 @@ test('legacy new requests select a visible Worker for dance without creating a r
   const invoke = (computeResourceId) =>
     workshopEntry({ intent: 'new', course: 'recovery', computeResourceId }, async (name) => {
       if (name === 'rdk_platform_status') return status;
-      if (name === 'rdk_compute_resources_list')
-        return { computeResources: [{ id: 'chosen', name: 'Classroom GPU' }] };
+      if (name === 'rdk_compute_resources_list') return { computeResources: [referenceWorker] };
       assert.fail('Unexpected mutation ' + name);
     });
   const result = await invoke('chosen');
@@ -133,6 +140,63 @@ test('legacy new requests select a visible Worker for dance without creating a r
   assert.equal(result.contextId, null);
   assert.match(result.studentReply, /Classroom GPU/);
   await assert.rejects(invoke('private'), /当前账号看不到/);
+});
+
+test('unusable Worker selections open the course without choosing another Worker', async () => {
+  for (const [capabilities, reason] of [
+    [{ engines: ['starter-ppo'] }, /未提供参考舞蹈训练引擎/],
+    [{ status: 'offline' }, /当前离线/],
+    [{ status: 'unknown', engines: [] }, /尚未通过连接和课程能力检查/],
+    [{ mock: undefined }, /尚未通过连接和课程能力检查/],
+    [{ mock: true }, /无法用于平台参考舞蹈训练/],
+    [{ source: 'local-agent' }, /无法用于平台参考舞蹈训练/],
+  ]) {
+    const calls = [];
+    const result = await workshopEntry(
+      { intent: 'new', computeResourceId: 'chosen' },
+      async (name) => {
+        calls.push(name);
+        if (name === 'rdk_platform_status') return status;
+        if (name === 'rdk_compute_resources_list')
+          return {
+            computeResources: [
+              { ...referenceWorker, ...capabilities },
+              { ...referenceWorker, id: 'other', classroomShared: true },
+            ],
+          };
+        assert.fail('Unexpected mutation ' + name);
+      },
+    );
+    assert.deepEqual(calls, [
+      'rdk_platform_status',
+      'rdk_compute_resources_list',
+      'rdk_platform_status',
+    ]);
+    assert.equal(result.stage, 'choose-compute');
+    assert.match(result.studentReply, reason);
+    assert.match(result.studentReply, /课堂共享 GPU/);
+    assert.doesNotMatch(result.studentReply, /本轮选择/);
+    assert.equal(new URL(result.links.workshop).searchParams.has('computeResourceId'), false);
+    assert.equal(result.studioNavigation.arguments.url, result.links.workshop);
+    assert.deepEqual(result.submission, { training: false, evaluation: false });
+  }
+});
+
+test('an account change invalidates a Workshop Worker preselection', async () => {
+  for (const engines of [['originman-reference-ppo'], ['starter-ppo']]) {
+    let statusReads = 0;
+    await assert.rejects(
+      workshopEntry({ intent: 'new', computeResourceId: 'chosen' }, async (name) => {
+        if (name === 'rdk_compute_resources_list')
+          return { computeResources: [{ ...referenceWorker, engines }] };
+        assert.equal(name, 'rdk_platform_status');
+        return statusReads++ === 0
+          ? status
+          : { ...status, session: { authenticated: true, accountId: 'bob' } };
+      }),
+      /账号或平台已变化/,
+    );
+  }
 });
 
 test('cold Workshop previews offline and only surfaces an already requested authorization', async () => {

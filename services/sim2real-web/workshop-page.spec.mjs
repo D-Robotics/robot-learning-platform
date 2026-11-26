@@ -1056,6 +1056,82 @@ test('reference choreography submit errors stay visible when trajectory import i
   assert.equal(trainingError.closest('[hidden]'), null);
 });
 
+test('reference choreography keeps an eligible linked Worker and never substitutes a rejected selection', async (t) => {
+  const page = await fs.readFile(
+    new URL('./public/originman-reference.html', import.meta.url),
+    'utf8',
+  );
+  const ready = {
+    id: 'classroom',
+    name: 'Classroom GPU',
+    source: 'server-runner',
+    status: 'online',
+    mock: false,
+    cuda: true,
+    engines: ['originman-reference-ppo'],
+  };
+  const incomplete = { ...ready, id: 'offline', status: 'offline' };
+  const starter = { ...ready, id: 'starter', engines: ['starter-ppo'] };
+  const expected = [
+    { id: 'starter', resources: [starter, ready], selected: '', rejected: true },
+    { id: 'offline', resources: [incomplete, ready], selected: '', rejected: true },
+    { id: 'missing', resources: [ready], selected: '', rejected: true },
+    { id: 'classroom', resources: [ready], selected: ready.id, rejected: false },
+    { id: '', resources: [ready], selected: '', rejected: false },
+  ];
+  for (const { id, resources, selected, rejected } of expected) {
+    await t.test(id || 'no preselection', async (testContext) => {
+      const url = new URL('https://platform.test/course/originman-reference.html');
+      if (id) url.searchParams.set('computeResourceId', id);
+      const { window } = new JSDOM(page, { url });
+      const fixtures = {
+        'originman-reference': {
+          calibration: { robot: { jointOrder: [], massKg: 1 }, source: {}, servoMap: [] },
+        },
+        'compute-resources': { computeResources: resources },
+        'originman-motion/catalog': { motions: [], presets: [] },
+      };
+      const globals = {
+        document: window.document,
+        location: window.location,
+        Option: window.Option,
+        Event: window.Event,
+        fetch: async (target) => {
+          const endpoint = target.pathname.split('/api/v1/duck/')[1];
+          assert.ok(fixtures[endpoint], 'Unexpected request to ' + endpoint);
+          return Response.json({ ok: true, ...fixtures[endpoint] });
+        },
+      };
+      const original = Object.fromEntries(
+        Object.keys(globals).map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]),
+      );
+      for (const [key, value] of Object.entries(globals))
+        Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+      testContext.after(() => {
+        for (const [key, descriptor] of Object.entries(original)) {
+          if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+          else delete globalThis[key];
+        }
+        window.close();
+      });
+      await import('./public/originman-reference-page.mjs?worker-preselection=' + id);
+      await settle();
+      const get = (name) => window.document.getElementById('reference-' + name);
+      const select = get('worker');
+      const hint = get('worker-hint');
+      assert.equal(select.value, selected);
+      assert.equal(get('envs').value, selected ? '64' : '1');
+      assert.equal(hint.textContent.includes('原先指定的算力'), rejected);
+      if (rejected) {
+        assert.match(hint.textContent, /课堂共享 GPU/);
+        select.value = ready.id;
+        select.dispatchEvent(new window.Event('change'));
+        assert.doesNotMatch(hint.textContent, /原先指定的算力/);
+      }
+    });
+  }
+});
+
 test('free choreography restores only the matching account draft and needs a fresh preview', async (t) => {
   const page = await fs.readFile(
     new URL('./public/originman-reference.html', import.meta.url),

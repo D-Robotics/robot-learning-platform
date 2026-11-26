@@ -152,6 +152,9 @@ export function createStudioPluginAuthRouter({
         `<p>请先登录学习平台，再确认连接。</p><p><a href="${escapeHtml(basePath + '/login?returnTo=' + encodeURIComponent(authorizePath + '?id=' + id))}">登录学习平台</a></p>`,
       );
     const name = escapeHtml(principal.displayName ?? principal.accountId);
+    // no-referrer would also make the browser send Origin: null on this
+    // form POST. strict-origin preserves the origin without exposing the flow ID.
+    response.set('Referrer-Policy', 'strict-origin');
     page(
       response,
       200,
