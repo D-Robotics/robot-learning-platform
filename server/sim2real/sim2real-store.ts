@@ -3774,11 +3774,35 @@ export async function createSim2RealDeploymentWithResult(
       // run cannot bypass immutable artifact/evaluation provenance.
       throw new Sim2RealError('sim2real_artifact_lineage_invalid');
     }
+    if (input.artifactSha256) {
+      const run = ledger.runs.find((item) => item.id === input.runId && ownerMatches(item, owner));
+      if (
+        input.mode !== 'preflight' ||
+        !/^[a-f0-9]{64}$/.test(input.artifactSha256) ||
+        !run ||
+        run.modelId !== input.modelId ||
+        run.status !== 'completed' ||
+        run.mock === true ||
+        run.evaluation?.replay?.source === 'demo-fixture' ||
+        (!input.artifactId && run.artifact?.sha256 !== input.artifactSha256)
+      ) {
+        throw new Sim2RealError('sim2real_artifact_lineage_invalid');
+      }
+    }
     if (input.artifactId) {
       const artifact = ledger.artifacts.find(
         (item) => item.id === input.artifactId && ownerMatches(item, owner),
       );
-      if (!artifact || artifact.status !== 'published') {
+      if (
+        !artifact ||
+        (input.artifactSha256
+          ? artifact.status === 'revoked' ||
+            artifact.sha256 !== input.artifactSha256 ||
+            artifact.runId !== input.runId ||
+            artifact.modelId !== input.modelId ||
+            !['policy', 'compiled-policy'].includes(artifact.role)
+          : artifact.status !== 'published')
+      ) {
         throw new Sim2RealError('sim2real_artifact_lineage_invalid');
       }
       if (
@@ -4061,6 +4085,7 @@ export async function updateSim2RealDeployment(
     >
   >,
   owner?: string,
+  options: { expectedStatus?: Sim2RealDeploymentRecord['status'] } = {},
 ): Promise<Sim2RealDeploymentRecord | null> {
   ensureWritable();
   return serialized(async () => {
@@ -4070,12 +4095,19 @@ export async function updateSim2RealDeployment(
     );
     if (index < 0) return null;
     const current = ledger.deployments[index];
+    if (options.expectedStatus && current.status !== options.expectedStatus) return null;
     // A read-only probe may return after the user cancelled its plan. Never
     // let that late completion resurrect the cancelled lifecycle.
     if (current.status === 'cancelled' && patch.status !== 'cancelled') {
       return copy(withoutDeploymentPrivate(current));
     }
-    if (patch.status && !DEPLOYMENT_STATUS_TRANSITIONS[current.status].includes(patch.status)) {
+    const retryPreflight =
+      current.mode === 'preflight' && current.status === 'failed' && patch.status === 'running';
+    if (
+      patch.status &&
+      !retryPreflight &&
+      !DEPLOYMENT_STATUS_TRANSITIONS[current.status].includes(patch.status)
+    ) {
       throw new Sim2RealError('sim2real_deployment_transition_invalid');
     }
     // `ready` is the hand-off point at which an external board executor may

@@ -658,7 +658,7 @@ assert.match(
 );
 assert.match(
   app,
-  /headers: \{ 'Idempotency-Key': requestKey \}/,
+  /headers: \{ 'Idempotency-Key': state\.deploymentRequest\.requestKey \}/,
   'deployment plans must be idempotent',
 );
 assert.match(
@@ -670,6 +670,11 @@ assert.match(app, /function refreshActiveRuns\(\)/, 'active runs must refresh fr
 assert.match(app, /sim2real\/runs\/.*encodeURIComponent\(run\.id\)/, 'run status must be polled');
 assert.match(app, /dataset\.action === 'import-telemetry'/);
 assert.match(app, /data-release-step/);
+assert.match(
+  html,
+  /id="deploy-source"[\s\S]*?id="device-select"[\s\S]*?id="deploy-checks"[\s\S]*?id="deploy-release-entry"/,
+);
+assert.match(app, /runId: source\.runId, artifactSha256: source\.artifactSha256/);
 assert.match(app, /sim2real\/overview\?productId=/, 'overview must be product-aware');
 assert.match(app, /taskId: state\.taskId/);
 assert.doesNotMatch(

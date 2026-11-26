@@ -20,7 +20,7 @@
          theme x view screenshots). See services/sim2real-web/ui-layout-invariants.mjs
          for the guards that keep new overrides from re-introducing layering. -->
     <link rel="stylesheet" href="./tokens.css?v=3" />
-    <link rel="stylesheet" href="./app.css?v=63" />
+    <link rel="stylesheet" href="./app.css?v=64" />
     <link rel="stylesheet" href="./originman-scene.css?v=1" />
   </head>
   <body>
@@ -1479,36 +1479,44 @@
           >
             <div class="submodule-tabs" role="tablist" aria-label="设备与发布模块">
               <button class="submodule-tab is-active" type="button" role="tab" id="deploy-tab-preflight" aria-controls="preflight-panel" data-view-target="deploy" data-flow-child="preflight">预检与发布<small>只读预检 · NO MOTOR</small></button>
-              <button class="submodule-tab" type="button" role="tab" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
+              <button class="submodule-tab" type="button" role="tab" id="deploy-tab-feedback" aria-controls="feedback-panel" data-view-target="deploy" data-flow-child="feedback">运行反馈与回滚<small>上线闸门 · 时间线</small></button>
             </div>
             <div class="deploy-layout">
               <article class="panel board-panel" id="preflight-panel" role="tabpanel" aria-labelledby="deploy-tab-preflight">
-                <div class="panel-heading panel-heading-lean"><h2>设备预检</h2>
-                  <span class="deploy-safe" lang="en" title="No motor: 只读预检，不会驱动电机">NO MOTOR</span>
+                <div class="panel-heading panel-heading-lean"><h2 tabindex="-1" id="deploy-preflight-title">设备与制品预检</h2>
+                  <span class="deploy-safe">只读检查</span>
                 </div>
-                <div class="deploy-device-select">
-                  <label class="field-label" for="device-select">目标板卡</label>
-                  <select id="device-select" aria-label="选择板卡"></select>
+                <div class="deploy-target-grid">
+                  <div class="deploy-source" id="deploy-source" hidden>
+                    <h3 id="deploy-source-title">本次制品</h3>
+                    <p id="deploy-source-name"></p>
+                    <p class="small-note deploy-source-meta" id="deploy-source-identity"></p>
+                    <button type="button" class="button button-ghost button-small" id="deploy-open-run">返回运行详情</button>
+                  </div>
+                  <div class="deploy-device-select">
+                    <label class="field-label" for="device-select">目标板卡</label>
+                    <select id="device-select" aria-label="选择板卡"></select>
+                    <div class="board-summary" id="board-summary">
+                      <div class="empty-inline">正在读取板卡状态</div>
+                    </div>
+                  </div>
                 </div>
-                <div class="board-summary" id="board-summary">
-                  <div class="empty-inline">没有可用板卡；先在设备管理中登记</div>
-                </div>
-                <div class="board-actions">
-                  <button class="button button-ghost" id="detect-button" type="button">
-                    探测板型</button
-                  ><button class="button button-primary" id="plan-button" type="button">
-                    生成预检计划</button
-                  ><button class="button button-ghost" id="preflight-button" type="button">
-                    执行只读预检
-                  </button>
-                </div>
+                <ol class="deploy-checks" id="deploy-checks" aria-label="预检步骤"></ol>
                 <p class="deploy-action-hint" id="deploy-action-hint" role="status" aria-live="polite">先选择模型和目标板卡，再生成只读预检计划。</p>
+                <div class="board-actions deploy-preflight-actions">
+                  <button class="button button-ghost" id="detect-button" type="button">
+                    探测板型</button>
+                  <button class="button button-primary" id="plan-button" type="button">生成预检计划</button>
+                  <button class="button button-ghost" id="preflight-button" type="button">执行只读预检</button>
+                  <button class="button button-ghost" id="deploy-release-entry" type="button">查看发布条件</button>
+                </div>
                 <p class="small-note">
-                  预检只读取架构、系统目录和磁盘信息；不会下发模型、启动节点或驱动电机。
+                  预检读取板端环境并核对制品兼容性。制品下发和设备运行仍须走独立审批。
                 </p>
               </article>
               <details class="panel deploy-flow-panel workspace-inspector" id="feedback-panel">
                 <summary class="panel-heading panel-heading-lean workspace-inspector-summary"><span><small>Inspector</small><h2>上线闸门</h2></span><span class="panel-caption" id="deploy-flow-caption">按证据推进</span><span class="workspace-inspector-toggle">展开 <i aria-hidden="true">⌄</i></span></summary>
+                <p class="small-note deploy-source-meta" id="deploy-release-identity" hidden></p>
                 <div class="release-steps">
                   <div class="release-step is-ready" data-release-step="contract">
                     <span class="release-step-index">01</span>
@@ -2376,7 +2384,7 @@
     <script defer src="./run-inspector-core.js?v=2"></script>
     <script defer src="./run-inspector.js?v=4"></script>
     <script defer src="./training-plans.js?v=8"></script>
-    <script defer src="./app.js?v=duck-lab-92"></script>
+    <script defer src="./app.js?v=duck-lab-93"></script>
     <script defer src="./visualization-enhancements.js?v=viz-1"></script>
     <script defer src="./capability-workbench.js?v=1"></script>
     <script defer src="./agent-chat.js?v=agent-20"></script>
