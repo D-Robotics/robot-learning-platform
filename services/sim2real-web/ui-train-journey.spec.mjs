@@ -232,15 +232,35 @@ try {
 
   if (starter) {
     assert.ok(stored.artifact?.sha256, 'real policy digest is available');
-    const [replayResponse] = await Promise.all([
-      page.waitForResponse(
-        (result) =>
-          new URL(result.url()).pathname.endsWith(
-            '/runs/' + encodeURIComponent(run.id) + '/replay',
-          ) && result.ok(),
-      ),
-      locator('run-progress-replay').click(),
-    ]);
+    // Completion may have already loaded frames. Reopening that Run while
+    // the read is slow must keep Play disabled until the reset is complete.
+    await page.waitForFunction(() =>
+      document.getElementById('replay-status')?.textContent.includes('已加载'),
+    );
+    const replayPath = '/runs/' + encodeURIComponent(run.id) + '/replay';
+    let releaseRead;
+    const readGate = new Promise((resolve) => {
+      releaseRead = resolve;
+    });
+    await page.route(
+      (url) => url.pathname.endsWith(replayPath),
+      async (route) => {
+        await readGate;
+        await route.continue();
+      },
+    );
+    const replayRead = page.waitForResponse(
+      (result) => new URL(result.url()).pathname.endsWith(replayPath) && result.ok(),
+    );
+    void replayRead.catch(() => {});
+    try {
+      await locator('run-progress-replay').click();
+      assert.equal(await locator('replay-play-button').isEnabled(), false);
+      assert.match(await locator('replay-status').innerText(), /正在读取/);
+    } finally {
+      releaseRead();
+    }
+    const replayResponse = await replayRead;
     const replay = await replayResponse.json();
     assert.ok(replay.frames.length > 1);
     await locator('replay-play-button').waitFor({ state: 'visible' });

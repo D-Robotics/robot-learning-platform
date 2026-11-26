@@ -6302,7 +6302,7 @@ function renderReplayPlayer() {
     runs.map((run) => ({ value: run.id, textContent: `${run.id.slice(0, 8)} · ${statusLabel(run.status)}` })),
     runs.some((run) => run.id === current) ? current : '',
   );
-  const loaded = state.replay.loaded && state.replay.runId === select.value;
+  const loaded = state.replay.loaded && !state.replay.loading && state.replay.runId === select.value;
   seek.max = String(Math.max(0, state.replay.frames.length - 1));
   seek.value = String(Math.min(state.replay.index, Math.max(0, state.replay.frames.length - 1)));
   seek.disabled = !loaded || !state.replay.frames.length;
@@ -6314,6 +6314,7 @@ function renderReplayPlayer() {
   const load = $('replay-load-button');
   load?.classList.toggle('button-primary', !loaded);
   load?.classList.toggle('button-ghost', loaded);
+  if (load) load.disabled = Boolean(state.replay.loading);
   const frame = state.replay.frames[state.replay.index];
   setText('replay-frame-label', `${state.replay.frames.length ? state.replay.index + 1 : 0} / ${state.replay.frames.length} 帧`);
   setText('replay-time-label', frame ? formatTelemetrySeconds(frame.t) : '0.00s');
@@ -6584,7 +6585,7 @@ function invalidateReplayEvidence() {
   stopPolicyTrial();
   stopReplay();
   state.telemetry = null;
-  state.replay = { ...state.replay, runId: '', frames: [], loaded: false, index: 0, autoLoadedFor: '', requestedRunId: '', message: '' };
+  state.replay = { ...state.replay, runId: '', frames: [], loaded: false, loading: false, index: 0, autoLoadedFor: '', requestedRunId: '', message: '' };
   mountReplayVideo('', null);
   $('run-inspector')?.clear?.();
   try { $('simulator-frame')?.contentWindow?.postMessage({ type: 'rdk-replay-clear' }, window.location.origin); } catch { /* frame may be unavailable */ }
@@ -6639,6 +6640,7 @@ async function loadRunReplay(runId = String($('replay-run-select')?.value || '')
   if (state.replay.runId !== runId) invalidateReplayEvidence();
   state.replay.requestedRunId = runId;
   state.replay.runId = runId;
+  state.replay.loading = true;
   state.replay.message = '正在读取本次运行的回放…';
   renderReplayPlayer();
   const generation = replayLoadGeneration + 1;
@@ -6648,7 +6650,10 @@ async function loadRunReplay(runId = String($('replay-run-select')?.value || '')
       state.replay.message = '未能加载本次运行的回放。若该任务有遥测，可重试加载。';
     }
   } finally {
-    if (generation === replayLoadGeneration) renderReplayPlayer();
+    if (generation === replayLoadGeneration) {
+      state.replay.loading = false;
+      renderReplayPlayer();
+    }
   }
 }
 
