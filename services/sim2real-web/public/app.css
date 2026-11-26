@@ -2587,6 +2587,13 @@ h2 {
 .run-result-section > .button {
   margin-right: 8px;
 }
+.run-result-registry {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.run-result-registry p {
+  margin: 4px 0 0;
+}
 .run-result-section video {
   display: block;
   width: 100%;

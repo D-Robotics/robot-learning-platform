@@ -4454,6 +4454,10 @@ const RUN_RESULT_METRIC_KEYS = new Set([
 const RUN_RESULT_METRICS = RUN_METRIC_CARDS.filter(([key]) => RUN_RESULT_METRIC_KEYS.has(key));
 const RUN_DIAGNOSTIC_METRICS = RUN_METRIC_CARDS.filter(([key]) => !RUN_RESULT_METRIC_KEYS.has(key));
 const RECORDED_VIDEO_TASKS = new Set(['originman-reference-track', 'originman-dance', 'originman-recovery']);
+const RUN_EVALUATION_STATUS = {
+  pending: '评测待处理', running: '评测进行中', passed: '评测已完成',
+  failed: '评测失败', invalid: '评测证据无效',
+};
 
 function runResultSection(id, title) {
   const section = retrainingElement('section', 'run-result-section');
@@ -4465,14 +4469,21 @@ function runResultSection(id, title) {
   return section;
 }
 
-function renderRecordEvaluation(section, run) {
-  const demo = run.mock || run.evaluation?.replay?.source === 'demo-fixture';
+function renderRecordEvaluation(section, run, linked) {
+  const current = linked?.stale ? null : linked;
+  const evaluation = current?.report ?? run.evaluation;
+  const demo = run.mock || evaluation?.replay?.source === 'demo-fixture';
   const metrics = demo
     ? { contractValid: run.metrics?.contractValid }
     : run.metrics || {};
   const cards = renderRunMetricCards(metrics, RUN_RESULT_METRICS);
-  const gate = !demo && run.taskEvaluation?.qualityGate;
-  const evaluation = run.evaluation;
+  const gate = !demo && (current?.taskEvaluation?.qualityGate ?? run.taskEvaluation?.qualityGate);
+  if (linked) {
+    const status = linked.stale ? '历史评测 · 已被更新遥测取代'
+      : RUN_EVALUATION_STATUS[linked.status] || '已登记评测';
+    section.append(retrainingElement('strong', '', status));
+    if (linked.summary) section.append(retrainingElement('p', 'small-note', linked.summary));
+  }
   if (typeof gate?.passed === 'boolean') {
     section.append(retrainingElement('strong', gate.passed ? 'run-result-pass' : 'run-result-fail',
       gate.passed ? '评测质量门通过' : '评测质量门未通过'));
@@ -4487,7 +4498,7 @@ function renderRecordEvaluation(section, run) {
     section.append(retrainingElement('p', 'small-note',
       `遥测评测 · ${evaluation.sampleCount ?? 0} 条样本 · ${source} · ${formatDate(evaluation.evaluatedAt)}`));
   }
-  if (!cards && !evaluation?.evaluatedAt && typeof gate?.passed !== 'boolean') {
+  if (!linked && !cards && !evaluation?.evaluatedAt && typeof gate?.passed !== 'boolean') {
     section.append(retrainingElement('p', 'small-note', '这次运行还没有评测结果。'));
   }
 }
@@ -4559,10 +4570,19 @@ function renderRecordReplay(section, run, signal) {
   });
 }
 
-function renderRecordArtifact(section, run, signal) {
+function renderRecordArtifact(section, run, signal, registered) {
   const artifact = run.artifact;
+  for (const item of registered) {
+    const row = retrainingElement('div', 'run-result-registry');
+    row.append(retrainingElement('strong', '', item.name || item.artifactId),
+      retrainingElement('p', 'small-note run-result-metadata',
+        [item.version, ARTIFACT_STATUS_LABELS[item.status], String(item.format || '').toUpperCase(),
+          item.sizeBytes == null ? '' : formatBytes(item.sizeBytes),
+          item.sha256 && 'SHA-256 ' + item.sha256].filter(Boolean).join(' · ')));
+    section.append(row);
+  }
   if (!artifact) {
-    section.append(retrainingElement('p', 'small-note', '这次运行还没有制品。'));
+    if (!registered.length) section.append(retrainingElement('p', 'small-note', '这次运行还没有制品。'));
     return;
   }
   const format = String(artifact.format || '').toUpperCase();
@@ -4638,9 +4658,13 @@ function mountRunResult(body, run, signal) {
     button.addEventListener('click', () => heading.focus());
     nav.append(button);
   }
-  renderRecordEvaluation(evaluation, run);
+  const { artifacts, evaluations } = promotionRecordsForCurrentModel();
+  const linked = evaluations.filter((item) => item.runId === run.id && item.modelId === run.modelId);
+  const runEvaluation = linked.find((item) => item.id === run.evaluationId) || linked[0];
+  renderRecordEvaluation(evaluation, run, runEvaluation);
   renderRecordReplay(replay, run, signal);
-  renderRecordArtifact(artifact, run, signal);
+  renderRecordArtifact(artifact, run, signal,
+    artifacts.filter((item) => item.runId === run.id && item.modelId === run.modelId));
   const details = retrainingElement('details', 'run-result-technical');
   const technical = retrainingElement('div', 'run-result-technical-body');
   technical.append(...body.childNodes);
