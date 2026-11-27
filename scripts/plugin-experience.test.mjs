@@ -1682,8 +1682,22 @@ test('reference track opens the correct platform mount and keeps result navigati
   assert.deepEqual(read, []);
   assert.deepEqual(entry.studioNavigation, {
     tool: 'studio_open_url',
-    arguments: { url: 'https://platform.test/robotics-learning/originman-reference.html' },
+    arguments: {
+      url: 'https://platform.test/robotics-learning/originman-reference.html?mode=preset',
+    },
   });
+  for (const [task, expected] of [
+    ['reference-track', entry.studioNavigation.arguments.url],
+    ['reinforcement', entry.studioNavigation.arguments.url],
+    ['simulation', 'https://platform.test/robotics-learning/?robot=originman#classroom'],
+  ]) {
+    const guide = await proxy('tools/call', {
+      name: 'rdk_learning_guide',
+      arguments: { task, productId: 'originman' },
+    });
+    assert.equal(guide.structuredContent.studioNavigation.arguments.url, expected);
+    assert.equal(guide.structuredContent.trainingSubmitted, false);
+  }
   for (const [mode, expectedMessage] of [
     ['preset', /预置舞蹈.*自动筛查/],
     ['blocks', /加入编排.*自动筛查/],

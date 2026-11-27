@@ -910,10 +910,21 @@ export async function startRunDetail({
       });
       const payload = await response.json().catch(() => null);
       if (disposed) return;
+      const login = document.getElementById('reference-run-login');
+      if (login) {
+        login.hidden = response.status !== 401;
+        if (!login.hidden) {
+          const destination = new URL('./originman-reference-run.html', location.href);
+          destination.searchParams.set('runId', runId);
+          const signIn = new URL('./login', destination);
+          signIn.searchParams.set('returnTo', destination.pathname + destination.search);
+          login.querySelector('a').href = signIn.href;
+        }
+      }
       if (!response.ok) {
         if ([401, 403, 404, 409].includes(response.status)) active = false;
         if (independentPanel) independentPanel.hidden = true;
-        if (response.status === 401) throw new Error('当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
+        if (response.status === 401) throw new Error(login ? '登录后可继续查看这条 Run。' : '当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
         if (response.status === 403 || response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
         throw new Error('平台暂时无法读取这条 Run。请保留原链接，稍后刷新本页。');
       }

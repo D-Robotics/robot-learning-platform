@@ -209,7 +209,7 @@ test('cold Workshop previews offline and only surfaces an already requested auth
   assert.equal(preview.stage, 'preview');
   assert.match(preview.links.workshop, /workshop\.html\?course=dance&start=1$/);
   assert.match(preview.studentReply, /8,192 步快检/);
-  assert.match(preview.studentReply, /「交替摆臂」仿真回放.*预置参考舞蹈.*动作组自由编排/);
+  assert.match(preview.studentReply, /「开始跟跳练习」.*8,192 步快检.*本轮评测、回放和策略/);
   assert.equal(preview.submission.training, false);
   // A fresh 'new' preview intentionally reads no account data; authorization is
   // only requested when the learner resumes or actually starts practice.

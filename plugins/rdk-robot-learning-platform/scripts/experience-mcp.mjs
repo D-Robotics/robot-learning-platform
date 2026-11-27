@@ -649,7 +649,7 @@ const ORIGINMAN_REFERENCE_TOOL = {
   name: 'rdk_originman_reference_track',
   title: 'OriginMan · 参考轨迹跟跳',
   description:
-    '在 Studio 右侧打开跟跳任务。mode 可直达预置舞蹈（preset）、动作组自由编排（blocks）或导入 50 Hz NPZ/JSON（upload，默认）。查看已有评测与回放时仅传完整 Run ID 或至少 8 位前缀。',
+    '在 Studio 右侧打开跟跳任务。mode 可直达预置舞蹈（preset，默认）、动作组自由编排（blocks）或导入 50 Hz NPZ/JSON（upload）。查看已有评测与回放时仅传完整 Run ID 或至少 8 位前缀。',
   inputSchema: {
     type: 'object',
     properties: {
@@ -1643,7 +1643,7 @@ export function experienceProxy(
             throw Error('平台网页入口无效。请重新连接学习平台。');
           const root = launch.pathname.replace(/\/+$/, '');
           launch.pathname = root + '/originman-reference.html';
-          if (input.mode) launch.searchParams.set('mode', input.mode);
+          if (!input.runId) launch.searchParams.set('mode', input.mode ?? 'preset');
           if (input.runId) {
             const run = upstream.readTrainingRun
               ? await upstream.readTrainingRun(input.runId, { signal, allowPrefix: true })
@@ -1672,7 +1672,7 @@ export function experienceProxy(
                     '在右侧搜索动作并加入编排，预览并选好算力后，可开始仿真训练。平台会自动筛查。',
                   upload:
                     '在右侧导入自己的 NPZ 或 JSON 轨迹，也可先加载示例体验。校验后可选择 Worker 开始仿真训练。',
-                }[input.mode ?? 'upload'],
+                }[input.mode ?? 'preset'],
           };
         } else if (params.name === 'rdk_originman_motion_library') {
           if (Object.keys(input).length) throw Error('动作库查询不需要参数。');
@@ -2004,7 +2004,13 @@ export function experienceProxy(
             }
             if (payload.platformView && baseUrl) {
               const url = new URL(baseUrl.replace(/\/+$/, '') + '/');
-              if (payload.robotId) url.searchParams.set('robot', payload.robotId);
+              if (payload.platformView === 'reference-track') {
+                url.pathname += 'originman-reference.html';
+                url.searchParams.set('mode', 'preset');
+              } else {
+                if (payload.robotId) url.searchParams.set('robot', payload.robotId);
+                url.hash = payload.platformView;
+              }
               if (payload.recipe) {
                 url.searchParams.set('learningMode', payload.recipe.mode);
                 if (payload.recipe.engine)
@@ -2012,7 +2018,6 @@ export function experienceProxy(
                 if (payload.recipe.taskId)
                   url.searchParams.set('learningTask', payload.recipe.taskId);
               }
-              url.hash = payload.platformView;
               payload.links = { workbench: url.href };
               payload.studioNavigation = {
                 tool: 'studio_open_url',
@@ -2024,6 +2029,8 @@ export function experienceProxy(
                   'train/prepare': '打开模型与契约',
                   'train/configure': '打开训练配置',
                   'deploy/preflight': '打开部署预检',
+                  classroom: '打开舞蹈课堂',
+                  'reference-track': '开始跟跳练习',
                 }[payload.platformView] ?? '打开学习工作台';
               payload.studentReply += `\n[${label}](${url.href})`;
             }

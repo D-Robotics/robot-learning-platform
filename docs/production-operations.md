@@ -72,9 +72,9 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 若 19091 由独立发布的 CPU Worker 占用且同机的 `sim2real-cpu-worker.service` 已停用，
 使用 `DEPLOY_EXTERNAL_CPU_WORKER=1` 执行标准发布。发布会检查实际 Worker 的协议和健康状态。
 
-标准构建包含工作台内的 `#classroom` 原生课堂。选择 OriginMan 的受扰恢复任务可打开课堂；通用使用指引经图文手册的 OriginMan 章节打开八步课程。浏览器回归覆盖两个入口、课堂书签和两个窗口尺寸。
+选中 OriginMan 后，工作台的「舞蹈课堂」进入同域的 `workshop.html`。旧 `#classroom` 书签和受扰恢复课程入口也进入舞蹈课堂。新学员从「开始跟跳练习」进入 `originman-reference.html?mode=preset`，Studio 的参考轨迹跟跳工具使用同一入口。结果页按原 Run ID 读取评测、回放和策略。按节拍训练是进阶练习，使用独立引擎和兼容的 Worker。
 
-课堂的 JS、WebGL 渲染器、MuJoCo 子进程和服务端接口由标准构建打包。发布服务器在切换前检查原生课堂节点、前端模块和运行代码。场景、教师参考和账号制品放在独立的运行数据目录。
+发布验收覆盖课堂按钮、游客登录后续接、旧书签跳转、训练记录链接及桌面和窄屏布局。历史受扰恢复实验继续通过原实验或 Run 链接读取。下列环境配置和回归命令用于保留这些实验的仿真和回放能力。
 
 | 配置 | 取值 |
 | --- | --- |
@@ -87,7 +87,7 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 
 安装场景和课前媒体后，运行 `python3 engines/originman-straight/verify_classroom_assets.py <资产根目录>` 核对场景、网格和参考视频的 SHA-256。训练 Worker 通过 `RDK_SIM2REAL_TRAIN_ENGINES_JSON` 注册 `originman-recovery`，入口为打包后的 `engines/originman-straight/workshop_adapter.py`，场景使用 `ORIGINMAN_SCENE`。训练环境还需安装与 Worker 执行设备匹配的 PyTorch、Stable Baselines3、ONNX 和 FFmpeg。
 
-发布验收使用隔离台账和 Worker 目录。点击两个入口后，在课堂加载一条已完成的受扰恢复 Run，核对 Run ID 与策略摘要，实际施加扰动并播放同源回放至结束。可用 `scripts/verify-originman-classroom.mjs` 重跑真实服务端链路。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供隔离实例及已校验的实验凭据。
+用 `scripts/verify-originman-classroom.mjs` 在隔离实例复核历史受扰恢复 Run 的策略摘要、仿真扰动和同源回放。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供该实例及已校验的实验凭据。
 
 ## Studio SSH 安装训练 Worker
 

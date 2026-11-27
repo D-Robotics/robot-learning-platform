@@ -83,10 +83,7 @@ function genericTraining(answers, robotId) {
       platformView: 'train/prepare',
       robotId: target,
       recipe,
-      studentReply:
-        target === 'originman' && !imitation
-          ? 'OriginMan 有舞蹈和受扰恢复两个仿真课程。先选择目标并核对对应策略契约，进入相应课程后再选算力。'
-          : `先在${knownRobotNames[target]}的「模型与契约」核对观测、动作和频率，再确认${label}的任务、数据与 Worker 支持。当前适配和资源状态待检查。`,
+      studentReply: `先在${knownRobotNames[target]}的「模型与契约」核对观测、动作和频率，再确认${label}的任务、数据与 Worker 支持。当前适配和资源状态待检查。`,
     };
   if (imitation) {
     const engine = answers.engine ?? 'act';
@@ -134,6 +131,7 @@ const learningFields = {
       'evaluation',
       'replay',
       'deployment',
+      'reference-track',
       'dance',
     ],
   },
@@ -373,6 +371,25 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
     );
   const robotKey = answers.robot?.trim().toLowerCase().replace(/\s+/g, '-');
   const robotId = Object.hasOwn(knownRobotNames, robotKey) ? robotKey : null;
+  if (
+    answers.task === 'reference-track' ||
+    (answers.task === 'reinforcement' &&
+      robotId === 'originman' &&
+      !answers.engine &&
+      answers.target !== 'hardware')
+  ) {
+    if (answers.target === 'hardware' || (answers.robot && robotId !== 'originman'))
+      throw Error('参考轨迹跟跳课程使用 OriginMan 仿真。');
+    return progress(
+      'platform-task',
+      '先选一支预置舞蹈，预览轨迹，选好算力后跑快检。完成后查看本轮评测、回放和 ONNX 策略。',
+      {
+        platformView: 'reference-track',
+        robotId: 'originman',
+        taskId: 'originman-reference-track',
+      },
+    );
+  }
   if (trainingModes.includes(answers.task)) {
     const { studentReply, ...context } = genericTraining(answers, robotId);
     return progress('platform-training', studentReply, {
@@ -386,7 +403,10 @@ export function learningGuide(answers = {}, { operationId, previous } = {}) {
       '在「证据与记录」选择上传数据集，或在数据集详情下载已托管文件。平台文件需要登录后操作。',
     ],
     overview: ['overview', '打开工作台后，可以按机型和任务选择仿真、训练或评测。'],
-    simulation: ['simulate', '在仿真工作台选择机器人和场景，可以试玩或录制动作。'],
+    simulation:
+      robotId === 'originman'
+        ? ['classroom', '打开舞蹈课堂可看教学回放，也可开始参考轨迹跟跳。']
+        : ['simulate', '在仿真工作台选择机器人和场景，可以试玩或录制动作。'],
     evaluation: ['evaluate', '在评测工作台选定策略和评测条件，再查看本轮结果。'],
     replay: ['records', '在记录工作台选择要查看的轨迹或运行。'],
     deployment: [

@@ -129,7 +129,20 @@ function loginContinuation(value: unknown, basePath: string): string | undefined
   if (local.startsWith(authPrefix) && /^[a-f0-9]{32}$/.test(local.slice(authPrefix.length)))
     return value;
   const match = /^\/experiment\.html\?context=[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.exec(local);
-  return match ? `${basePath}${match[0]}` : undefined;
+  if (match) return `${basePath}${match[0]}`;
+  if (/^\/originman-reference-run\.html\?runId=[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(local))
+    return value;
+  if (!local.startsWith('/originman-reference.html?')) return undefined;
+  const params = new URLSearchParams(local.slice('/originman-reference.html?'.length));
+  const mode = params.get('mode');
+  const resource = params.get('computeResourceId');
+  const budget = params.get('budget');
+  if (!mode || !['preset', 'blocks', 'upload'].includes(mode)) return undefined;
+  const next = new URLSearchParams({ mode });
+  if (resource && /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(resource))
+    next.set('computeResourceId', resource);
+  if (budget === 'formal') next.set('budget', budget);
+  return `${basePath}/originman-reference.html?${next}`;
 }
 
 /** 结构化最小响应类型：兼容全局 fetch Response，避免解析成 express Response。 */
@@ -363,7 +376,7 @@ export function renderStudioDirectLoginPage(
   ${noticeHtml}
   <form method="post" action="${base}/api/sim2real/auth/studio-direct/login">
     ${workshop ? `<input type="hidden" name="workshop" value="${workshop}"/>` : ''}
-    ${returnTo ? `<input type="hidden" name="returnTo" value="${returnTo}"/>` : ''}
+    ${returnTo ? `<input type="hidden" name="returnTo" value="${returnTo.replaceAll('&', '&amp;')}"/>` : ''}
     <label for="userName">账号</label>
     <input id="userName" name="userName" autocomplete="username" required/>
     <label for="password">密码</label>

@@ -6590,6 +6590,7 @@ body.agent-chat-open .agent-chat-composer input { min-height: 44px; border-color
 }
 @media (max-width: 720px) {
   .workspace-notice { align-items: flex-start; }
+  .workspace-notice[data-platform-version]:not(.is-changed) { display: none; }
   .workspace-notice-copy span { white-space: normal; }
   .workspace-notice .button { align-self: center; }
 }
