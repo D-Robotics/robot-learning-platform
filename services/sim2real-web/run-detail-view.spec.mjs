@@ -28,11 +28,13 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   const policy = digest('a');
   const replay = digest('b');
   const requests = [];
+  let independentSaved = false;
   const run = {
     id: 'run_42',
     modelId: 'dance-model',
     taskId: 'originman-dance',
     status: 'completed',
+    mock: false,
     backend: 'local',
     externalRunId: 'worker-run_42',
     summary: '欢快四段舞',
@@ -96,6 +98,20 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
     location: f.location,
     fetchImpl: async (url, options) => {
       requests.push({ url: String(url), options });
+      if (String(url).endsWith('/dance-evaluation')) {
+        if (options.method === 'GET' && !independentSaved)
+          return Response.json({ ok: false, code: 'DANCE_EVIDENCE_INCOMPLETE' }, { status: 404 });
+        independentSaved = options.method === 'POST' || independentSaved;
+        return Response.json({
+          ok: true,
+          evaluation: {
+            source: { runId: run.id, policySha256: policy, sceneSha256: digest('d') },
+            qualityGatePassed: false,
+            evaluations: [{ bpm: 128, sections: [{ passed: false }, { passed: true }] }],
+            replay: { videoSha256: digest('e') },
+          },
+        });
+      }
       return Response.json({ ok: true, run });
     },
   });
@@ -111,9 +127,25 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
       ['./originman-dance-references/index.html#side-tap', '侧点步收回'],
     ],
   );
-  assert.equal(requests.length, 1);
   assert.match(requests[0].url, /\/api\/v1\/duck\/runs\/run_42$/);
   assert.equal(requests[0].options.credentials, 'same-origin');
+  const reviewRequests = () =>
+    requests.filter(({ url }) => url.endsWith('/runs/run_42/dance-evaluation'));
+  assert.deepEqual(
+    reviewRequests().map(({ options }) => options.method),
+    ['GET'],
+  );
+  await new Promise(setImmediate);
+  const reviewStatus = f.document.getElementById('independent-review-status');
+  assert.match(reviewStatus.textContent, /验收证据待补齐/);
+  f.document.getElementById('independent-review-start').click();
+  await new Promise(setImmediate);
+  assert.deepEqual(
+    reviewRequests().map(({ options }) => options.method),
+    ['GET', 'POST'],
+  );
+  assert.match(reviewStatus.textContent, /独立评测未达标，标称节拍 1\/2 段达标/);
+  assert.equal(f.document.getElementById('independent-review-video').hidden, false);
   assert.equal(f.document.getElementById('run-title').textContent, 'OriginMan · 本次舞蹈训练');
   assert.equal(f.document.getElementById('run-status').textContent, '已完成');
   const download = f.document.getElementById('run-policy-download');
@@ -155,7 +187,11 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   video.dispatchEvent(new f.dom.window.Event('ended'));
   f.document.getElementById('refresh-run').click();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(requests.length, 2);
+  assert.equal(requests.filter(({ url }) => url.endsWith('/runs/run_42')).length, 2);
+  assert.deepEqual(
+    reviewRequests().map(({ options }) => options.method),
+    ['GET', 'POST', 'GET'],
+  );
   assert.equal(sourceWrites + sourceChanges.takeRecords().length, 0);
   assert.equal(f.document.getElementById('replay-status').textContent, '本次仿真回放已播完');
   Object.defineProperty(video, 'error', { value: { code: 4 } });

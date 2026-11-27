@@ -673,7 +673,8 @@ export async function startRunDetail({
   clearTimeoutImpl = clearTimeout,
   now = Date.now,
 } = {}) {
-  const runId = new URLSearchParams(location?.search ?? '').get('runId') ?? '';
+  const query = new URLSearchParams(location?.search ?? '');
+  const runId = query.get('runId') ?? '';
   const error = document?.getElementById('run-error');
   let timer = null;
   let disposed = false;
@@ -699,6 +700,79 @@ export async function startRunDetail({
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
+  const independentPanel = document.getElementById('independent-review');
+  const independentButton = document.getElementById('independent-review-start');
+  const independentVideo = document.getElementById('independent-review-video');
+  if (independentPanel && query.get('review') === 'independent') location.hash = 'independent-review';
+  const baseline = query.get('baselineRunId');
+  const baselineLink = document.getElementById('quality-baseline-link');
+  if (baselineLink && baseline !== runId && RUN_ID_PATTERN.test(baseline ?? '')) {
+    const href = new URL('./run-detail.html', location.href);
+    href.searchParams.set('runId', baseline);
+    baselineLink.href = href.href;
+    document.getElementById('quality-baseline').hidden = false;
+  }
+  const independentUrl = requestUrl + '/dance-evaluation';
+  let reviewing = false;
+  const checkIndependentReview = async (start = false) => {
+    const run = lastRun;
+    if (disposed || !independentPanel || reviewing) return;
+    independentPanel.hidden = !(run?.taskId === 'originman-dance' && run.status === 'completed' &&
+      run.mock === false && SHA256_PATTERN.test(run.artifact?.sha256 ?? ''));
+    if (independentPanel.hidden) return;
+    reviewing = true;
+    independentButton.disabled = true;
+    const show = (message) => text(document, 'independent-review-status', message);
+    if (start) show('正在用本次 ONNX 和原仿真场景验收，过程可能需要一两分钟。');
+    try {
+      const response = await fetchImpl(independentUrl, {
+        method: start ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
+        headers: { accept: 'application/json' },
+      });
+      const result = await response.json().catch(() => null);
+      if (disposed || lastRun?.id !== runId) return;
+      if (!start && response.status === 404) {
+        show(result?.code === 'DANCE_EVIDENCE_INCOMPLETE'
+          ? '验收证据待补齐。开始验收时会核对原 Worker 中的场景与策略。'
+          : '本次 Run 尚未做独立仿真验收。');
+        independentButton.hidden = false;
+        return;
+      }
+      const resultRecord = result?.evaluation;
+      const source = resultRecord?.source;
+      if (!response.ok || result?.ok !== true)
+        throw Error(result?.message || '暂时无法读取验收结果，请稍后续查原 Run。');
+      const recordedScene = run.metrics?.originmanDance?.sceneProvenance?.sceneSha256;
+      if (source?.runId !== runId || source.policySha256 !== run.artifact?.sha256 ||
+          !SHA256_PATTERN.test(source.sceneSha256 ?? '') ||
+          (recordedScene && source.sceneSha256 !== recordedScene) ||
+          (run.contractId && source.contractId !== run.contractId) ||
+          typeof resultRecord.qualityGatePassed !== 'boolean')
+        throw Error('验收回执与本次 Run 不一致，回放待核对。');
+      const nominal = resultRecord.evaluations?.find((row) => row.bpm === run.training?.originmanDance?.bpm);
+      const sections = nominal?.sections ?? [];
+      const scored = sections.length && sections.every((section) => typeof section.passed === 'boolean');
+      const count = scored ? `，标称节拍 ${sections.filter((section) => section.passed).length}/${sections.length} 段达标` : '';
+      show(`策略与场景证据已核对。独立评测${resultRecord.qualityGatePassed ? '通过' : '未达标'}${count}。`);
+      independentButton.hidden = true;
+      if (SHA256_PATTERN.test(resultRecord.replay?.videoSha256 ?? '')) {
+        const replayUrl = independentUrl + '/replay';
+        if (independentVideo.getAttribute('src') !== replayUrl) independentVideo.src = replayUrl;
+        independentVideo.hidden = false;
+      }
+    } catch (error) {
+      if (!disposed) {
+        show(error.message);
+        independentButton.hidden = false;
+        independentVideo.hidden = true;
+      }
+    } finally {
+      reviewing = false;
+      independentButton.disabled = false;
+    }
+  };
+  const startIndependentReview = () => void checkIndependentReview(true);
+  independentButton?.addEventListener('click', startIndependentReview);
   const replayRetry = document.getElementById('reference-replay-retry');
   const replayFeedback = document.getElementById('reference-replay-feedback');
   let replayTimer = null;
@@ -838,6 +912,7 @@ export async function startRunDetail({
       if (disposed) return;
       if (!response.ok) {
         if ([401, 403, 404, 409].includes(response.status)) active = false;
+        if (independentPanel) independentPanel.hidden = true;
         if (response.status === 401) throw new Error('当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
         if (response.status === 403 || response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
         throw new Error('平台暂时无法读取这条 Run。请保留原链接，稍后刷新本页。');
@@ -853,6 +928,7 @@ export async function startRunDetail({
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId, payload.workshopEvidenceIssue, payload.artifactRegistry);
+      if (previousRun?.status !== run.status || !quiet) void checkIndependentReview();
       renderReferenceQueue(document, run, payload.queue, now());
       if (queueButton) queueButton.hidden = !run.computeResourceId;
       void showResimulatedReplay(document, location, fetchImpl, run);
@@ -902,6 +978,7 @@ export async function startRunDetail({
       queueButton?.removeEventListener('click', checkQueueWorkers);
       logsButton?.removeEventListener('click', loadLogs);
       replayRetry?.removeEventListener('click', retryReplay);
+      independentButton?.removeEventListener('click', startIndependentReview);
       if (replayTimer !== null) clearTimeoutImpl(replayTimer);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },

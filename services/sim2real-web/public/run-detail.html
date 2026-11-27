@@ -79,6 +79,7 @@
             <span id="quality-status">待核对</span>
           </div>
           <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
+          <p id="quality-baseline" hidden><a id="quality-baseline-link">打开对照 Run 的分段测量</a></p>
           <div class="comparison-scroll">
             <table id="quality-table" hidden>
               <caption>本次 Run 返回的分段测量</caption>
@@ -86,6 +87,13 @@
               <tbody id="quality-body"></tbody>
             </table>
           </div>
+        </section>
+
+        <section id="independent-review" aria-labelledby="independent-review-heading" hidden>
+          <h2 id="independent-review-heading">独立仿真验收</h2>
+          <p id="independent-review-status" role="status">正在查询原 Run 的验收记录。</p>
+          <button id="independent-review-start" type="button" hidden>用原策略验收</button>
+          <video id="independent-review-video" controls playsinline preload="metadata" aria-labelledby="independent-review-heading" hidden></video>
         </section>
 
         <section aria-labelledby="curve-heading">
