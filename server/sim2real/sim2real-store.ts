@@ -65,6 +65,11 @@ export const MAX_ACTIVE_RUN_TTL_SECONDS = 7 * 24 * 60 * 60;
 export const DEFAULT_COMPUTE_HEALTH_TTL_SECONDS = 10 * 60;
 export const MIN_COMPUTE_HEALTH_TTL_SECONDS = 30;
 export const MAX_COMPUTE_HEALTH_TTL_SECONDS = 24 * 60 * 60;
+// A worker that cannot confirm an active run can never report its terminal
+// state; the default outlasts a tunnel outage so only stranded runs close.
+export const DEFAULT_WORKER_LOST_TTL_SECONDS = 60 * 60;
+export const MIN_WORKER_LOST_TTL_SECONDS = 60;
+export const MAX_WORKER_LOST_TTL_SECONDS = 7 * 24 * 60 * 60;
 /** JSON ledger guard for the single-instance MVP store. */
 export const SIM2REAL_LEDGER_MAX_BYTES = 768 * 1024 * 1024;
 const READINESS_CACHE_TTL_MS = 5_000;
@@ -120,6 +125,18 @@ export function sim2RealComputeHealthTtlSeconds(): number {
     parsed <= MAX_COMPUTE_HEALTH_TTL_SECONDS
     ? parsed
     : DEFAULT_COMPUTE_HEALTH_TTL_SECONDS;
+}
+
+/** How long an active run may stay unconfirmed by its worker before it is closed. */
+export function sim2RealWorkerLostTtlSeconds(): number {
+  const raw = String(process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS ?? '').trim();
+  if (!raw) return DEFAULT_WORKER_LOST_TTL_SECONDS;
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) &&
+    parsed >= MIN_WORKER_LOST_TTL_SECONDS &&
+    parsed <= MAX_WORKER_LOST_TTL_SECONDS
+    ? parsed
+    : DEFAULT_WORKER_LOST_TTL_SECONDS;
 }
 
 /** Whether an account-owned worker has a recent, successful health lease. */

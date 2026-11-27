@@ -149,6 +149,157 @@ it('reconciles an unattended Worker result and retains the exact ONNX only for i
   }
 });
 
+async function unconfirmedWorkerFixture(
+  status: 'queued' | 'running' | 'cancelling',
+  respond: () => Response,
+) {
+  await fixture();
+  let reconcile: (() => Promise<void>) | undefined;
+  createSim2RealRouter(
+    {},
+    {
+      registerRunMaintenance: (action) => {
+        reconcile = action;
+      },
+    },
+  );
+  const worker = await createSim2RealComputeResource(
+    { name: 'Unreachable fixture', runnerUrl: 'http://127.0.0.1:19092/train' },
+    'owner-a',
+  );
+  const run = await createSim2RealRun(
+    {
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status,
+      mock: false,
+      computeResourceId: worker.id,
+      externalRunId: 'orphaned-run',
+      summary: 'awaiting completion',
+    },
+    'owner-a',
+  );
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => respond());
+  return { run, reconcile: () => reconcile!(), fetchMock };
+}
+
+const unreachableWorker = () => {
+  throw new TypeError('fetch failed');
+};
+
+async function withWorkerLostTtl(run: () => Promise<void>) {
+  const previousTtl = process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS;
+  process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = '60';
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    await run();
+  } finally {
+    vi.useRealTimers();
+    if (previousTtl === undefined) delete process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS;
+    else process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = previousTtl;
+  }
+}
+
+it('closes a run whose worker stays unconfirmed past the worker-lost TTL', async () => {
+  await withWorkerLostTtl(async () => {
+    const { run, reconcile, fetchMock } = await unconfirmedWorkerFixture(
+      'running',
+      unreachableWorker,
+    );
+    try {
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'running' });
+      vi.setSystemTime(Date.now() + 30_000);
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'running' });
+      vi.setSystemTime(Date.now() + 30_001);
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({
+        status: 'failed',
+        summary: expect.stringContaining('无法连接'),
+        failureDetail: { errorCode: 'worker_unreachable' },
+        finishedAt: expect.any(String),
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
+it('keeps a run active once its worker answers again, and restarts the count on a later loss', async () => {
+  await withWorkerLostTtl(async () => {
+    let reachable = false;
+    const { run, reconcile, fetchMock } = await unconfirmedWorkerFixture('running', () => {
+      if (!reachable) unreachableWorker();
+      return Response.json({ status: 'running', runId: 'orphaned-run' });
+    });
+    try {
+      await reconcile();
+      vi.setSystemTime(Date.now() + 30_000);
+      await reconcile();
+      reachable = true;
+      await reconcile();
+      vi.setSystemTime(Date.now() + 120_000);
+      reachable = false;
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'running' });
+      vi.setSystemTime(Date.now() + 60_001);
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({
+        status: 'failed',
+        failureDetail: { errorCode: 'worker_unreachable' },
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
+it('closes a run that the worker no longer knows', async () => {
+  await withWorkerLostTtl(async () => {
+    const { run, reconcile, fetchMock } = await unconfirmedWorkerFixture(
+      'running',
+      () => new Response(null, { status: 404 }),
+    );
+    try {
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'running' });
+      vi.setSystemTime(Date.now() + 60_001);
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({
+        status: 'failed',
+        summary: expect.stringContaining('已不存在'),
+        failureDetail: { errorCode: 'worker_run_missing' },
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
+it('finishes a stranded cancel as cancelled without a failure detail', async () => {
+  await withWorkerLostTtl(async () => {
+    const { run, reconcile, fetchMock } = await unconfirmedWorkerFixture(
+      'cancelling',
+      unreachableWorker,
+    );
+    try {
+      await reconcile();
+      expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'cancelling' });
+      vi.setSystemTime(Date.now() + 60_001);
+      await reconcile();
+      const stranded = await getSim2RealRun(run.id, 'owner-a');
+      expect(stranded).toMatchObject({
+        status: 'cancelled',
+        summary: expect.stringContaining('取消'),
+      });
+      expect(stranded).not.toHaveProperty('failureDetail');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+});
+
 it('uses the same trusted Worker resource for manual and submit screening, and skips both on Run replay', async () => {
   const router = await fixture();
   process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19090/train';

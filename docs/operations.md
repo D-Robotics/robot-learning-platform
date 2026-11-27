@@ -118,6 +118,7 @@
 | `RDK_SIM2REAL_MAX_ACTIVE_RUNS` | `4` | 每账号并发的 queued/running 上限，上限 100 |
 | `RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS` | `86400` | 崩溃窗口预留的回收时间（5 分钟–7 天） |
 | `RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS` | `600` | GPU Worker 健康检查的可执行租约（30 秒–24 小时）；过期的 online 资源在训练、状态对账和制品下发路径一律视为未知，必须重新测试连接 |
+| `RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS` | `3600` | 活跃 Run 连续多久得不到 Worker 确认后收尾（60 秒–7 天）：Worker 不可达、已删除或回 404 都算未确认，恢复应答即重新计时；取消中的 Run 收尾为已取消，其余记为失败并标注 `worker_unreachable` / `worker_run_missing` |
 | `RDK_SIM2REAL_COMPUTE_ALLOW_PRIVATE_HTTPS_HOSTS` | 空 | 直连私网 HTTPS GPU Worker 的精确主机/IP 白名单（逗号分隔）；共享部署默认拒绝私网字面量，优先使用 loopback SSH 隧道 |
 
 容量规划与扩容路径见 [`scalability.md`](scalability.md)。生产环境请显式设置保留天数，避免遥测无界增长后在写入侧被 fail-closed 挡住。

@@ -143,6 +143,7 @@ import {
   deleteSim2RealComputeResource,
   isSim2RealComputeResourceHealthFresh,
   sim2RealComputeHealthTtlSeconds,
+  sim2RealWorkerLostTtlSeconds,
   sim2RealActiveRunLimit,
   updateSim2RealRun,
   claimSim2RealRunRelay,
@@ -2697,12 +2698,76 @@ export function createSim2RealRouter(
 
   let runMaintenanceActive = false;
   let runMaintenanceOffset = 0;
+  // First maintenance pass that could not confirm an active run with its
+  // worker; a later confirmation clears it.
+  const workerLoss = new Map<string, { kind: 'unreachable' | 'missing'; since: number }>();
+  const closeRunLostFromWorker = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    loss: { kind: 'unreachable' | 'missing'; since: number },
+  ) => {
+    const current = await getSim2RealRun(run.id, owner);
+    if (
+      !current ||
+      current.externalRunId !== run.externalRunId ||
+      !['queued', 'running', 'cancelling'].includes(current.status)
+    ) {
+      workerLoss.delete(run.id);
+      return;
+    }
+    const lastProgressAt = current.progress?.at(-1)?.at;
+    // Progress newer than this loss came through a path that reached the worker.
+    if (lastProgressAt && Date.parse(lastProgressAt) >= loss.since) {
+      loss.since = Date.now();
+      return;
+    }
+    workerLoss.delete(run.id);
+    const cancelling = current.status === 'cancelling';
+    console.warn(`[sim2real] closing run ${run.id} after its worker stayed ${loss.kind}`);
+    await updateSim2RealRun(
+      current.id,
+      {
+        status: cancelling ? 'cancelled' : 'failed',
+        summary: cancelling
+          ? '取消请求始终未能送达训练 Worker；已按取消收尾，Worker 侧进程状态未确认。'
+          : loss.kind === 'missing'
+            ? '训练 Worker 已不存在这条任务（Worker 重启或任务被清理），结果无法取得。'
+            : `训练 Worker 已连续 ${Math.round(sim2RealWorkerLostTtlSeconds() / 60)} 分钟无法连接，运行按失败收尾；结果未确认，请检查 Worker 后重新提交。`,
+        ...(cancelling
+          ? {}
+          : {
+              failureDetail: {
+                errorCode: loss.kind === 'missing' ? 'worker_run_missing' : 'worker_unreachable',
+              },
+            }),
+        finishedAt: new Date().toISOString(),
+      },
+      owner,
+    );
+  };
+  const noteWorkerLoss = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    kind: 'unreachable' | 'missing',
+  ) => {
+    const known = workerLoss.get(run.id);
+    const loss = known ?? { kind, since: Date.now() };
+    loss.kind = kind;
+    workerLoss.set(run.id, loss);
+    if (Date.now() - loss.since >= sim2RealWorkerLostTtlSeconds() * 1_000)
+      await closeRunLostFromWorker(run, owner, loss);
+  };
   options.registerRunMaintenance?.(async () => {
     if (runMaintenanceActive) return;
     runMaintenanceActive = true;
     try {
       const targets = await listActiveLocalWorkerRuns();
-      if (!targets.length) return;
+      if (!targets.length) {
+        workerLoss.clear();
+        return;
+      }
+      const activeRunIds = new Set(targets.map(({ run }) => run.id));
+      for (const id of workerLoss.keys()) if (!activeRunIds.has(id)) workerLoss.delete(id);
       const count = Math.min(4, targets.length);
       const batch = Array.from(
         { length: count },
@@ -2713,14 +2778,26 @@ export function createSim2RealRouter(
         batch.map(async ({ run, owner }) => {
           const accountId = owner ?? (!auth.isMultiUserDeployment() ? 'local-dev' : '');
           if (!accountId || !run.externalRunId) return;
-          const runner = await resolveRunRunner(run.computeResourceId, owner);
-          if (!runner) return;
-          const latest = await requestLocalTrainingStatus({
-            ...runner,
-            accountId,
-            externalRunId: run.externalRunId,
-            timeoutMs: 5000,
-          });
+          let latest: Sim2RealRobogoRunResult;
+          try {
+            const runner = await resolveRunRunner(run.computeResourceId, owner);
+            if (!runner) {
+              // A deleted resource can never confirm or deliver this run.
+              await noteWorkerLoss(run, owner, 'missing');
+              return;
+            }
+            latest = await requestLocalTrainingStatus({
+              ...runner,
+              accountId,
+              externalRunId: run.externalRunId,
+              timeoutMs: 5000,
+            });
+          } catch (error) {
+            const missing = (error as { runnerNotFound?: boolean }).runnerNotFound === true;
+            await noteWorkerLoss(run, owner, missing ? 'missing' : 'unreachable');
+            return;
+          }
+          workerLoss.delete(run.id);
           if (
             latest.externalRunId !== run.externalRunId ||
             !['completed', 'failed', 'cancelled'].includes(latest.status)

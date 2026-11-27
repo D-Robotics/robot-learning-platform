@@ -42,6 +42,10 @@ import {
   isSim2RealComputeResourceHealthFresh,
   sim2RealActiveRunLimit,
   sim2RealComputeHealthTtlSeconds,
+  sim2RealWorkerLostTtlSeconds,
+  DEFAULT_WORKER_LOST_TTL_SECONDS,
+  MAX_WORKER_LOST_TTL_SECONDS,
+  MIN_WORKER_LOST_TTL_SECONDS,
   sim2RealStorageInfo,
   sim2RealStorageReadiness,
   sim2RealTelemetryRetentionDays,
@@ -54,6 +58,7 @@ const previousMaxActiveRuns = process.env.RDK_SIM2REAL_MAX_ACTIVE_RUNS;
 const previousActiveRunTtl = process.env.RDK_SIM2REAL_ACTIVE_RUN_TTL_SECONDS;
 const previousRetention = process.env.RDK_SIM2REAL_TELEMETRY_RETENTION_DAYS;
 const previousComputeHealthTtl = process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
+const previousWorkerLostTtl = process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS;
 const previousLease = process.env.RDK_SIM2REAL_STORAGE_LEASE;
 
 afterEach(async () => {
@@ -72,6 +77,8 @@ afterEach(async () => {
   if (previousComputeHealthTtl === undefined)
     delete process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
   else process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS = previousComputeHealthTtl;
+  if (previousWorkerLostTtl === undefined) delete process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS;
+  else process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = previousWorkerLostTtl;
   if (previousLease === undefined) delete process.env.RDK_SIM2REAL_STORAGE_LEASE;
   else process.env.RDK_SIM2REAL_STORAGE_LEASE = previousLease;
 });
@@ -104,6 +111,19 @@ function summaryFor(telemetry: readonly Sim2RealTelemetryRecord[]): Sim2RealEval
 }
 
 describe('Sim2Real owner-scoped ledger', () => {
+  it('bounds the worker-lost TTL that closes an unconfirmed run', () => {
+    delete process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS;
+    expect(sim2RealWorkerLostTtlSeconds()).toBe(DEFAULT_WORKER_LOST_TTL_SECONDS);
+    process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = String(MIN_WORKER_LOST_TTL_SECONDS);
+    expect(sim2RealWorkerLostTtlSeconds()).toBe(MIN_WORKER_LOST_TTL_SECONDS);
+    process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = String(MAX_WORKER_LOST_TTL_SECONDS);
+    expect(sim2RealWorkerLostTtlSeconds()).toBe(MAX_WORKER_LOST_TTL_SECONDS);
+    for (const invalid of ['0', '59', '604801', '1.5', 'not-a-number']) {
+      process.env.RDK_SIM2REAL_WORKER_LOST_TTL_SECONDS = invalid;
+      expect(sim2RealWorkerLostTtlSeconds()).toBe(DEFAULT_WORKER_LOST_TTL_SECONDS);
+    }
+  });
+
   it('bounds the GPU health lease and expires old online evidence', () => {
     delete process.env.RDK_SIM2REAL_COMPUTE_HEALTH_TTL_SECONDS;
     expect(sim2RealComputeHealthTtlSeconds()).toBe(DEFAULT_COMPUTE_HEALTH_TTL_SECONDS);
