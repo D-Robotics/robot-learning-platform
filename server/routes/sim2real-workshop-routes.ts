@@ -22,7 +22,7 @@ import originManDanceManifest from '../../plugins/rdk-robot-learning-platform/re
 import { isDeepStrictEqual } from 'node:util';
 import { createHash } from 'node:crypto';
 import originManManifest from '../../plugins/rdk-robot-learning-platform/references/originman-manifest.json' with { type: 'json' };
-import { validateSim2RealManifest } from '../../shared/sim2real.js';
+import { validateSim2RealManifest, type Sim2RealComputeResource } from '../../shared/sim2real.js';
 import type { Request, Response, Router } from 'express';
 import { createWorkshopSessions } from '../sim2real/workshop-session.js';
 import { createExperimentSessions, ExperimentError } from '../sim2real/experiment-sessions.js';
@@ -32,7 +32,6 @@ import {
   listSim2RealComputeResources,
   getSim2RealModel,
   getSim2RealComputeResource,
-  getSim2RealComputeResourceSecret,
   findSim2RealRunByIdempotency,
 } from '../sim2real/sim2real-store.js';
 import { isWebCloudDeployment } from '../sim2real/standalone-adapters.js';
@@ -109,7 +108,13 @@ export function createPlatformWorkshopSessions() {
 
 export function registerSim2RealWorkshopRoutes(
   router: Router,
-  deps: { requestOwner: (r: Request, s: Response) => string | undefined | null },
+  deps: {
+    requestOwner: (r: Request, s: Response) => string | undefined | null;
+    requireOriginmanReferenceWorker: (
+      id: string,
+      owner?: string,
+    ) => Promise<{ resource: Sim2RealComputeResource; runnerToken?: string }>;
+  },
   options: { prefix: string },
 ) {
   const { sessions, experiments } = createPlatformWorkshopSessions();
@@ -221,27 +226,13 @@ export function registerSim2RealWorkshopRoutes(
           400,
         );
       }
-      const selected = await getSim2RealComputeResourceSecret(
-        String(request.body?.computeResourceId ?? ''),
+      const { resource, runnerToken } = await deps.requireOriginmanReferenceWorker(
+        String(input.computeResourceId ?? ''),
         owner,
       );
-      const resource = selected?.resource;
-      if (
-        !resource ||
-        resource.status !== 'online' ||
-        resource.source === 'local-agent' ||
-        resource.mock !== false ||
-        !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
-      ) {
-        throw new ExperimentError(
-          'ORIGINMAN_REFERENCE_WORKER_MISSING',
-          '请先检查支持跟跳的 Worker 连接。',
-          409,
-        );
-      }
       const result = await screenOriginmanReferenceWithWorker({
         runnerUrl: resource.runnerUrl,
-        token: selected.runnerToken,
+        token: runnerToken,
         accountId: owner ?? 'local-dev',
         resourceId: resource.id,
         trajectory,

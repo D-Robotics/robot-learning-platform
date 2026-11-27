@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import { originmanReferenceDigest } from '../sim2real/originman-reference-digest.js';
+import { preparePinnedOriginmanMotion } from '../sim2real/originman-motion.js';
 import { readPolicyArtifact } from '../sim2real/policy-artifact-store.js';
 import {
   appendSim2RealTelemetry,
@@ -150,6 +151,7 @@ it('reconciles an unattended Worker result and retains the exact ONNX only for i
 
 it('uses the same trusted Worker resource for manual and submit screening, and skips both on Run replay', async () => {
   const router = await fixture();
+  process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19090/train';
   const resource = await createSim2RealComputeResource({
     name: 'reference-worker',
     kind: 'local-gpu',
@@ -175,12 +177,19 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
   expect(model.statusCode).toBe(200);
   const originalFetch = globalThis.fetch;
   const screened: { owner: string | null; resource: string | null; body: string }[] = [];
+  let healthChecks = 0;
   let launches = 0;
   let rejected = false;
   let statusReads = 0;
   const queuedAt = new Date().toISOString();
   globalThis.fetch = (async (input, init) => {
-    const pathname = new URL(String(input)).pathname;
+    const url = new URL(String(input));
+    expect(url.port).toBe('19091');
+    const pathname = url.pathname;
+    if (pathname === '/healthz') {
+      healthChecks++;
+      return Response.json({ ok: true, engines: ['originman-reference-ppo'], mock: false });
+    }
     if (pathname === '/originman-reference/screen') {
       const body = String(init?.body);
       const headers = new Headers(init?.headers);
@@ -256,6 +265,7 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
     expect(retry.statusCode).toBe(200);
     expect(retry.body).toMatchObject({ idempotentReplay: true, run: { id: run.body.run.id } });
     expect(screened).toHaveLength(2);
+    expect(healthChecks).toBe(2);
     expect(launches).toBe(1);
     rejected = true;
     const failed = await submit('reference-screen-rejected');
@@ -292,6 +302,94 @@ it('uses the same trusted Worker resource for manual and submit screening, and s
     expect(statusReads).toBe(1);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+it('blocks follow-dance before screening or reserving a Run when the selected Worker changes engines', async () => {
+  const router = await fixture();
+  process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:19090/train';
+  const resource = await createSim2RealComputeResource({
+    name: 'follow-dance worker',
+    kind: 'local-gpu',
+    source: 'server-runner',
+    runnerUrl: 'http://127.0.0.1:19091/train',
+    status: 'online',
+    engines: ['originman-reference-ppo'],
+    mock: false,
+    lastCheckedAt: new Date().toISOString(),
+  });
+  const model = await invoke(router, 'post', '/api/sim2real/originman-reference/model', {
+    body: { computeResourceId: resource.id },
+  });
+  expect(model.statusCode).toBe(200);
+  const composition = { presetId: 'example-arms-preset' };
+  const preview = await invoke(router, 'post', '/api/sim2real/originman-motion/preview', {
+    body: composition,
+  });
+  expect(preview.statusCode).toBe(200);
+  const preset = { composition, expectedTrajectorySha256: preview.body.preview.trajectorySha256 };
+  const upload = {
+    trajectory: (await preparePinnedOriginmanMotion(composition, preset.expectedTrajectorySha256))
+      .trajectory,
+  };
+  const submit = (reference: typeof preset | typeof upload, computeResourceId = resource.id) =>
+    invoke(router, 'post', '/api/sim2real/runs', {
+      body: {
+        modelId: model.body.modelId,
+        backend: 'local',
+        taskId: 'originman-reference-track',
+        computeResourceId,
+        idempotencyKey: 'reference-capability-test',
+        training: {
+          profile: 'smoke',
+          engine: 'originman-reference-ppo',
+          algorithm: 'ppo',
+          maxIterations: 2,
+          numEnvs: 4,
+          video: true,
+          originmanReference: { ...reference, trainingSteps: 8192, seed: 7 },
+        },
+      },
+    });
+  let workerAvailable = true;
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    expect(String(input)).toBe('http://127.0.0.1:19091/healthz');
+    return workerAvailable
+      ? Response.json({ ok: true, mock: false, engines: ['originman-recovery'] })
+      : Response.json({ ok: false }, { status: 503 });
+  });
+  try {
+    const missing = await submit(preset, '');
+    expect(missing.statusCode).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    for (const response of [
+      await submit(preset),
+      await submit(upload),
+      await invoke(router, 'post', '/api/sim2real/originman-reference/screen', {
+        body: { ...preset, computeResourceId: resource.id },
+      }),
+    ]) {
+      expect(response.body).toMatchObject({ code: 'ORIGINMAN_REFERENCE_WORKER_MISSING' });
+      expect(response.statusCode).toBe(409);
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const compute = await invoke(router, 'get', '/api/sim2real/compute-resources');
+    expect(compute.body.computeResources).toContainEqual(
+      expect.objectContaining({ id: resource.id, engines: ['originman-recovery'] }),
+    );
+
+    workerAvailable = false;
+    const offline = await submit(upload);
+    expect(offline.statusCode).toBe(503);
+    expect(offline.body).toMatchObject({
+      code: 'ORIGINMAN_REFERENCE_WORKER_UNAVAILABLE',
+      retryable: true,
+    });
+    const runs = await invoke(router, 'get', '/api/sim2real/runs');
+    expect(runs.body.runs).toEqual([]);
+  } finally {
+    fetchMock.mockRestore();
   }
 });
 
