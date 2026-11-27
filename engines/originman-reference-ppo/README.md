@@ -84,3 +84,34 @@ also be uploaded directly from the reference page for an account's own Run.
 The public plugin uses the model bundle already configured on the selected
 Worker. For a new Worker, use the [dance engine bundle generator](../originman-dance-ppo/README.md)
 with a converted model supplied by the operator.
+
+## Check sensitivity before hardware rehearsal
+
+Use the original 78→18 candidate ONNX and its reference trajectory with
+`robustness_check.py`. The tool checks their hashes and verifies the matching
+scene and calibration. It replays both the no-residual baseline and the PPO
+policy under the same parameters, without retraining or opening any hardware
+interface.
+
+```sh
+python engines/originman-reference-ppo/robustness_check.py \
+  --candidates /path/to/originman-cpu-candidates \
+  --bundle /path/to/verified-originman-scene \
+  --preset 22 --workers 1 --report /path/to/new-report.json
+```
+
+The cases use the current calibration, the 200 ms actuator lag from the
+`originman-env` 1.0.0 package with the trained command lead, the same lag
+with a separately simulated matched command lead, and an exploratory 20%
+reduction in the sliding friction coefficient. A separate case updates six
+joint positions and velocities every 40 ms in servo order, as a simplified
+model of the historical runner's rotating readback. The matched lead and
+readback results describe the simulation. Measure the target robot before
+choosing its control settings.
+
+`originman-rl-pack` supplies the original joint map, calibration, and a historical
+board runner. The map records unmeasured per-joint angle scales and gives the
+evidence for each direction. The runner loads an NPZ network and the historical
+open-loop replay does not supply live observation or actuation evidence for the
+current ONNX. Hardware acceptance should record board identity, measured joint
+scale and direction, IMU alignment, and observation age for each joint.
