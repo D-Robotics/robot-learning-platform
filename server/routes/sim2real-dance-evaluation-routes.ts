@@ -12,6 +12,28 @@ const execute = promisify(execFile);
 const digest = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
 const sha256 = /^[a-f0-9]{64}$/;
 const gate = 'originman-dance-squat-descent-ascent-v1';
+
+export async function resolveOriginmanDanceEvaluationBundle(
+  expectedSceneSha256: string,
+  registry: string | undefined,
+  fallback: string | undefined,
+) {
+  if (!sha256.test(expectedSceneSha256)) return null;
+  const candidates = [
+    ...(registry ? [path.join(registry, expectedSceneSha256)] : []),
+    ...(fallback ? [fallback] : []),
+  ];
+  for (const candidate of candidates) {
+    try {
+      const scene = await readFile(path.join(candidate, 'model', 'scene.xml'));
+      if (digest(scene) === expectedSceneSha256) return candidate;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+    }
+  }
+  return null;
+}
 const inFlight = new Map<string, Promise<void>>();
 const evaluator = fileURLToPath(
   new URL('../../engines/originman-dance-ppo/evaluate_policy.py', import.meta.url),
@@ -22,31 +44,35 @@ type Dependencies = {
   requestOwner: (request: Request, response: Response) => string | null | undefined;
   getRun: (id: string, owner?: string) => Promise<Sim2RealRunRecord | null>;
   fetchArtifact: (run: Sim2RealRunRecord, owner?: string) => Promise<{ bytes: Buffer } | null>;
+  recoverEvidence?: (run: Sim2RealRunRecord, owner?: string) => Promise<Sim2RealRunRecord | null>;
 };
 
+function eligible(run: Sim2RealRunRecord) {
+  return (
+    run.taskId === 'originman-dance' &&
+    run.status === 'completed' &&
+    run.mock === false &&
+    run.artifact?.format?.toLowerCase() === 'onnx' &&
+    Boolean(run.training?.originmanDance) &&
+    sha256.test(run.artifact?.sha256 ?? '')
+  );
+}
+
 function sourceFor(run: Sim2RealRunRecord) {
-  const scene = (
-    run.metrics?.originmanDance as { sceneProvenance?: { sceneSha256?: string } } | undefined
-  )?.sceneProvenance;
-  const sceneSha256 = scene?.sceneSha256 ?? '';
-  const policySha256 = run.artifact?.sha256 ?? '';
+  const sceneSha256 = run.metrics?.originmanDance?.sceneProvenance?.sceneSha256 ?? '';
+  const dance = run.training?.originmanDance;
   if (
-    run.taskId !== 'originman-dance' ||
-    run.status !== 'completed' ||
-    run.mock !== false ||
-    run.artifact?.format?.toLowerCase() !== 'onnx' ||
-    !run.training?.originmanDance ||
-    !sha256.test(policySha256) ||
+    !dance ||
     !sha256.test(sceneSha256) ||
     !/^custom-policy-originman-dance-v[12]$/.test(run.contractId ?? '')
   )
     return null;
   return {
     runId: run.id,
-    policySha256,
+    policySha256: run.artifact!.sha256,
     sceneSha256,
     contractId: run.contractId,
-    dance: run.training.originmanDance,
+    dance,
     gate,
   };
 }
@@ -57,16 +83,33 @@ export function registerSim2RealDanceEvaluationRoutes(router: Router, deps: Depe
     response.setHeader('Cache-Control', 'no-store');
     const owner = deps.requestOwner(request, response);
     if (owner === null) return;
-    const run = await deps.getRun(String(request.params.id), owner);
+    let run = await deps.getRun(String(request.params.id), owner);
     if (!run) {
       response.status(404).json({ ok: false, message: '当前账号无法读取这条训练记录。' });
       return;
     }
-    const source = sourceFor(run);
+    if (!eligible(run)) {
+      response.status(409).json({
+        ok: false,
+        code: 'DANCE_EVALUATION_INELIGIBLE',
+        message: '独立舞段验收需要已完成的真实舞蹈训练与可核验的 ONNX。',
+      });
+      return;
+    }
+    let source = sourceFor(run);
+    if (!source && request.method === 'POST' && deps.recoverEvidence) {
+      const recovered = await deps.recoverEvidence(run, owner);
+      if (recovered) {
+        run = recovered;
+        source = sourceFor(recovered);
+      }
+    }
     if (!source) {
-      response
-        .status(409)
-        .json({ ok: false, message: '需要已完成的真实舞蹈训练，以及可核验的策略和场景摘要。' });
+      response.status(request.method === 'GET' ? 404 : 409).json({
+        ok: false,
+        code: 'DANCE_EVIDENCE_INCOMPLETE',
+        message: '原 Run 缺少已核验的场景摘要或契约，独立评测暂无法生成。',
+      });
       return;
     }
     const key = digest(JSON.stringify([owner ?? 'local-dev', source]));
@@ -119,9 +162,19 @@ export function registerSim2RealDanceEvaluationRoutes(router: Router, deps: Depe
         return;
       }
       const python = process.env.RDK_ORIGINMAN_DANCE_EVAL_PYTHON;
-      const bundle = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE;
-      if (!python || !bundle) {
+      const registry = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE_ROOT;
+      const fallback = process.env.RDK_ORIGINMAN_DANCE_EVAL_BUNDLE;
+      if (!python || (!registry && !fallback)) {
         response.status(503).json({ ok: false, message: '平台尚未配置独立舞蹈评测运行环境。' });
+        return;
+      }
+      const bundle = await resolveOriginmanDanceEvaluationBundle(
+        scope.source.sceneSha256,
+        registry,
+        fallback,
+      );
+      if (!bundle) {
+        response.status(409).json({ ok: false, message: '平台缺少这条训练记录对应的原仿真场景。' });
         return;
       }
       let work = inFlight.get(scope.key);

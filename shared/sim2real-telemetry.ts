@@ -163,6 +163,11 @@ export interface Sim2RealRunProgressPoint {
   meanReward: number;
   recentSuccess: number;
   episodeSamples?: number;
+  episodeCompleted?: number;
+  episodeTermination?: Record<
+    'contact' | 'tilt' | 'height' | 'travel' | 'nonfinite' | 'unknown',
+    number
+  >;
   elapsedSeconds?: number;
   at?: string;
 }

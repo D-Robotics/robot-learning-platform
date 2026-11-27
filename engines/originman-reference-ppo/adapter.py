@@ -28,7 +28,9 @@ from train import WorkerProgress, resolve_training_device
 
 TASK = "originman-reference-track"
 ENGINE = "originman-reference-ppo"
-CONTRACT = "custom-policy-originman-reference-v1"
+LEGACY_CONTRACT = "custom-policy-originman-reference-v1"
+CONTRACT = "custom-policy-originman-reference-v2"
+OBSERVATIONS = {LEGACY_CONTRACT: 96, CONTRACT: 78}
 PROFILE_PATH = ROOT / "plugins/rdk-robot-learning-platform/references/originman-reference-calibration.json"
 PROFILE = json.loads(PROFILE_PATH.read_text())
 JOINTS = PROFILE["robot"]["jointOrder"]
@@ -40,6 +42,9 @@ MIN_MOTION_FRAMES = 2
 # A composition can repeat each of its 128 blocks up to eight times.
 MAX_COMPOSITION_SECTIONS = 128 * 8
 REFERENCE_DIGEST_VERSION = "originman-reference-f64be-v1"
+RESIDUAL_AUTHORITY = 0.12
+MOTION_REFERENCE_SIGMA_RAD = 0.05
+RECORDING_SLOT = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 SOURCE_STANCE = "source-neutral-v1"
 ROLLOUT_STEPS = 4096
 CHECKPOINT_STEPS = 32768
@@ -87,7 +92,11 @@ def validate_trajectory(value):
 
 
 class ReferenceTracking(gym.Env):
-    def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None):
+    def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None, *,
+                 contract_id=CONTRACT, bpm=100.0):
+        self.contract_id = contract_id
+        self.bpm = bpm
+        self.motion_contract = contract_id == CONTRACT
         config = Config(stride=0, lift=0, sway=0)
         if stance_profile == SOURCE_STANCE:
             # The delivered position samples are relative to an uncrouched
@@ -128,7 +137,15 @@ class ReferenceTracking(gym.Env):
         if not math.isclose(self.substeps * self.model.opt.timestep, DT):
             raise ValueError("scene physics step does not divide the 50 Hz control interval")
         self.action_space = gym.spaces.Box(-1, 1, (18,), dtype=np.float32)
-        self.observation_space = gym.spaces.Box(-np.inf, np.inf, (96,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(
+            -np.inf, np.inf, (OBSERVATIONS[contract_id],), dtype=np.float32,
+        )
+        self.residual_scale = np.asarray([
+            .22 * 1.24 if name.endswith(("hip_roll", "ank_roll"))
+            else .34 * 1.24 if any(part in name for part in ("hip_", "knee", "ank_"))
+            else .88
+            for name in TRACKED
+        ])
 
     def apply_calibration(self):
         sim = PROFILE["simulation"]
@@ -161,11 +178,19 @@ class ReferenceTracking(gym.Env):
     def observe(self):
         frame = min(self.tick, len(self.target) - 1)
         rotation, _ = self.robot.orientation()
-        return np.r_[rotation[2], self.data.sensordata[:3] / 4,
-                     (self.data.qpos[self.qpos] - self.neutral) / .5,
-                     self.data.qvel[self.qvel] / 10,
-                     self.target[frame] / .5, self.target_vel[frame] / 10,
-                     self.previous].astype(np.float32)
+        body = np.r_[rotation[2], self.data.sensordata[:3] / 4]
+        joints = np.r_[(self.data.qpos[self.qpos] - self.neutral) / .5,
+                       self.data.qvel[self.qvel] / 10, self.target[frame] / .5]
+        if self.motion_contract:
+            beat_phase = math.tau * self.tick * DT * self.bpm / 60
+            phrase_phase = beat_phase / 8
+            phase = math.pi * frame / max(1, len(self.target) - 1)
+            # Recorded motion occupies the first of the eight choreography slots.
+            return np.r_[body, math.sin(beat_phase), math.cos(beat_phase),
+                         math.sin(phrase_phase), math.cos(phrase_phase), (self.bpm - 116) / 16,
+                         joints, RECORDING_SLOT, math.sin(2 * phase), math.cos(2 * phase),
+                         math.sin(phase), math.cos(phase), float(phase >= .75 * math.pi)].astype(np.float32)
+        return np.r_[body, joints, self.target_vel[frame] / 10, self.previous].astype(np.float32)
 
     def step(self, action):
         action = np.asarray(action, dtype=np.float64)
@@ -173,7 +198,12 @@ class ReferenceTracking(gym.Env):
             raise ValueError("policy output must have 18 finite actions")
         action = np.clip(action, -1, 1)
         desired = self.neutral + self.target[self.tick]
-        target = np.clip(desired + 0.16 * action, *self.limits.T)
+        if self.motion_contract:
+            action = self.previous + np.clip(action - self.previous, -.20, .20)
+            correction = RESIDUAL_AUTHORITY * self.residual_scale * action
+        else:
+            correction = .16 * action
+        target = np.clip(desired + correction, *self.limits.T)
         control = self.data.ctrl[self.actuators]
         self.data.ctrl[self.actuators] = control + self.lag_mix * (target - control)
         mujoco.mj_step(self.model, self.data, nstep=self.substeps)
@@ -196,15 +226,23 @@ class ReferenceTracking(gym.Env):
         failed = bool(failure)
         error = self.data.qpos[self.qpos] - desired
         velocity_error = self.data.qvel[self.qvel] - self.target_vel[self.tick]
-        reward = (2 * math.exp(-12 * np.mean(error ** 2)) +
+        tracking_scale = 1 / MOTION_REFERENCE_SIGMA_RAD ** 2 if self.motion_contract else 12
+        reward = (2 * math.exp(-tracking_scale * np.mean(error ** 2)) +
                   .2 * math.exp(-.25 * np.mean(velocity_error ** 2)) -
                   .004 * tilt - .03 * np.mean(action ** 2) - 3 * failed)
         self.tick += 1
         self.previous = action
         complete = self.tick == len(self.target)
+        episode_end_reason = (
+            "nonfinite" if failed and not np.isfinite(self.data.qpos).all() else
+            "contact" if other_contacts else
+            "tilt" if "tilt" in failure else
+            "height" if "height" in failure else None
+        )
         return self.observe(), reward, failed, complete and not failed, {
             "episodeDone": complete or failed,
             "taskSuccess": complete and not failed,
+            "episodeEndReason": episode_end_reason,
             "failure": failure,
             "tilt": tilt,
             "yaw": math.degrees(yaw),
@@ -255,12 +293,12 @@ def evaluate(env, policy, ranges=()):
     }, frames
 
 
-def reference_gate(bundle, trajectory, stance_profile=None):
-    env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
+def reference_gate(bundle, trajectory, stance_profile=None, **policy):
+    env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile, **policy)
     zero = lambda _obs: np.zeros(18)
     calibrated, _ = evaluate(env, zero)
     try:
-        original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False), zero)
+        original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False, **policy), zero)
         original_evidence = {"existingSceneGate": original}
     except ReferenceLimitError as error:
         original_evidence = {"existingSceneLimitViolation": error.violation}
@@ -332,12 +370,18 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
-    factory = lambda: ReferenceTracking(bundle, trajectory, stance_profile=stance_profile)
+    contract_id = evaluation_env.contract_id
+    bpm = evaluation_env.bpm
+    factory = lambda: ReferenceTracking(
+        bundle, trajectory, stance_profile=stance_profile, contract_id=contract_id,
+        bpm=bpm,
+    )
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
         learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=ROLLOUT_STEPS // num_envs,
                       batch_size=128, n_epochs=4, learning_rate=3e-4,
-                      policy_kwargs={"net_arch": [128, 128], "log_std_init": -2.8})
+                      policy_kwargs={"net_arch": [160, 160] if contract_id == CONTRACT else [128, 128],
+                                     "log_std_init": -2.8})
         checkpoints = []
         best = None
         candidate_weights = output / "candidate.zip"
@@ -348,14 +392,16 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                           reset_num_timesteps=False,
                           callback=progress)
             learner.save(candidate_weights)
-            policy_sha = write_onnx(candidate_weights, candidate_policy, 96)
+            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id])
             session = ReferenceEvaluator(onnx.load(candidate_policy))
             parity_error = 0.0
+
+            verify_parity = contract_id == CONTRACT or bool(ranges)
 
             def predict(observation):
                 nonlocal parity_error
                 values = session.run(None, {"observation": observation[None]})[0][0]
-                if ranges:
+                if verify_parity:
                     with torch.no_grad():
                         tensor = torch.from_numpy(observation[None]).to(learner.device)
                         torch_values = learner.policy._predict(tensor, deterministic=True).cpu().numpy()[0]
@@ -363,7 +409,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 return values
 
             result, frames = evaluate(evaluation_env, predict, ranges)
-            if ranges:
+            if verify_parity:
                 result["onnxMaxAbsError"] = parity_error
                 if parity_error >= 1e-6:
                     raise ValueError("exported ONNX failed the reference policy parity check")
@@ -392,9 +438,12 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
 def main():
     request = read_request()
     contract = request["contract"]
-    if request.get("taskId") != TASK or (contract.get("id"), contract.get("observationSize"),
-        contract.get("actionSize"), contract.get("controlHz")) != (CONTRACT, 96, 18, 50):
-        raise ValueError("reference tracking requires its own 96→18, 50 Hz policy contract")
+    contract_id = contract.get("id")
+    observation_size = OBSERVATIONS.get(contract_id)
+    if request.get("taskId") != TASK or observation_size is None or (
+        contract.get("observationSize"), contract.get("actionSize"), contract.get("controlHz")
+    ) != (observation_size, 18, HZ):
+        raise ValueError("reference tracking requires a supported 50 Hz policy contract")
     training = request["training"]
     if training.get("engine") != ENGINE or training.get("algorithm") != "ppo" or training.get("video") is not True:
         raise ValueError("invalid reference-tracking engine or configuration")
@@ -423,7 +472,10 @@ def main():
     stance_profile = provenance.get("stanceProfile")
     if stance_profile is not None and not provenance.get("referenceAssetSha256"):
         raise ValueError("a source stance requires a verified preset asset")
-    env, report = reference_gate(bundle, trajectory, stance_profile)
+    bpm = provenance.get("bpm", 100.0)
+    if type(bpm) not in (int, float) or not 80 <= bpm <= 140:
+        raise ValueError("reference tempo must be between 80 and 140 BPM")
+    env, report = reference_gate(bundle, trajectory, stance_profile, contract_id=contract_id, bpm=bpm)
     (output / "reference-gate.json").write_text(json.dumps(report, allow_nan=False))
     print(json.dumps({"event": "reference-gate", **report}), flush=True)
     if not gate_allows_training(report["gate"]):
@@ -435,9 +487,9 @@ def main():
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
-    # Each delivered sample maps to one video frame. The reset state precedes
-    # the first control tick and would add an extra 1/50 s to the original.
-    replay_frames = frames[1:] if provenance.get("referenceAssetSha256") else frames
+    # One video frame per control tick. The reset state precedes the first tick.
+    exact_replay = contract_id == CONTRACT or provenance.get("referenceAssetSha256")
+    replay_frames = frames[1:] if exact_replay else frames
     np.savez_compressed(replay_path, qpos=np.asarray(replay_frames))
     replay_sha = digest(replay_path)
     results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
@@ -469,7 +521,7 @@ def main():
                      "format": "onnx", "kind": "compiled", "name": "policy.onnx",
                      "runtime": "onnxruntime-cpu", "workload": "humanoid-dance",
                      "sha256": policy_sha, "deployable": False},
-        "metrics": {"engine": ENGINE, "contractValid": True, "observationSize": 96, "actionSize": 18,
+        "metrics": {"engine": ENGINE, "contractValid": True, "observationSize": observation_size, "actionSize": 18,
                     "trainingSteps": actual_steps, "trainingDevice": device, "trainingDeviceName": device_name,
                     "physicsBackend": "cpu-mujoco", "originmanReference": results},
     }

@@ -99,7 +99,18 @@ async function api(path, body, idempotencyKey, signal) {
   });
   const value = await response.json().catch(() => null);
   if (!response.ok || !value?.ok) {
-    if (response.status === 401) throw Error('请先登录机器人学习平台，再刷新此页。');
+    if (response.status === 401) {
+      const login = byId('reference-login');
+      if (login) {
+        const current = new URL(location.href);
+        if (!current.searchParams.has('mode')) current.searchParams.set('mode', 'upload');
+        const target = new URL('./login', current);
+        target.searchParams.set('returnTo', current.pathname + current.search);
+        byId('reference-login-link').href = target.href;
+        login.hidden = false;
+      }
+      throw Error('请登录工作区后继续。');
+    }
     if (response.status === 413) throw Error('轨迹超过上传容量上限，请拆成更短的片段。');
     throw Object.assign(
       Error(value?.message || value?.error?.message || '暂时无法连接任务服务，请重试。'),
@@ -194,6 +205,8 @@ function selectedWorkerReady() {
 function showWorkerHint() {
   const selected = resources.find(({ id }) => id === worker.value);
   const load = freshWorkshopWorkerLoad(selected);
+  const computeLink = byId('reference-compute-link');
+  if (computeLink) computeLink.hidden = Boolean(selected?.ready);
   if (requestedWorkerUnavailable) {
     workerHint.textContent = '原先指定的算力当前无法用于参考舞蹈。请选择在线的课堂共享 GPU，或在「执行资源」检查原算力。';
   } else if (!resources.length) {

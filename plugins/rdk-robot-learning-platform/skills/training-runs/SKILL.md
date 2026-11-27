@@ -14,7 +14,7 @@ description: 查询指定 Run 的训练状态、ONNX 策略留存与下载、已
 
 ## OriginMan 自定义舞蹈
 
-预置参考舞蹈和动作组自由编排先用 `rdk_originman_motion_library` 取得当前平台的动作或预置 ID，再用 `rdk_originman_motion_preview` 核对实际时长和轨迹摘要。确认后用 `rdk_originman_dance_train` 提交 `dance: {presetId}` 或 `dance: {blocks, transitionSeconds}`。指定支持跟跳的 Worker，并把预览返回的 `trajectorySha256` 作为 `expectedTrajectorySha256`；若返回 `stanceProfile`，一并作为 `expectedStanceProfile` 提交。将本轮 Run 打开到 Studio 右侧，用 `rdk_training_wait` 等待结果。旧式 `sections` 配方仍用原入口和原策略契约。只提供文件时打开 `rdk_originman_reference_track`，由用户在页面导入。
+预置参考舞蹈和动作组自由编排先用 `rdk_originman_motion_library` 取得当前平台的动作或预置 ID，再用 `rdk_originman_motion_preview` 预览。已选 Worker 时传 `computeResourceId`，也可明确指定训练步数和并行环境数。需要选算力时，用回执的 `workerLookup` 查询，补上用户选定的 Worker。用户明确要求开始后，在同一个对话里把 `nextArguments` 传给 `rdk_originman_dance_train`。参数变化时要重新预览。按回执打开 Studio 右侧原 Run，用 `rdk_training_wait` 等待，分别报告仿真稳定性和跟踪误差对照。新参考轨迹训练使用平台下发的 [78→18 契约](../../references/originman-reference-manifest.json)。已有 96→18 Run 按[历史契约](../../references/originman-reference-legacy-manifest.json)查询。旧式 `sections` 配方沿用原入口。只提供文件时打开 `rdk_originman_reference_track`，由用户在页面导入。
 
 舞蹈新手先调用 `rdk_learning_guide`，每轮只收集一个缺项。算力未选时展示当前账号的可选算力和执行资源入口，按 `resumeArguments` 保留已有编舞和预算。明确确认编舞、算力和预算后，将引导返回的 `nextArguments` 原样传给 `rdk_originman_dance_train`。改参重训用 `intent:"retry"` 和原 Run。只改一段时传 `sectionEdits`，段号从 1 开始。学员可明确选择模型或算力，确认前先展示变化。`modelId` 可省略，工具按专用契约查找或登记。
 

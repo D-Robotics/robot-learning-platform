@@ -58,6 +58,7 @@ export function resolvedTaskPack(taskId?: string): Record<string, unknown> | nul
 export interface Sim2RealRobogoRunResult {
   status: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed';
   externalRunId?: string;
+  contractId?: string;
   /** Latest queue evidence from the worker, kept out of the durable Run. */
   queue?: { position?: number; queuedAt?: string };
   /** Propagated by the server-side mock worker; never implies a deployable model. */
@@ -506,6 +507,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
     typeof item === 'string' && /^[a-f0-9]{64}$/.test(item);
   const replay = asRecord(source.replay);
   const video = asRecord(source.video);
+  const scene = asRecord(source.sceneProvenance);
   const evaluations = (
     Array.isArray(source.evaluations) ? source.evaluations.slice(0, 3) : []
   ).flatMap((item) => {
@@ -545,6 +547,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   });
   return {
     evaluations,
+    ...(digest(scene.sceneSha256) ? { sceneProvenance: { sceneSha256: scene.sceneSha256 } } : {}),
     ...(typeof source.qualityGatePassed === 'boolean'
       ? { qualityGatePassed: source.qualityGatePassed }
       : {}),
@@ -888,12 +891,33 @@ function safeProgressPoints(value: unknown): Sim2RealRunProgressPoint[] | undefi
     lastIteration = iteration;
     const elapsedSeconds = Number(point.elapsedSeconds);
     const samples = Number(point.episodeSamples);
+    const completed = point.episodeCompleted;
+    const reasons = point.episodeTermination as Sim2RealRunProgressPoint['episodeTermination'];
+    const reasonKeys = ['contact', 'tilt', 'height', 'travel', 'nonfinite', 'unknown'] as const;
+    const outcome =
+      Number.isInteger(samples) &&
+      samples >= 0 &&
+      samples <= 50 &&
+      typeof completed === 'number' &&
+      Number.isInteger(completed) &&
+      completed >= 0 &&
+      reasons &&
+      reasonKeys.every((key) => Number.isInteger(reasons[key]) && reasons[key] >= 0) &&
+      reasonKeys.reduce((count, key) => count + reasons[key], completed) === samples
+        ? {
+            episodeCompleted: completed,
+            episodeTermination: Object.fromEntries(
+              reasonKeys.map((key) => [key, reasons[key]]),
+            ) as Sim2RealRunProgressPoint['episodeTermination'],
+          }
+        : {};
     const at = safeText(point.at, 40);
     points.push({
       iteration,
       totalIterations,
       meanReward,
       recentSuccess,
+      ...outcome,
       ...(Number.isSafeInteger(samples) &&
         samples >= 0 &&
         samples <= 50 && { episodeSamples: samples }),
@@ -978,6 +1002,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
   // view (job.cuda), not inside metrics. Merge it in so the platform run
   // record can surface GPU usage; only an explicit boolean is trusted.
   const runnerCuda = source.cuda === true || source.cuda === false ? source.cuda : undefined;
+  const contractId = safeText(source.contractId, 120);
   const metricsWithCuda =
     metrics && runnerCuda != null && metrics.cuda == null
       ? { ...metrics, cuda: runnerCuda }
@@ -986,6 +1011,7 @@ function parseRunResult(payload: unknown): Sim2RealRobogoRunResult {
     status,
     ...(Object.keys(queue).length ? { queue } : {}),
     ...(validExternalRunId ? { externalRunId: validExternalRunId } : {}),
+    ...(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/.test(contractId) ? { contractId } : {}),
     ...(mock !== undefined ? { mock } : {}),
     ...(launchUrl ? { launchUrl } : {}),
     ...(message ? { message } : {}),

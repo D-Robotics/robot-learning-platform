@@ -25,7 +25,25 @@ try {
     try {
       await page.goto(new URL('workshop.html', base).href);
       await page.getByRole('heading', { name: 'OriginMan 舞蹈 Workshop' }).waitFor();
-      await page.getByRole('link', { name: '配置快检' }).click();
+      await page.getByRole('link', { name: '开始跟跳练习' }).click();
+      await page.waitForURL(
+        (url) =>
+          url.pathname.endsWith('/originman-reference.html') &&
+          url.searchParams.get('mode') === 'preset',
+      );
+      await page.locator('#reference-mode').waitFor();
+      assert.equal(await page.locator('#reference-mode').inputValue(), 'preset');
+
+      await page.goto(new URL('workshop.html', base).href);
+      await page.getByRole('link', { name: '查看训练记录' }).click();
+      await page.waitForURL((url) => url.hash === '#records/run-history');
+      assert.equal(
+        await page.locator('[data-record-tab="run"]').getAttribute('aria-pressed'),
+        'true',
+      );
+
+      await page.goto(new URL('workshop.html', base).href);
+      await page.getByRole('link', { name: '配置节拍快检' }).click();
       await page.waitForURL((url) => url.hash === '#train/configure');
       await page.locator('#originman-training-goal').waitFor();
 

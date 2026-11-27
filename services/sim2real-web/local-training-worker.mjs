@@ -79,7 +79,33 @@ const MAX_PROGRESS_POINTS = 512;
 // the mjx adapter), so one pattern keeps the worker engine-agnostic:
 //   [starter-ppo] iter 12/400 meanReward=0.041 recentSuccess=0.38 goalRange=[0.80,1.20] elapsed=107.6s
 const PROGRESS_LINE_RE =
-  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?(?: episodeSamples=(\d+))?/g;
+  /iter (\d+)\/(\d+) meanReward=(-?\d+(?:\.\d+)?) recentSuccess=(\d+(?:\.\d+)?)(?: goalRange=\[([^\]]*)\])?(?: elapsed=(\d+(?:\.\d+)?)s)?(?: episodeSamples=(\d+)(?: episodeCompleted=(\d+) episodeTermination=(\d+),(\d+),(\d+),(\d+),(\d+),(\d+))?)?/g;
+
+const terminationReasons = ['contact', 'tilt', 'height', 'travel', 'nonfinite', 'unknown'];
+
+function episodeOutcome(samples, completed, terminations) {
+  if (
+    !Number.isInteger(samples) ||
+    samples < 0 ||
+    samples > 50 ||
+    !Number.isInteger(completed) ||
+    completed < 0 ||
+    completed > samples
+  )
+    return {};
+  const counts = terminationReasons.map((reason) => terminations?.[reason]);
+  if (
+    counts.some((count) => !Number.isInteger(count) || count < 0 || count > samples) ||
+    counts.reduce((total, count) => total + count, completed) !== samples
+  )
+    return {};
+  return {
+    episodeCompleted: completed,
+    episodeTermination: Object.fromEntries(
+      terminationReasons.map((reason, index) => [reason, counts[index]]),
+    ),
+  };
+}
 
 function parseProgressLine(chunk, job) {
   for (const match of String(chunk).matchAll(PROGRESS_LINE_RE)) {
@@ -107,6 +133,13 @@ function parseProgressLine(chunk, job) {
       ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
         ? { episodeSamples: samples }
         : {}),
+      ...episodeOutcome(
+        samples,
+        Number(match[8]),
+        Object.fromEntries(
+          terminationReasons.map((reason, index) => [reason, Number(match[9 + index])]),
+        ),
+      ),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       at: new Date().toISOString(),
     };
@@ -152,6 +185,7 @@ function safeProgress(job) {
       ...(Number.isSafeInteger(samples) && samples >= 0 && samples <= 50
         ? { episodeSamples: samples }
         : {}),
+      ...episodeOutcome(samples, raw.episodeCompleted, raw.episodeTermination),
       ...(Number.isFinite(elapsed) ? { elapsedSeconds: elapsed } : {}),
       ...(typeof raw.at === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(raw.at) ? { at: raw.at } : {}),
     });
@@ -275,6 +309,7 @@ function scrubLog(value, max = 2000) {
 function appendLogLine(job, stream, rawLine) {
   const lineText = scrubLog(String(rawLine), MAX_LOG_LINE_CHARS);
   if (!lineText.trim()) return;
+  if (stream === 'stdout') parseProgressLine(lineText, job);
   const ring = (job.logRing ??= []);
   const line = { n: (job.logSeq ?? 0) + 1, stream, text: lineText };
   job.logSeq = line.n;
@@ -1041,13 +1076,6 @@ async function launch(job, config) {
   child.stdout.on('data', (chunk) => {
     stdout = (stdout + String(chunk)).slice(-MAX_LOG);
     feedLogStream(job, 'stdout', chunk);
-    // Live progress is parsed from the same stream the tail captures, so the
-    // status route reflects training curve points while the engine runs.
-    try {
-      parseProgressLine(chunk, job);
-    } catch {
-      // A malformed line never breaks training; the tail still records it.
-    }
   });
   child.stderr.on('data', (chunk) => {
     stderr = (stderr + String(chunk)).slice(-MAX_LOG);

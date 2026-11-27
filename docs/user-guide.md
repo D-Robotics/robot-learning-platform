@@ -26,7 +26,7 @@
 
 ## OriginMan 舞蹈 Workshop
 
-打开 [OriginMan 舞蹈 Workshop](https://rdkstudio.d-robotics.cc/robotics-learning/workshop.html)。可选整支预置舞蹈、从动作组开始自由编排，或导入自己的参考轨迹。预览轨迹后选择算力，完成筛查、选择预算并开始仿真训练。结果页提供评测、回放和 ONNX 策略文件。
+打开 [OriginMan 舞蹈 Workshop](https://rdkstudio.d-robotics.cc/robotics-learning/workshop.html)，点「开始跟跳练习」选择预置舞蹈。也可以自由编排或导入自己的参考轨迹。预览后选择算力和快检预算，提交时平台会筛查轨迹。结果页提供本次 Run 的评测、回放和 ONNX 策略。Studio 中的参考轨迹跟跳入口使用同一流程。
 
 自由编排按当前账号保存在此设备。重新打开同一入口可继续编辑，提交前请重新预览和筛查。
 

@@ -1836,6 +1836,22 @@ export function createSim2RealWebApp(): Express {
       .send(gpuAgentInstallScript(origin, agentUrl));
   });
 
+  app.get('/dance-results.html', (request, response) => {
+    const ids = Array.isArray(request.query.run) ? request.query.run : [request.query.run];
+    if (
+      ids.length > 2 ||
+      ids.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,119}$/.test(id))
+    ) {
+      response.status(400).type('text/plain').send('请打开包含有效 Run ID 的舞蹈结果链接。');
+      return;
+    }
+    const query = new URLSearchParams({ runId: String(ids.at(-1)) });
+    if (ids.length === 2 && ids[0] !== ids[1]) query.set('baselineRunId', String(ids[0]));
+    if (request.query.mode === 'independent') query.set('review', 'independent');
+    response.setHeader('Cache-Control', 'no-store');
+    response.redirect(302, publicPath('/run-detail.html') + '?' + query);
+  });
+
   app.get('/workshop.html', (request, response, next) => {
     const context = typeof request.query.context === 'string' ? request.query.context : '';
     if (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$/.test(context)) {

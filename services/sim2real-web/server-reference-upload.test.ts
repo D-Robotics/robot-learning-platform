@@ -8,7 +8,10 @@ import path from 'node:path';
 import { expect, it, vi } from 'vitest';
 
 import { originmanReferenceDigest } from '../../server/sim2real/originman-reference-digest.js';
-import { createSim2RealComputeResource } from '../../server/sim2real/sim2real-store.js';
+import {
+  createSim2RealComputeResource,
+  createSim2RealModel,
+} from '../../server/sim2real/sim2real-store.js';
 import {
   encodeStudioWebCloudCookie,
   STUDIO_WEB_CLOUD_SESSION_COOKIE,
@@ -20,6 +23,8 @@ import {
   type OriginmanReferenceTrajectory,
 } from '../../shared/originman-reference-training.js';
 import { flushSim2RealAudit } from '../../server/sim2real/audit-log.js';
+import legacyManifest from '../../plugins/rdk-robot-learning-platform/references/originman-reference-legacy-manifest.json' with { type: 'json' };
+import { validateSim2RealManifest } from '../../shared/sim2real.js';
 
 const mib = 1024 * 1024;
 const referenceTransport = { 'X-RDK-Reference-Trajectory': '1' };
@@ -115,6 +120,11 @@ it('admits long reference uploads only through the bounded signed-account transp
           account,
           bytes: body.byteLength,
           header: request.headers['x-rdk-reference-trajectory'],
+          contract: {
+            id: value.contract.id,
+            observationSize: value.contract.observationSize,
+            actionSize: value.contract.actionSize,
+          },
           trajectorySha256: originmanReferenceDigest(value.training.originmanReference.trajectory),
         });
         response.writeHead(202).end(
@@ -277,6 +287,11 @@ it('admits long reference uploads only through the bounded signed-account transp
     expect(trainRequests[0]).toMatchObject({
       account: 'workshop-alice',
       header: '1',
+      contract: {
+        id: 'custom-policy-originman-reference-v2',
+        observationSize: 78,
+        actionSize: 18,
+      },
       trajectorySha256: longDigest,
     });
     expect(trainRequests[0].bytes).toBeGreaterThan(5 * mib);
@@ -286,6 +301,21 @@ it('admits long reference uploads only through the bounded signed-account transp
     expect(trainRequests[1]).toMatchObject({
       account: 'workshop-alice',
       trajectorySha256: originmanReferenceDigest(short),
+    });
+
+    const v1Manifest = validateSim2RealManifest(legacyManifest).manifest;
+    expect(v1Manifest).toBeDefined();
+    const v1Model = await createSim2RealModel(v1Manifest!, 'workshop-alice');
+    const prior = await post(
+      runs,
+      { ...trainingRequest(short), modelId: v1Model.id, idempotencyKey: 'existing-v1-plan' },
+      alice,
+    );
+    expect(prior.status).toBe(201);
+    expect(trainRequests[2].contract).toEqual({
+      id: 'custom-policy-originman-reference-v1',
+      observationSize: 96,
+      actionSize: 18,
     });
   } finally {
     await Promise.all(

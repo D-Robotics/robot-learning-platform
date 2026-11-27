@@ -61,7 +61,33 @@ const EXTRA_ROOT_FILES = new Set(['devices.json', 'device-connections.json']);
 // DSH keeps resumable conversation fragments in this cache directory. It is
 // intentionally ephemeral and may contain files with an application-owned
 // layout, so the ledger backup must not fail just because the cache exists.
-const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions']);
+const EPHEMERAL_ROOT_DIRECTORIES = new Set(['dsh-sessions', 'dance-evaluation-staging']);
+// SSH material belongs to the host configuration, outside the ledger snapshot.
+const HOST_CONFIGURATION_DIR = 'ssh-home';
+const SHA256_NAME = /^[a-f0-9]{64}$/;
+const SESSION_FILE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}\.json$/;
+const APPLICATION_STORAGE = new Map([
+  ['dance-evaluations', [[SHA256_NAME], /^(report\.json|[a-f0-9]{64}\.(mp4|npz))$/]],
+  [
+    'dance-goals',
+    [
+      [/^(drafts|progress)$/],
+      /^[a-f0-9]{64}(\.json|\.goal(-plan|-progress)\.json|\.goal\.sha256)$/,
+    ],
+  ],
+  ['dance-trajectories', [[], /^[a-f0-9]{64}\.npz$/]],
+  ['experiment-sessions', [[SHA256_NAME], SESSION_FILE]],
+  ['policy-artifacts', [[SHA256_NAME], /^[a-f0-9]{64}\.onnx$/]],
+  ['relay-artifacts', [[], /^[a-f0-9]{64}\.onnx$/]],
+  [
+    'resimulated-dance-videos',
+    [[], /^(?:[a-f0-9]{64}\.(mp4|npz)|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.json)$/],
+  ],
+  ['retained-dance-videos', [[], /^[a-f0-9]{64}\.mp4$/]],
+  ['state-recordings', [[SHA256_NAME, SHA256_NAME], /^(manifest\.json|[0-9]+\.jsonl)$/]],
+  ['training-plans', [[], /^[a-f0-9]{64}\.json$/]],
+  ['workshop-sessions', [[SHA256_NAME], SESSION_FILE]],
+]);
 const MANIFEST_FILE_NAME = 'backup-manifest.json';
 const DEFAULT_STALE_SECONDS = 300;
 const REQUIRED_LEDGER_ARRAYS = [
@@ -84,6 +110,77 @@ const DANCE_VIDEO_PATH_PATTERN = /^dance-videos\/([a-f0-9]{64})\.mp4$/;
 const DANCE_VIDEO_STAGING_PATTERN = /^[a-f0-9-]{36}\.tmp$/;
 const TELEMETRY_PATH_PATTERN = /^telemetry\/[\w-]{1,128}\.jsonl$/;
 const PRIVATE_DIRECTORY_MODE = 0o700;
+
+function validApplicationPath(relativePath) {
+  const [name, ...parts] = relativePath.split('/');
+  const layout = APPLICATION_STORAGE.get(name);
+  if (!layout) return false;
+  const [directories, filename] = layout;
+  return (
+    parts.length === directories.length + 1 &&
+    directories.every((pattern, index) => pattern.test(parts[index])) &&
+    filename.test(parts[directories.length])
+  );
+}
+
+async function applicationFiles(root, name, allowStaging) {
+  const [directories, filename] = APPLICATION_STORAGE.get(name);
+  const files = [];
+  async function visit(relativeDirectory, depth) {
+    const directory = path.join(root, relativeDirectory);
+    await safeDirectory(directory, relativeDirectory);
+    const entries = await readdir(directory, { withFileTypes: true });
+    if (depth < directories.length) {
+      for (const entry of entries) {
+        if (!entry.isDirectory() || !directories[depth].test(entry.name))
+          fail(
+            `非法应用状态目录 ${relativeDirectory}/${entry.name}`,
+            'STORAGE_BACKUP_SOURCE_INVALID',
+          );
+        await visit(`${relativeDirectory}/${entry.name}`, depth + 1);
+      }
+      return;
+    }
+    for (const entry of entries) {
+      if (allowStaging && entry.isFile() && entry.name.endsWith('.tmp')) continue;
+      const relativePath = `${relativeDirectory}/${entry.name}`;
+      if (!entry.isFile() || !filename.test(entry.name))
+        fail(`非法应用状态文件 ${relativePath}`, 'STORAGE_BACKUP_SOURCE_INVALID');
+      files.push({
+        relativePath,
+        absolutePath: path.join(root, relativePath),
+        kind: 'application-state',
+      });
+    }
+    if (name !== 'dance-evaluations') return;
+    const report = JSON.parse(
+      await readFile(path.join(directory, 'report.json'), 'utf8').catch((error) => {
+        if (error?.code === 'ENOENT') return 'null';
+        throw error;
+      }),
+    );
+    const video = report?.replay?.videoSha256;
+    const trace = report?.replay?.sha256;
+    const names = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name));
+    if (
+      !SHA256_NAME.test(video) ||
+      !SHA256_NAME.test(trace) ||
+      !names.has(`${video}.mp4`) ||
+      !names.has(`${trace}.npz`)
+    ) {
+      fail(`舞蹈评测缺少有效报告或回放 ${relativeDirectory}`, 'STORAGE_BACKUP_SOURCE_INVALID');
+    }
+    for (const [digest, extension] of [
+      [video, 'mp4'],
+      [trace, 'npz'],
+    ]) {
+      if ((await sha256(path.join(directory, `${digest}.${extension}`))) !== digest)
+        fail(`舞蹈评测回放摘要不匹配 ${relativeDirectory}`, 'STORAGE_BACKUP_DIGEST_MISMATCH');
+    }
+  }
+  await visit(name, 0);
+  return files;
+}
 
 async function hostedDatasetFiles(root, allowStaging) {
   const directory = path.join(root, HOSTED_DATASET_DIR);
@@ -485,10 +582,17 @@ export async function inspectStorage(storageDir, options = {}) {
       entry.name === HOSTED_DATASET_DIR ||
       entry.name === WRITER_LEASE_FILE_NAME ||
       auditRootNames.has(entry.name) ||
-      EXTRA_ROOT_FILES.has(entry.name) ||
-      EPHEMERAL_ROOT_DIRECTORIES.has(entry.name)
+      EXTRA_ROOT_FILES.has(entry.name)
     )
       continue;
+    if (APPLICATION_STORAGE.has(entry.name)) {
+      files.push(...(await applicationFiles(root, entry.name, true)));
+      continue;
+    }
+    if (EPHEMERAL_ROOT_DIRECTORIES.has(entry.name) || entry.name === HOST_CONFIGURATION_DIR) {
+      await safeDirectory(path.join(root, entry.name), entry.name);
+      continue;
+    }
     // Operator-created ledger snapshots are immutable historical inputs, not
     // live state. Keep them out of the active manifest while allowing the
     // backup job to run against a directory that contains one.
@@ -621,6 +725,7 @@ export async function verifySnapshot(snapshotDir) {
         TELEMETRY_PATH_PATTERN.test(item.path) ||
         DANCE_VIDEO_PATH_PATTERN.test(item.path) ||
         HOSTED_DATASET_PATH.test(item.path) ||
+        validApplicationPath(item.path) ||
         AUDIT_PATH_PATTERN.test(item.path));
     if (
       !validPath ||
@@ -641,7 +746,9 @@ export async function verifySnapshot(snapshotDir) {
               ? 'dance-video'
               : HOSTED_DATASET_PATH.test(item.path)
                 ? 'hosted-dataset'
-                : 'audit';
+                : validApplicationPath(item.path)
+                  ? 'application-state'
+                  : 'audit';
     if (item.kind !== undefined && item.kind !== expectedKind) {
       fail(
         `backup-manifest.json 文件类型与路径不一致：${item.path}`,
@@ -683,6 +790,12 @@ export async function verifySnapshot(snapshotDir) {
     }
     if (entry.name === HOSTED_DATASET_DIR) {
       actual.push(...(await hostedDatasetFiles(root, false)).map((item) => item.relativePath));
+      continue;
+    }
+    if (APPLICATION_STORAGE.has(entry.name)) {
+      actual.push(
+        ...(await applicationFiles(root, entry.name, false)).map((item) => item.relativePath),
+      );
       continue;
     }
     if (!entry.isFile()) fail(`备份包含未声明条目 ${entry.name}`, 'STORAGE_BACKUP_SOURCE_INVALID');

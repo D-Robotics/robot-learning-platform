@@ -1840,17 +1840,13 @@ function setAuthGate(payload) {
   renderContextLive();
   renderPlatformScorecard();
   renderResearchLoop();
+  renderOnboardChecklist();
   if (!state.authNoticeShown) {
     state.authNoticeShown = true;
     // 区分「从未登录」与「登录已过期」：后者换个口径，提示重新登录即可恢复
     // 训练与部署，而不是把访客当成第一次来的游客。
     const hadIdentity = Boolean(state.overview?.identity?.accountId);
-    showToast(
-      hadIdentity
-        ? '登录已过期：仿真可直接试玩；重新登录后可继续训练与真机部署。'
-        : '当前为游客模式：仿真可直接试玩；训练记录与真机部署需要登录。',
-      'normal',
-    );
+    if (hadIdentity) showToast('登录已过期。重新登录后可继续训练与真机部署。', 'normal');
   }
 }
 
@@ -2029,6 +2025,7 @@ function renderWorkspaceNotices(items) {
     }
     row.append(icon, copy);
     const version = workspaceNoticeVersion(id);
+    if (version) row.dataset.platformVersion = version;
     if (version && state.noticeFirstVersion && state.noticeFirstVersion !== version) {
       row.classList.add('is-changed');
       title.textContent = '平台已更新到 ' + version;
@@ -2202,6 +2199,7 @@ const VIEW_STAGE_LABELS = {
 const FLOW_CHILD_CONTEXTS = {
   simulate: { kicker: '01 · 数据与仿真', title: '仿真与录制', description: '运行 MicroDuck 场景，录制可回放轨迹。' },
   replays: { kicker: '01 · 数据与仿真', title: '轨迹与回放', description: '按运行筛选轨迹，并打开逐帧回放证据。', view: 'records', recordTab: 'run', focus: '#history-list' },
+  'run-history': { kicker: '证据与记录', title: '训练记录', description: '查找本轮运行，查看评测、回放和制品。', view: 'records', recordTab: 'run' },
   prepare: { kicker: '02 · 训练与策略', title: '模型与契约', description: '登记 Manifest，校验观测、动作和设备兼容性。', view: 'train', trainModule: 'contract', focus: '#contract-fold' },
   configure: { kicker: '02 · 训练与策略', title: '训练配置', description: '配置训练参数和算力。OriginMan 可在此设置舞蹈目标。', view: 'train', trainModule: 'config', focus: '#train-module-config' },
   submit: { kicker: '02 · 训练与策略', title: 'Run 与进度', description: '提交训练任务，查看实时曲线、状态和引擎日志。', view: 'train', trainModule: 'run', focus: '#train-module-run-model' },
@@ -2396,6 +2394,27 @@ function setView(view, { updateHash = true, scroll = true, focus = true } = {}) 
   // 视图切换会重排正文，截断情况随之改变（hidden 是属性变化，观察器里
   // 单独过滤了它，这里再主动排一次以免依赖时序）。
   scheduleTruncationTitles();
+}
+
+function originmanCourseRun() {
+  if (state.authRequired) return;
+  return (state.overview?.runs || []).filter((run) =>
+    run.taskId === 'originman-reference-track' && projectIncludesRecord(run))
+    .sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')))[0];
+}
+
+function originmanCourseEvaluated(run) {
+  const result = run?.metrics?.originmanReference;
+  const summary = run?.training?.originmanReferenceSummary;
+  return Boolean(run?.status === 'completed' && run.mock === false &&
+    result?.replay?.sha256 && summary?.trajectorySha256 &&
+    result.trajectorySha256 === summary.trajectorySha256);
+}
+
+function runHasCompletedEvaluation(run) {
+  return Boolean(run?.status === 'completed' && run.mock !== true && !isSyntheticEvidence(null, run) &&
+    (hasPersistedEvaluation(run) || typeof run.taskEvaluation?.qualityGate?.passed === 'boolean' ||
+      originmanCourseEvaluated(run)));
 }
 
 function setRecordsTab(tab) {
@@ -7991,14 +8010,16 @@ function renderNextAction() {
   // 但不能越过上手清单的当前步：清单还没走到 deploy 时，卡片区不能同时
   // 出现「先做仿真」和「部署到 RDK」两套矛盾指引。
   const goldenNext = state.goldenPath?.nextAction;
+  const courseRun = state.productId === 'originman' && originmanCourseRun();
   if (state.productId === 'originman') {
     const guest = state.authRequired === true;
-    view = guest ? 'simulate' : 'train';
-    title = guest ? '先体验 OriginMan 仿真' : '选择 OriginMan 的训练任务';
+    view = courseRun ? 'records' : 'simulate';
+    title = courseRun ? '继续 OriginMan 跟跳练习' : 'OriginMan 舞蹈课堂';
     copy = guest
-      ? '先看 OriginMan 舞蹈动作示意。登录后可以发起训练并查看记录。'
-      : '选择预置舞蹈、从空作品编排动作组，或导入参考轨迹跟跳。';
-    label = guest ? '打开舞蹈 Workshop →' : '选择 OriginMan 任务 →';
+      ? '先看教学回放。登录后可选舞蹈、预览参考轨迹并开始训练。'
+      : courseRun ? `本轮跟跳 · ${statusLabel(courseRun.status)}。打开原 Run 查看进度、评测和回放。`
+        : '从一支预置舞蹈开始，预览轨迹、跑一次快检，再查看评测和回放。';
+    label = courseRun ? '查看本轮跟跳 →' : '打开舞蹈课堂 →';
   } else if (goldenNext) {
     const stageOrder = { simulate: 0, train: 1, evaluate: 2, deploy: 3 };
     const currentKey = onboardingProgress().currentKey;
@@ -8037,8 +8058,8 @@ function renderNextAction() {
   if (button) {
     button.toggleAttribute('data-training-example', example);
     button.dataset.viewTarget = view;
-    if (state.productId === 'originman' && view === 'train') button.dataset.originmanConfigure = '';
-    else delete button.dataset.originmanConfigure;
+    if (courseRun) button.dataset.courseRun = courseRun.id;
+    else delete button.dataset.courseRun;
     button.textContent = label;
   }
 }
@@ -8285,8 +8306,8 @@ function deriveLoopStates() {
   const complete = {
     simulate: Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay),
     train: Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase())),
-    evaluate: Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation),
-    deploy: Boolean(deployment && ['ready', 'completed'].includes(String(deployment.status || '').toLowerCase())),
+    evaluate: runHasCompletedEvaluation(latest),
+    deploy: deployment?.status === 'completed',
   };
   const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
   const unlocked = {
@@ -8357,16 +8378,24 @@ function renderWorkflowProgress() {
 // 保证两处指引永远一致。Only a passed preflight is a completed deploy step;
 // presence alone made the checklist claim “已完成” for models that could not ship.
 function onboardingProgress() {
+  if (state.productId === 'originman') {
+    const run = originmanCourseRun();
+    const guest = state.authRequired === true;
+    const steps = [
+      { key: 'simulate', done: Boolean(run), locked: false },
+      { key: 'train', done: run?.status === 'completed', locked: guest },
+      { key: 'evaluate', done: originmanCourseEvaluated(run), locked: guest },
+    ];
+    return { steps, currentKey: steps.find((step) => !step.done && !step.locked)?.key,
+      doneCount: steps.filter((step) => step.done).length };
+  }
   const model = selectedModel();
   const latest = latestRun();
-  const telemetry = currentTelemetry();
   const contractReady = Boolean(model?.manifest?.contract?.id && model?.manifest?.artifacts?.length);
-  const replayReady = Boolean(telemetry?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
+  const replayReady = Boolean(currentTelemetry()?.summary || latest?.evaluation?.replay || latest?.taskEvaluation?.replay);
   const trainingReady = Boolean(latest && ['completed', 'ready'].includes(String(latest.status || '').toLowerCase()));
-  const evaluationReady = Boolean(telemetry?.summary || latest?.evaluation || latest?.taskEvaluation);
-  const deployReady = deploymentsForCurrentModel().some((deployment) =>
-    ['ready', 'completed'].includes(String(deployment?.status || '').toLowerCase()),
-  );
+  const evaluationReady = runHasCompletedEvaluation(latest);
+  const deployReady = deploymentsForCurrentModel().some((deployment) => deployment.status === 'completed');
   const guest = state.authRequired === true;
   const steps = [
     { key: 'simulate', done: replayReady, locked: false },
@@ -8392,6 +8421,9 @@ function renderOnboardChecklist() {
   const example = primary?.hasAttribute('data-training-example');
   const currentKey = example ? 'train' : progress.currentKey;
   const doneCount = progress.doneCount;
+  const originman = state.productId === 'originman';
+  const nav = document.querySelector('.nav-subitem[data-flow-child="simulate"]');
+  if (nav) nav.textContent = originman ? '舞蹈课堂' : '仿真与录制';
   const stepMeta = {
     simulate: { view: 'simulate', cta: '打开仿真 →', copy: '运行仿真，录制一段可回放轨迹', originman: '在舞蹈 Workshop 查看动作示意' },
     train: { view: 'train', cta: '去发起训练 →', copy: '用 starter 模板提交 PPO 任务，跟踪奖励曲线', originman: '选择预置舞蹈、自由编排或参考轨迹跟跳' },
@@ -8401,8 +8433,12 @@ function renderOnboardChecklist() {
   let foundCurrent = false;
   list.querySelectorAll('.onboard-item').forEach((item) => {
     const step = progress.steps.find((entry) => entry.key === item.dataset.onboardStep);
+    item.hidden = !step;
     if (!step) return;
-    const originman = state.productId === 'originman';
+    const title = item.querySelector('.onboard-item-body strong');
+    if (title) title.textContent = (originman
+      ? { simulate: '打开课堂', train: '跑一次跟跳训练', evaluate: '查看本轮评测与回放' }
+      : { simulate: '在仿真中验证', train: '发起第一次训练', evaluate: '查看评测证据', deploy: '部署到真机' })[step.key];
     const description = item.querySelector('.onboard-item-body span');
     if (description) description.textContent = originman ? stepMeta[step.key].originman
       : example && step.key === 'simulate' ? '也可以先运行仿真并录制轨迹'
@@ -8425,13 +8461,12 @@ function renderOnboardChecklist() {
         locked.className = 'onboard-locked';
         locked.textContent = '需登录';
         meta.append(locked);
-      } else if (stepMeta[step.key].view !== primary?.dataset.viewTarget) {
+      } else if (!originman && stepMeta[step.key].view !== primary?.dataset.viewTarget) {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'onboard-cta';
         button.textContent = stepMeta[step.key].cta;
         button.dataset.viewTarget = stepMeta[step.key].view;
-        if (originman && step.key === 'train') button.dataset.originmanConfigure = '';
         meta.append(button);
       }
     }
@@ -8568,7 +8603,8 @@ function renderOriginmanTrainingWorkbench() {
   check.disabled = busy;
   const hint = !showDance ? '' : blockers.length ? '提交前请' + blockers.join('、') + '。'
     : `可提交。舞蹈模型 ${selectedModel()?.manifest?.version || '已选'} · ${resource.name}。`;
-  setText('originman-dance-readiness', hint);
+  setText('originman-dance-readiness', state.authRequired ? '登录工作区后可检查模型和训练算力。' : hint);
+  if ($('originman-dance-login')) $('originman-dance-login').hidden = !state.authRequired;
   setText('originman-run-action-hint', showDance ? hint : '打开训练配置选择 OriginMan 任务。');
 }
 
@@ -8980,7 +9016,7 @@ function runProgressPoints(run) {
   );
 }
 
-function drawRunProgressChart(canvas, points, { title = '' } = {}) {
+function drawRunProgressChart(canvas, points, { title = '', requiresEpisodeSamples = false } = {}) {
   const ctx = clearCanvas(canvas, RUN_PROGRESS_CANVAS_W, RUN_PROGRESS_CANVAS_H);
   if (!ctx) return false;
   const width = RUN_PROGRESS_CANVAS_W;
@@ -9039,7 +9075,10 @@ function drawRunProgressChart(canvas, points, { title = '' } = {}) {
   ctx.strokeStyle = 'rgba(96, 165, 250, 0.9)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  points.forEach((point, index) => {
+  const ratePoints = requiresEpisodeSamples
+    ? points.filter((point) => point.episodeSamples > 0)
+    : points;
+  ratePoints.forEach((point, index) => {
     const x = xOf(point.iteration);
     const y = ySuccess(point.recentSuccess);
     if (index === 0) ctx.moveTo(x, y);
@@ -9070,7 +9109,8 @@ function renderRunProgressLiveChart(run) {
   const show = (active && run.mock !== true) || points.length > 0;
   wrap.hidden = !show;
   if (!show) return;
-  const isDance = run.training?.engine === 'originman-dance-ppo';
+  const isDance = ['originman-dance', 'originman-reference-track'].includes(run.taskId) ||
+    run.training?.engine === 'originman-dance-ppo';
   const rateLabel = isDance ? '近期完成率' : '近期成功率';
   canvas.setAttribute('aria-label', `训练奖励与${rateLabel}曲线`);
   setText('run-progress-live-note', isDance
@@ -9083,10 +9123,15 @@ function renderRunProgressLiveChart(run) {
     } else {
       const last = points[points.length - 1];
       const total = last.totalIterations || last.iteration;
-      caption.textContent = `第 ${last.iteration}/${total} 轮 · 奖励 ${formatMetricNumber(last.meanReward, 3)} · ${rateLabel} ${metricPercent(last.recentSuccess)}%`;
+      const rate = isDance && !(last.episodeSamples > 0)
+        ? last.episodeSamples === 0 ? '暂无已结束的回合' : '回合样本数未记录'
+        : `${rateLabel} ${metricPercent(last.recentSuccess)}%`;
+      const count = isDance && last.episodeSamples > 0 && Number.isInteger(last.episodeCompleted)
+        ? `（${last.episodeCompleted}/${last.episodeSamples} 回合）` : '';
+      caption.textContent = `第 ${last.iteration}/${total} 轮 · 奖励 ${formatMetricNumber(last.meanReward, 3)} · ${rate}${count}`;
     }
   }
-  drawRunProgressChart(canvas, points);
+  drawRunProgressChart(canvas, points, { requiresEpisodeSamples: isDance });
 }
 
 // Use a worker-reported iteration pair, or a checkpoint with a known target.
@@ -12296,6 +12341,11 @@ function wireStationEvents() {
 function wireEvents() {
   document.querySelectorAll('[data-view-target]').forEach((control) => {
     control.addEventListener('click', () => {
+      if (control.dataset.courseRun) {
+        const run = originmanCourseRun();
+        if (run?.id === control.dataset.courseRun) window.location.assign(recordedRunLink(run));
+        return;
+      }
       if (control.hasAttribute('data-training-example')) {
         $('training-profile').value = 'smoke';
         document.querySelector('[data-training-profile-note]')?.setAttribute('hidden', '');
@@ -12383,6 +12433,10 @@ function wireEvents() {
     toggle.setAttribute('aria-expanded', expanding ? 'true' : 'false');
     toggle.textContent = expanding ? '收起表单' : '登录 / 展开表单';
     if (expanding) panel.querySelector('input')?.focus();
+  });
+  $('originman-dance-login')?.addEventListener('click', () => {
+    if ($('auth-gate-panel')?.hidden) $('auth-gate-toggle')?.click();
+    $('auth-gate-panel')?.querySelector('input')?.focus();
   });
   document.querySelectorAll('.auth-login-tab').forEach((tab) => {
     tab.addEventListener('click', () => setAuthMethod(tab.dataset.authMethod || 'account'));

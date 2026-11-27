@@ -131,6 +131,33 @@ function drawCurve(document, run, completion = false) {
   if (!svg || !empty) return;
   svg.replaceChildren();
   const raw = Array.isArray(run.progress) ? run.progress : [];
+  if (completion) {
+    const caption = document.getElementById('completion-caption');
+    const latest = raw.at(-1);
+    if (caption) {
+      caption.hidden = !raw.length;
+      if (!latest?.episodeSamples) {
+        caption.textContent = '历史记录未提供已结束回合的样本数，完成率待核实。';
+        if (latest?.episodeSamples === 0) caption.textContent = '当前采样中没有已结束的回合。';
+      } else {
+        const labels = {
+          contact: '非脚部接触地面', tilt: '倾角超限', height: '机身过低',
+          travel: '位移超限', nonfinite: '仿真状态异常', unknown: '原因未归类',
+        };
+        const reasons = Object.entries(labels).flatMap(([key, label]) => {
+          const count = latest.episodeTermination?.[key];
+          return count > 0 ? [`${label} ${count}`] : [];
+        });
+        const count = Number.isInteger(latest.episodeCompleted)
+          ? `完成 ${latest.episodeCompleted}/${latest.episodeSamples} 个回合`
+          : `已结束回合样本 ${latest.episodeSamples} 个，原记录未单独保存完成数`;
+        const termination = latest.episodeTermination
+          ? reasons.length ? '提前终止：' + reasons.join('、') : '本次采样无提前终止'
+          : '原记录未提供终止原因';
+        caption.textContent = `${count} · ${termination}`;
+      }
+    }
+  }
   const points = raw.map((point, index) => ({
     x: Number(point.iteration ?? point.step ?? point.trainingStep ?? index + 1),
     y: completion
@@ -469,7 +496,7 @@ function renderVideo(document, location, run, runId) {
       : '回放生成后会校验策略与轨迹摘要，再显示本次视频。');
 }
 
-function renderRun(document, location, run, runId, evidenceIssue) {
+function renderRun(document, location, run, runId, evidenceIssue, artifactRegistry) {
   const tracking = run.taskId === REFERENCE_TASK;
   const recovery = run.taskId === 'originman-recovery';
   const evidenceMessage = recovery && run.status === 'completed' ? workshopEvidenceMessage(evidenceIssue) : '';
@@ -518,6 +545,12 @@ function renderRun(document, location, run, runId, evidenceIssue) {
     hardware.textContent = run.artifact?.deployable === true
       ? '真机迁移需核对同源评测、已发布制品、目标设备和部署预检。'
       : '当前策略用于仿真。真机迁移还需板端契约、关节标定和可部署制品。';
+    if (Array.isArray(artifactRegistry)) {
+      const published = artifactRegistry.filter((item) => item.status === 'published').length;
+      hardware.textContent += artifactRegistry.length
+        ? ` 制品库已登记 ${artifactRegistry.length} 个版本，已发布 ${published} 个。`
+        : ' 本轮策略尚未登记到制品库。';
+    }
   }
   const copyConfig = document.getElementById('run-copy-config');
   if (copyConfig) {
@@ -591,7 +624,9 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   renderDanceReferenceLinks(document, run, SECTION_LABELS);
   if (tracking) text(document, 'run-kind', 'OriginMan · 参考轨迹仿真');
   drawCurve(document, run);
-  if (tracking) drawCurve(document, run, true);
+  const completionSection = document.getElementById('completion-section');
+  if (completionSection) completionSection.hidden = !isDance;
+  if (tracking || isDance) drawCurve(document, run, true);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }
@@ -638,7 +673,8 @@ export async function startRunDetail({
   clearTimeoutImpl = clearTimeout,
   now = Date.now,
 } = {}) {
-  const runId = new URLSearchParams(location?.search ?? '').get('runId') ?? '';
+  const query = new URLSearchParams(location?.search ?? '');
+  const runId = query.get('runId') ?? '';
   const error = document?.getElementById('run-error');
   let timer = null;
   let disposed = false;
@@ -664,6 +700,79 @@ export async function startRunDetail({
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
+  const independentPanel = document.getElementById('independent-review');
+  const independentButton = document.getElementById('independent-review-start');
+  const independentVideo = document.getElementById('independent-review-video');
+  if (independentPanel && query.get('review') === 'independent') location.hash = 'independent-review';
+  const baseline = query.get('baselineRunId');
+  const baselineLink = document.getElementById('quality-baseline-link');
+  if (baselineLink && baseline !== runId && RUN_ID_PATTERN.test(baseline ?? '')) {
+    const href = new URL('./run-detail.html', location.href);
+    href.searchParams.set('runId', baseline);
+    baselineLink.href = href.href;
+    document.getElementById('quality-baseline').hidden = false;
+  }
+  const independentUrl = requestUrl + '/dance-evaluation';
+  let reviewing = false;
+  const checkIndependentReview = async (start = false) => {
+    const run = lastRun;
+    if (disposed || !independentPanel || reviewing) return;
+    independentPanel.hidden = !(run?.taskId === 'originman-dance' && run.status === 'completed' &&
+      run.mock === false && SHA256_PATTERN.test(run.artifact?.sha256 ?? ''));
+    if (independentPanel.hidden) return;
+    reviewing = true;
+    independentButton.disabled = true;
+    const show = (message) => text(document, 'independent-review-status', message);
+    if (start) show('正在用本次 ONNX 和原仿真场景验收，过程可能需要一两分钟。');
+    try {
+      const response = await fetchImpl(independentUrl, {
+        method: start ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store',
+        headers: { accept: 'application/json' },
+      });
+      const result = await response.json().catch(() => null);
+      if (disposed || lastRun?.id !== runId) return;
+      if (!start && response.status === 404) {
+        show(result?.code === 'DANCE_EVIDENCE_INCOMPLETE'
+          ? '验收证据待补齐。开始验收时会核对原 Worker 中的场景与策略。'
+          : '本次 Run 尚未做独立仿真验收。');
+        independentButton.hidden = false;
+        return;
+      }
+      const resultRecord = result?.evaluation;
+      const source = resultRecord?.source;
+      if (!response.ok || result?.ok !== true)
+        throw Error(result?.message || '暂时无法读取验收结果，请稍后续查原 Run。');
+      const recordedScene = run.metrics?.originmanDance?.sceneProvenance?.sceneSha256;
+      if (source?.runId !== runId || source.policySha256 !== run.artifact?.sha256 ||
+          !SHA256_PATTERN.test(source.sceneSha256 ?? '') ||
+          (recordedScene && source.sceneSha256 !== recordedScene) ||
+          (run.contractId && source.contractId !== run.contractId) ||
+          typeof resultRecord.qualityGatePassed !== 'boolean')
+        throw Error('验收回执与本次 Run 不一致，回放待核对。');
+      const nominal = resultRecord.evaluations?.find((row) => row.bpm === run.training?.originmanDance?.bpm);
+      const sections = nominal?.sections ?? [];
+      const scored = sections.length && sections.every((section) => typeof section.passed === 'boolean');
+      const count = scored ? `，标称节拍 ${sections.filter((section) => section.passed).length}/${sections.length} 段达标` : '';
+      show(`策略与场景证据已核对。独立评测${resultRecord.qualityGatePassed ? '通过' : '未达标'}${count}。`);
+      independentButton.hidden = true;
+      if (SHA256_PATTERN.test(resultRecord.replay?.videoSha256 ?? '')) {
+        const replayUrl = independentUrl + '/replay';
+        if (independentVideo.getAttribute('src') !== replayUrl) independentVideo.src = replayUrl;
+        independentVideo.hidden = false;
+      }
+    } catch (error) {
+      if (!disposed) {
+        show(error.message);
+        independentButton.hidden = false;
+        independentVideo.hidden = true;
+      }
+    } finally {
+      reviewing = false;
+      independentButton.disabled = false;
+    }
+  };
+  const startIndependentReview = () => void checkIndependentReview(true);
+  independentButton?.addEventListener('click', startIndependentReview);
   const replayRetry = document.getElementById('reference-replay-retry');
   const replayFeedback = document.getElementById('reference-replay-feedback');
   let replayTimer = null;
@@ -801,9 +910,21 @@ export async function startRunDetail({
       });
       const payload = await response.json().catch(() => null);
       if (disposed) return;
+      const login = document.getElementById('reference-run-login');
+      if (login) {
+        login.hidden = response.status !== 401;
+        if (!login.hidden) {
+          const destination = new URL('./originman-reference-run.html', location.href);
+          destination.searchParams.set('runId', runId);
+          const signIn = new URL('./login', destination);
+          signIn.searchParams.set('returnTo', destination.pathname + destination.search);
+          login.querySelector('a').href = signIn.href;
+        }
+      }
       if (!response.ok) {
         if ([401, 403, 404, 409].includes(response.status)) active = false;
-        if (response.status === 401) throw new Error('当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
+        if (independentPanel) independentPanel.hidden = true;
+        if (response.status === 401) throw new Error(login ? '登录后可继续查看这条 Run。' : '当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
         if (response.status === 403 || response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
         throw new Error('平台暂时无法读取这条 Run。请保留原链接，稍后刷新本页。');
       }
@@ -817,7 +938,8 @@ export async function startRunDetail({
       lastRun = run;
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
-      renderRun(document, location, run, runId, payload.workshopEvidenceIssue);
+      renderRun(document, location, run, runId, payload.workshopEvidenceIssue, payload.artifactRegistry);
+      if (previousRun?.status !== run.status || !quiet) void checkIndependentReview();
       renderReferenceQueue(document, run, payload.queue, now());
       if (queueButton) queueButton.hidden = !run.computeResourceId;
       void showResimulatedReplay(document, location, fetchImpl, run);
@@ -867,6 +989,7 @@ export async function startRunDetail({
       queueButton?.removeEventListener('click', checkQueueWorkers);
       logsButton?.removeEventListener('click', loadLogs);
       replayRetry?.removeEventListener('click', retryReplay);
+      independentButton?.removeEventListener('click', startIndependentReview);
       if (replayTimer !== null) clearTimeoutImpl(replayTimer);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
     },

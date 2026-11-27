@@ -116,6 +116,8 @@ function normalizeTelemetryApiPrefix(value: string | undefined): string {
  * deterministic 409 response without accidentally persisting a partial
  * evaluation.
  */
+class Sim2RealDanceTelemetryUnavailableError extends Error {}
+
 class Sim2RealEvaluationValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -1839,6 +1841,11 @@ export function registerSim2RealTelemetryRoutes(
         // written evaluation; an older summary can never overwrite newer
         // samples.
         const evaluated = await evaluateSim2RealRun(runId, owner, ({ telemetry }) => {
+          if (
+            ['originman-dance', 'originman-reference-track'].includes(run.taskId ?? '') &&
+            !telemetry.some((record) => record.samples.length > 0)
+          )
+            throw new Sim2RealDanceTelemetryUnavailableError();
           const telemetryDimensionError = validateContractDimensions(
             telemetry.flatMap((record) => record.samples),
             model.manifest.contract,
@@ -1916,6 +1923,16 @@ export function registerSim2RealTelemetryRoutes(
           evaluationRecord,
         });
       } catch (error) {
+        if (error instanceof Sim2RealDanceTelemetryUnavailableError) {
+          sendApiError(
+            response,
+            409,
+            'SIM2REAL_DANCE_TELEMETRY_UNAVAILABLE',
+            '当前 Run 使用舞蹈仿真证据。请打开本轮结果查看分段评测与回放。',
+            { retryable: false },
+          );
+          return;
+        }
         if (error instanceof Sim2RealEvaluationValidationError) {
           sendApiError(response, 409, 'SIM2REAL_TELEMETRY_DIMENSION_MISMATCH', error.message, {
             retryable: false,

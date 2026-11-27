@@ -10,6 +10,7 @@ import importlib.metadata
 import multiprocessing
 import platform
 import time
+from collections import Counter, deque
 from pathlib import Path
 
 import numpy as np
@@ -48,29 +49,40 @@ def resolve_training_device(requested: str) -> str:
 
 
 class WorkerProgress(BaseCallback):
+    termination_reasons = ("contact", "tilt", "height", "travel", "nonfinite", "unknown")
+
     def __init__(self, total_timesteps, rollout_size, engine="originman-dance-ppo"):
         super().__init__()
         self.total_iterations = max(1, math.ceil(total_timesteps / rollout_size))
         self.rollout_size = rollout_size
         self.engine = engine
         self.started = time.monotonic()
-        self.episode_successes = []
+        self.episode_outcomes = deque(maxlen=50)
 
     def _on_step(self):
         for info in self.locals.get("infos", []):
             if info.get("episodeDone"):
-                self.episode_successes.append(float(info.get("taskSuccess", False)))
+                reason = info.get("episodeEndReason")
+                self.episode_outcomes.append(
+                    "completed" if info.get("taskSuccess") else
+                    reason if reason in self.termination_reasons else "unknown"
+                )
         return True
 
     def _on_rollout_end(self):
         rewards = self.locals.get("rollout_buffer").rewards
         mean_reward = float(np.mean(rewards)) if rewards is not None else 0.0
-        recent_success = float(np.mean(self.episode_successes[-50:])) if self.episode_successes else 0.0
+        episode_counts = Counter(self.episode_outcomes)
+        episode_samples = len(self.episode_outcomes)
+        completed_episodes = episode_counts["completed"]
+        recent_success = completed_episodes / episode_samples if episode_samples else 0.0
+        termination_counts = ",".join(str(episode_counts[reason]) for reason in self.termination_reasons)
         iteration = min(self.total_iterations, max(1, math.ceil(self.model.num_timesteps / self.rollout_size)))
         print(
             f"[{self.engine}] iter {iteration}/{self.total_iterations} meanReward={mean_reward:.5f} "
             f"recentSuccess={recent_success:.4f} elapsed={time.monotonic() - self.started:.1f}s "
-            f"episodeSamples={min(len(self.episode_successes), 50)}",
+            f"episodeSamples={episode_samples} episodeCompleted={completed_episodes} "
+            f"episodeTermination={termination_counts}",
             flush=True,
         )
 

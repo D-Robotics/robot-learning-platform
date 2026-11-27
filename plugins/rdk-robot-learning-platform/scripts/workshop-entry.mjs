@@ -65,7 +65,7 @@ export function workshopPreview(base, stage = 'preview', resource) {
   if (resource) url.searchParams.set('computeResourceId', resource.id);
   const href = url.href;
   const firstStep =
-    '可以先播放「交替摆臂」仿真回放，再选一支预置参考舞蹈或用动作组自由编排。进入跟跳页面后，第一次练习可选 8,192 步快检。';
+    '点击「开始跟跳练习」，预览预置舞蹈并选择算力后，用 8,192 步快检跑一轮。训练结束后打开本轮评测、回放和策略。';
   const label = 'OriginMan 舞蹈 Workshop';
   return {
     contextId: null,

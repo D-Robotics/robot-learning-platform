@@ -16,6 +16,22 @@ export const motionProperties = {
   transitionSeconds: { type: 'number', minimum: 0, maximum: 2 },
 };
 
+const referenceEnvs = [1, 2, 4, 8, 16, 32, 64];
+export const referenceBudget = {
+  type: 'integer',
+  minimum: 8192,
+  maximum: 2_000_000,
+  multipleOf: 4096,
+};
+const resourceId = { type: 'string', pattern: '^[A-Za-z0-9_.-]{1,160}$' };
+const referenceSettings = {
+  computeResourceId: resourceId,
+  numEnvs: { type: 'integer', enum: referenceEnvs },
+  referenceTrainingSteps: referenceBudget,
+};
+const digest = /^[a-f0-9]{64}$/;
+const workerId = new RegExp(resourceId.pattern);
+
 export const ORIGINMAN_MOTION_TOOLS = [
   {
     name: 'rdk_originman_motion_library',
@@ -27,11 +43,11 @@ export const ORIGINMAN_MOTION_TOOLS = [
   {
     name: 'rdk_originman_motion_preview',
     description:
-      '只读校验和预览预置舞蹈或自定义动作组，返回总时长、预计拍数、关节范围、曲线、轨迹 SHA 和适用的站姿标定。不会提交训练。',
+      '只读校验预置舞蹈或动作组，返回轨迹预览和本轮提交参数。已选 Worker 时带 computeResourceId，可同时指定步数和并行环境数。用户明确要求开始后，在同一对话按 nextArguments 提交。',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
-      properties: motionProperties,
+      properties: { ...motionProperties, ...referenceSettings },
       oneOf: [
         {
           required: ['presetId'],
@@ -99,7 +115,74 @@ export function validateReferenceDance(input) {
   return input;
 }
 
-export async function trainReferenceDance(args, upstream, signal) {
+function validateReferenceSettings({ computeResourceId, numEnvs, referenceTrainingSteps }) {
+  if (
+    (computeResourceId !== undefined &&
+      (typeof computeResourceId !== 'string' || !workerId.test(computeResourceId))) ||
+    !referenceEnvs.includes(numEnvs) ||
+    !Number.isInteger(referenceTrainingSteps) ||
+    referenceTrainingSteps < referenceBudget.minimum ||
+    referenceTrainingSteps > referenceBudget.maximum ||
+    referenceTrainingSteps % referenceBudget.multipleOf !== 0
+  )
+    throw Error('请提供有效的 Worker、并行环境数和 4,096 的倍数预算。');
+}
+
+export async function prepareReferenceDance(input, contextId, upstream, signal) {
+  if (!upstream.previewOriginmanMotion) throw Error('请先连接机器人学习平台。');
+  const {
+    computeResourceId,
+    numEnvs = 64,
+    referenceTrainingSteps = 503808,
+    ...composition
+  } = input;
+  const settings = { computeResourceId, numEnvs, referenceTrainingSteps };
+  validateReferenceSettings(settings);
+  const { workspaceAccountId, ...previewResult } = await upstream.previewOriginmanMotion(
+    validateReferenceDance(composition),
+    { signal },
+  );
+  const { preview } = previewResult;
+  if (typeof preview?.trajectorySha256 !== 'string' || !digest.test(preview.trajectorySha256))
+    throw Error('平台未返回可验证的参考轨迹摘要。');
+  const nextArguments = {
+    contextId,
+    dance: structuredClone(composition),
+    ...(computeResourceId !== undefined && { computeResourceId }),
+    numEnvs,
+    referenceTrainingSteps,
+    expectedTrajectorySha256: preview.trajectorySha256,
+    ...(preview.stanceProfile && { expectedStanceProfile: preview.stanceProfile }),
+  };
+  const workerSelectionRequired = computeResourceId === undefined;
+  return {
+    plan: { arguments: nextArguments, workspaceAccountId },
+    response: {
+      ...previewResult,
+      contextId,
+      trainingSubmitted: false,
+      workerSelectionRequired,
+      nextTool: 'rdk_originman_dance_train',
+      nextArguments,
+      ...(workerSelectionRequired && {
+        workerLookup: {
+          tool: 'rdk_development_targets',
+          arguments: { action: 'list-compute', engine: 'originman-reference-ppo' },
+        },
+      }),
+      studentReply: workerSelectionRequired
+        ? '参考舞蹈已预览。请选择一个支持跟跳的 Worker。'
+        : '参考舞蹈和训练配置已准备好。',
+      delivery:
+        '先展示轨迹和训练配置。在同一对话里，等用户明确要求开始后再提交 nextArguments。' +
+        (workerSelectionRequired
+          ? '从 workerLookup 取得当前账号的算力，使用用户选定的准确 computeResourceId 补齐参数。'
+          : ''),
+    },
+  };
+}
+
+export async function trainReferenceDance(args, upstream, signal, plan) {
   if (!upstream.previewOriginmanMotion || !upstream.submitOriginmanMotion)
     throw Error('请连接机器人学习平台后提交参考舞蹈训练。');
   const {
@@ -112,28 +195,29 @@ export async function trainReferenceDance(args, upstream, signal) {
     expectedStanceProfile,
     ...extra
   } = args;
+  validateReferenceSettings({ computeResourceId, numEnvs, referenceTrainingSteps });
   if (
     Object.keys(extra).length ||
     typeof contextId !== 'string' ||
     !/^[A-Za-z0-9][A-Za-z0-9_-]{0,23}$/.test(contextId) ||
-    typeof computeResourceId !== 'string' ||
-    !/^[A-Za-z0-9_.-]{1,160}$/.test(computeResourceId) ||
-    ![1, 2, 4, 8, 16, 32, 64].includes(numEnvs) ||
-    !Number.isInteger(referenceTrainingSteps) ||
-    referenceTrainingSteps < 8192 ||
-    referenceTrainingSteps > 2_000_000 ||
-    referenceTrainingSteps % 4096 !== 0
+    computeResourceId === undefined
   )
-    throw Error('请提供本轮实验标识、支持跟跳的 Worker、有效并行环境数和 4,096 的倍数预算。');
+    throw Error('请沿用预览的实验标识，并选定一个支持跟跳的 Worker。');
   const composition = validateReferenceDance(dance);
-  const { preview } = await upstream.previewOriginmanMotion(composition, { signal });
+  const expectedAccountId = plan?.workspaceAccountId;
+  const { preview } = await upstream.previewOriginmanMotion(composition, {
+    signal,
+    expectedAccountId,
+  });
   const sha256 = preview?.trajectorySha256;
-  if (typeof sha256 !== 'string' || !/^[a-f0-9]{64}$/.test(sha256))
+  if (typeof sha256 !== 'string' || !digest.test(sha256))
     throw Error('平台未返回可验证的参考轨迹摘要。');
-  if (expectedTrajectorySha256 !== undefined && expectedTrajectorySha256 !== sha256)
+  const expectedDigest = plan?.arguments.expectedTrajectorySha256 ?? expectedTrajectorySha256;
+  if (expectedDigest !== undefined && expectedDigest !== sha256)
     throw Error('编排内容已变更。请重新预览并确认后再提交。');
   const stanceProfile = preview.stanceProfile;
-  if (expectedStanceProfile !== undefined && expectedStanceProfile !== stanceProfile)
+  const expectedStance = plan ? plan.arguments.expectedStanceProfile : expectedStanceProfile;
+  if ((plan || expectedStance !== undefined) && expectedStance !== stanceProfile)
     throw Error('参考站姿已变更。请重新预览并确认后再提交。');
   return upstream.submitOriginmanMotion(
     {
@@ -145,6 +229,6 @@ export async function trainReferenceDance(args, upstream, signal) {
       expectedTrajectorySha256: sha256,
       ...(stanceProfile && { expectedStanceProfile: stanceProfile }),
     },
-    { signal },
+    { signal, expectedAccountId },
   );
 }

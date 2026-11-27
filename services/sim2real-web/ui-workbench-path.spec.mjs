@@ -208,11 +208,12 @@ await Promise.all([
   page.waitForURL((url) => url.pathname.endsWith('/workshop.html')),
   manual.getByRole('link', { name: 'OriginMan 舞蹈 Workshop', exact: true }).click(),
 ]);
-const referenceSources = page.getByRole('region', { name: '选择参考轨迹' });
+const referenceSources = page.getByRole('region', { name: '其他参考轨迹来源' });
 await referenceSources.waitFor({ state: 'visible' });
 record(
   'the OriginMan chapter opens the dance Workshop with all three reference sources',
-  (await referenceSources.getByRole('link').count()) === 3,
+  (await referenceSources.getByRole('link').count()) === 2 &&
+    (await page.getByRole('link', { name: '开始跟跳练习' }).isVisible()),
 );
 await page.goto(workbenchUrl);
 await openGuide();
@@ -294,8 +295,14 @@ await Promise.all([
 await referenceSources.waitFor({ state: 'visible' });
 record(
   'the mobile manual opens the same Workshop without horizontal overflow',
-  (await referenceSources.getByRole('link').count()) === 3 &&
-    (await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)),
+  (await referenceSources.getByRole('link').count()) === 2 &&
+    (await page
+      .getByRole('link', { name: '开始跟跳练习' })
+      .evaluate(
+        (button) =>
+          button.getBoundingClientRect().bottom <= window.innerHeight &&
+          document.documentElement.scrollWidth <= window.innerWidth,
+      )),
 );
 
 record(

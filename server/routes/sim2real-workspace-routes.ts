@@ -924,7 +924,11 @@ export function registerSim2RealWorkspaceRoutes(
           owner,
         );
         if (!artifact) {
-          response.status(404).json({ ok: false, error: 'SIM2REAL_ARTIFACT_NOT_FOUND' });
+          response.status(404).json({
+            ok: false,
+            error: 'SIM2REAL_ARTIFACT_NOT_FOUND',
+            message: '当前账号下没有这条制品登记记录。请使用制品库中已登记版本的 ID。',
+          });
           return;
         }
         response.json({ ok: true, artifact });

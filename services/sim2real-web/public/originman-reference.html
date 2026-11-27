@@ -6,7 +6,7 @@
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=motion-14"></script>
+    <script type="module" src="./originman-reference-page.mjs?v=course-login"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -25,6 +25,7 @@
         </ol>
       </aside>
       <section class="experiment-content" aria-label="任务表单">
+        <p id="reference-login" role="status" hidden><a id="reference-login-link" href="./login">登录后继续跟跳练习</a></p>
         <section aria-labelledby="reference-mode-heading">
           <h2 id="reference-mode-heading">选择参考来源</h2>
           <label>编排方式
@@ -109,6 +110,7 @@
               </select></p>
             <p id="reference-budget-hint" role="status" hidden></p>
             <p id="reference-worker-hint" role="status"></p>
+            <p id="reference-compute-link" hidden><a href="./?robot=originman#resources">打开执行资源</a></p>
             <p id="reference-worker-suggestion-panel" hidden><button id="reference-worker-suggestion" type="button"></button></p>
             <details id="reference-screen-details" class="experiment-details">
               <summary>提前筛查或定位问题</summary>

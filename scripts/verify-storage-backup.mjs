@@ -60,10 +60,42 @@ try {
   const videoPath = path.join('dance-videos', `${digest}.mp4`);
   await mkdir(path.join(storage, 'dance-videos'), { mode: 0o700 });
   await writeFile(path.join(storage, videoPath), video, { mode: 0o600 });
+  const trace = Buffer.from('verified simulation trace fixture');
+  const traceDigest = createHash('sha256').update(trace).digest('hex');
+  const evaluationPath = path.join('dance-evaluations', 'a'.repeat(64));
+  const tracePath = path.join(evaluationPath, `${traceDigest}.npz`);
+  const evaluationVideoPath = path.join(evaluationPath, `${digest}.mp4`);
+  const reportPath = path.join(evaluationPath, 'report.json');
+  const report = JSON.stringify({ replay: { sha256: traceDigest, videoSha256: digest } });
+  await mkdir(path.join(storage, evaluationPath), { recursive: true, mode: 0o700 });
+  await writeFile(path.join(storage, tracePath), trace);
+  await writeFile(path.join(storage, evaluationVideoPath), video);
+  await writeFile(path.join(storage, reportPath), report);
+  await mkdir(path.join(storage, 'dance-evaluation-staging', 'job-fixture'), { recursive: true });
+  await writeFile(
+    path.join(storage, 'dance-evaluation-staging', 'job-fixture', 'policy.onnx'),
+    trace,
+  );
+  const sessionsPath = path.join('workshop-sessions', 'b'.repeat(64));
+  const session = path.join(sessionsPath, 'workshop-1.json');
+  await mkdir(path.join(storage, sessionsPath), { recursive: true, mode: 0o700 });
+  await writeFile(path.join(storage, session), '{}');
+  const incompleteEvaluation = path.join(storage, tracePath);
+  await rm(incompleteEvaluation);
+  await assert.rejects(
+    () => createBackup({ storageDir: storage, output: path.join(root, 'incomplete') }),
+    (error) => error?.code === 'STORAGE_BACKUP_SOURCE_INVALID' && /舞蹈评测/.test(error.message),
+  );
+  await writeFile(incompleteEvaluation, trace);
   const first = await createBackup({ storageDir: storage, output: snapshot });
   assert.equal(first.manifest.consistency, 'quiesced');
   const verified = await verifySnapshot(snapshot);
-  assert.equal(verified.files, 5);
+  assert.equal(verified.files, 9);
+  assert.ok(verified.manifest.files.some((file) => file.path === tracePath));
+  assert.ok(verified.manifest.files.some((file) => file.path === session));
+  assert.ok(
+    verified.manifest.files.every((file) => !file.path.startsWith('dance-evaluation-staging/')),
+  );
   assert.ok(
     verified.manifest.files.some((file) => file.path === videoPath && file.sha256 === digest),
   );
@@ -94,6 +126,10 @@ try {
   const result = await restoreBackup({ snapshotDir: snapshot, storageDir: restored, yes: true });
   assert.equal(result.restoredTo, restored);
   assert.deepEqual(await readFile(path.join(restored, videoPath)), video);
+  assert.deepEqual(await readFile(path.join(restored, evaluationVideoPath)), video);
+  assert.deepEqual(await readFile(path.join(restored, tracePath)), trace);
+  assert.equal(await readFile(path.join(restored, reportPath), 'utf8'), report);
+  assert.equal(await readFile(path.join(restored, session), 'utf8'), '{}');
   assert.equal(JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8')).version, 1);
   const restoredLedger = JSON.parse(await readFile(path.join(restored, 'sim2real.json'), 'utf8'));
   assert.equal(restoredLedger.artifacts[0].id, 'artifact-1');

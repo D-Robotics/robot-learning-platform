@@ -120,6 +120,16 @@ describe('studio direct-login relay', () => {
     expect(new URL(missing!, base).searchParams.get('returnTo')).toBe(result);
     expect(new URL(denied!, base).searchParams.get('returnTo')).toBe(result);
     expect((await form(result)).headers.get('location')).toBe(result);
+    const exercise = `${prefix}/originman-reference.html?mode=blocks&computeResourceId=gpu-1&budget=formal`;
+    expect(await (await fetch(href(exercise))).text()).toContain(
+      `name="returnTo" value="${exercise.replaceAll('&', '&amp;')}"`,
+    );
+    expect((await form(`${exercise}&other=ignored`)).headers.get('location')).toBe(exercise);
+    const run = `${prefix}/originman-reference-run.html?runId=exact-run-id`;
+    expect((await form(run)).headers.get('location')).toBe(run);
+    expect(
+      (await form(`${prefix}/originman-reference.html?mode=invalid`)).headers.get('location'),
+    ).toBe(`${prefix}/`);
     const unsafe = `//other.example${result}`;
     expect(await (await fetch(href(unsafe))).text()).not.toContain('name="returnTo"');
     expect((await form(unsafe)).headers.get('location')).toBe(`${prefix}/`);

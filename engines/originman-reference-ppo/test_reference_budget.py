@@ -1,5 +1,7 @@
 import importlib.util
 from pathlib import Path
+
+import numpy as np
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -14,6 +16,37 @@ spec.loader.exec_module(worker)
 
 
 class TestReferenceBudget(unittest.TestCase):
+    def test_observation_contracts_keep_distinct_layouts(self):
+        env = worker.ReferenceTracking.__new__(worker.ReferenceTracking)
+        env.tick = 0
+        env.bpm = 100
+        env.robot = SimpleNamespace(orientation=lambda: (np.eye(3), 0))
+        env.qpos = env.qvel = np.arange(18)
+        env.neutral = np.full(18, .1)
+        env.data = SimpleNamespace(qpos=np.full(18, .3), qvel=np.full(18, 2.), sensordata=np.ones(3))
+        env.target = np.full((50, 18), .4)
+        env.target_vel = np.full((50, 18), 4.)
+        env.previous = np.full(18, .5)
+
+        env.motion_contract = True
+        observation = env.observe()
+        self.assertEqual(observation.shape, (78,))
+        np.testing.assert_allclose(observation[0:11], [0, 0, 1, .25, .25, .25, 0, 1, 0, 1, -1])
+        np.testing.assert_allclose(observation[11:29], .4)
+        np.testing.assert_allclose(observation[29:47], .2)
+        np.testing.assert_allclose(observation[47:65], .8)
+        np.testing.assert_array_equal(observation[65:73], [1, 0, 0, 0, 0, 0, 0, 0])
+        np.testing.assert_array_equal(observation[73:78], [0, 1, 0, 1, 0])
+        env.tick = 49
+        self.assertEqual(env.observe()[-1], 1)
+
+        env.motion_contract = False
+        observation = env.observe()
+        self.assertEqual(observation.shape, (96,))
+        np.testing.assert_allclose(observation[6:24], .4)
+        np.testing.assert_allclose(observation[60:78], .4)
+        np.testing.assert_allclose(observation[78:96], .5)
+
     def run_checkpoints(self, stop_when_passing):
         class PassingLearner:
             def __init__(self, *_args, **_kwargs):
@@ -50,7 +83,7 @@ class TestReferenceBudget(unittest.TestCase):
             ]),
         ):
             _, _, steps, _, result, _, checkpoints = worker.train_and_export(
-                None, Path(directory), None, 65_536, 1, 7, SimpleNamespace(stance_profile=None),
+                None, Path(directory), None, 65_536, 1, 7, SimpleNamespace(stance_profile=None, contract_id=worker.CONTRACT, bpm=100.0),
                 [], stop_when_passing=stop_when_passing,
             )
         return steps, result["selectedCheckpointSteps"], [item["steps"] for item in checkpoints]

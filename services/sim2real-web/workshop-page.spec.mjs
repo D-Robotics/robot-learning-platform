@@ -978,7 +978,7 @@ test('public Workshop is dance-only with safe routing for retired links', async 
   const d = dance.window.document;
   const workerLinks = [...d.querySelectorAll('a[data-workshop-resource]')];
   showWorkshopEntry(d, base + '?computeResourceId=wrong%2Fid');
-  assert.equal(workerLinks.length, 6);
+  assert.equal(workerLinks.length, 4);
   assert.ok(workerLinks.every((link) => !new URL(link.href).searchParams.has('computeResourceId')));
   showWorkshopEntry(d, base + '?computeResourceId=worker-1');
   assert.ok(
@@ -991,13 +991,15 @@ test('public Workshop is dance-only with safe routing for retired links', async 
     .filter((link) => link.pathname.endsWith('/originman-reference.html'));
   assert.deepEqual(
     referenceLinks.map((link) => link.searchParams.get('mode')),
-    ['preset', 'blocks', null],
+    ['preset', 'blocks', 'upload'],
   );
   assert.equal(d.getElementById('dance-workshop-main').hidden, false);
   assert.equal(d.getElementById('workshop-main'), null);
   const quick = new URL(d.getElementById('dance-budget-quick').href);
-  assert.equal(quick.searchParams.get('computeResourceId'), 'worker-1');
+  assert.equal(quick.searchParams.has('computeResourceId'), false);
   assert.equal(quick.hash, '#train/configure');
+  const records = [...d.querySelectorAll('a')].find((link) => link.textContent === '查看训练记录');
+  assert.equal(records.hash, '#records/run-history');
   assert.equal(
     workshopRedirect(base + '?context=lesson-1'),
     'https://platform.test/learning/experiment.html?context=lesson-1',
@@ -1033,7 +1035,8 @@ test('public Workshop plays the catalog replay and keeps training available if p
   const source = document.getElementById('dance-source-title').parentElement;
   const budget = document.getElementById('dance-budget-title').parentElement;
   assert.equal(source.nextElementSibling, budget);
-  assert.equal(source.querySelectorAll('a[href*="originman-reference.html"]').length, 3);
+  assert.equal(source.querySelectorAll('a[href*="originman-reference.html"]').length, 2);
+  assert.equal(document.querySelector('.workshop-action-primary').textContent, '开始跟跳练习');
 
   delete video.error;
   video.dispatchEvent(new dom.window.Event('loadedmetadata'));

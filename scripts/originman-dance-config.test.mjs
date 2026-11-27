@@ -236,3 +236,82 @@ test('MCP lists and previews motion without writing, then submits the pinned rec
     /originman-reference-run\.html/,
   );
 });
+
+test('Studio previews and submits a pinned preset or composition in the same conversation', async () => {
+  const originalDigest = 'd'.repeat(64);
+  let digest = originalDigest;
+  let workspaceAccountId = 'alice';
+  const submissions = new Map();
+  const proxy = experienceProxy(
+    {
+      async previewOriginmanMotion(composition, { expectedAccountId }) {
+        if (expectedAccountId && expectedAccountId !== workspaceAccountId)
+          throw Error('账号已切换');
+        return { ok: true, workspaceAccountId, preview: { trajectorySha256: digest, composition } };
+      },
+      async submitOriginmanMotion(args, { expectedAccountId }) {
+        assert.equal(expectedAccountId, workspaceAccountId);
+        if (!submissions.has(args.contextId))
+          submissions.set(args.contextId, {
+            id: 'ref-' + submissions.size,
+            taskId: 'originman-reference-track',
+            status: 'queued',
+          });
+        return { taskId: 'originman-reference-track', run: submissions.get(args.contextId) };
+      },
+    },
+    {
+      env: {
+        RDK_STUDIO_INHERIT_LOGIN: '1',
+        RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/robotics-learning',
+      },
+    },
+  );
+  const call = (name, args) => proxy('tools/call', { name, arguments: args });
+  const previewName = 'rdk_originman_motion_preview';
+  const trainName = 'rdk_originman_dance_train';
+  for (const [recipe, worker] of [
+    [{ presetId: 'g1_show' }, { computeResourceId: 'gpu-1' }],
+    [{ blocks: [{ id: 'wave' }, { id: 'bow' }] }, {}],
+  ]) {
+    const denied = await call(trainName, {
+      contextId: 'unknown-context',
+      computeResourceId: 'gpu-1',
+      dance: recipe,
+    });
+    assert.equal(denied.structuredContent.error.platformCode, 'DANCE_ROUTE_REQUIRED');
+    const draft = (
+      await call(previewName, {
+        ...recipe,
+        ...worker,
+        numEnvs: 2,
+        referenceTrainingSteps: 8192,
+      })
+    ).structuredContent;
+    assert.equal(draft.trainingSubmitted, false);
+    assert.equal(Object.hasOwn(draft, 'workspaceAccountId'), false);
+    assert.equal(draft.nextTool, trainName);
+    assert.equal(draft.workerSelectionRequired, !worker.computeResourceId);
+    if (!worker.computeResourceId)
+      assert.equal(draft.workerLookup.arguments.engine, 'originman-reference-ppo');
+    const request = { computeResourceId: 'gpu-1', ...draft.nextArguments };
+    const before = submissions.size;
+    assert.equal((await call(trainName, { ...request, numEnvs: 4 })).isError, true);
+    digest = 'e'.repeat(64);
+    assert.equal((await call(trainName, request)).isError, true);
+    digest = originalDigest;
+    workspaceAccountId = 'bob';
+    assert.equal((await call(trainName, request)).isError, true);
+    workspaceAccountId = 'alice';
+    assert.equal(submissions.size, before);
+    const first = await call(trainName, request);
+    assert.notEqual(first.isError, true, JSON.stringify(first));
+    const retry = await call(trainName, request);
+    assert.equal(retry.structuredContent.run.id, first.structuredContent.run.id);
+    assert.equal(submissions.size, before + 1);
+    assert.match(
+      first.structuredContent.studioNavigation.arguments.url,
+      /originman-reference-run\.html/,
+    );
+  }
+});

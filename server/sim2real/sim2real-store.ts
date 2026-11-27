@@ -3075,6 +3075,7 @@ type RunPatch = Partial<
     | 'summary'
     | 'launchUrl'
     | 'externalRunId'
+    | 'contractId'
     | 'metrics'
     | 'taskEvaluation'
     | 'evaluation'

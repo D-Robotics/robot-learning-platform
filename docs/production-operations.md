@@ -72,9 +72,9 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 若 19091 由独立发布的 CPU Worker 占用且同机的 `sim2real-cpu-worker.service` 已停用，
 使用 `DEPLOY_EXTERNAL_CPU_WORKER=1` 执行标准发布。发布会检查实际 Worker 的协议和健康状态。
 
-标准构建包含工作台内的 `#classroom` 原生课堂。选择 OriginMan 的受扰恢复任务可打开课堂；通用使用指引经图文手册的 OriginMan 章节打开八步课程。浏览器回归覆盖两个入口、课堂书签和两个窗口尺寸。
+选中 OriginMan 后，工作台的「舞蹈课堂」进入同域的 `workshop.html`。旧 `#classroom` 书签和受扰恢复课程入口也进入舞蹈课堂。新学员从「开始跟跳练习」进入 `originman-reference.html?mode=preset`，Studio 的参考轨迹跟跳工具使用同一入口。结果页按原 Run ID 读取评测、回放和策略。按节拍训练是进阶练习，使用独立引擎和兼容的 Worker。
 
-课堂的 JS、WebGL 渲染器、MuJoCo 子进程和服务端接口由标准构建打包。发布服务器在切换前检查原生课堂节点、前端模块和运行代码。场景、教师参考和账号制品放在独立的运行数据目录。
+发布验收覆盖课堂按钮、游客登录后续接、旧书签跳转、训练记录链接及桌面和窄屏布局。历史受扰恢复实验继续通过原实验或 Run 链接读取。下列环境配置和回归命令用于保留这些实验的仿真和回放能力。
 
 | 配置 | 取值 |
 | --- | --- |
@@ -87,7 +87,7 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 
 安装场景和课前媒体后，运行 `python3 engines/originman-straight/verify_classroom_assets.py <资产根目录>` 核对场景、网格和参考视频的 SHA-256。训练 Worker 通过 `RDK_SIM2REAL_TRAIN_ENGINES_JSON` 注册 `originman-recovery`，入口为打包后的 `engines/originman-straight/workshop_adapter.py`，场景使用 `ORIGINMAN_SCENE`。训练环境还需安装与 Worker 执行设备匹配的 PyTorch、Stable Baselines3、ONNX 和 FFmpeg。
 
-发布验收使用隔离台账和 Worker 目录。点击两个入口后，在课堂加载一条已完成的受扰恢复 Run，核对 Run ID 与策略摘要，实际施加扰动并播放同源回放至结束。可用 `scripts/verify-originman-classroom.mjs` 重跑真实服务端链路。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供隔离实例及已校验的实验凭据。
+用 `scripts/verify-originman-classroom.mjs` 在隔离实例复核历史受扰恢复 Run 的策略摘要、仿真扰动和同源回放。通过 `RDK_CLASSROOM_URL`、`RDK_CLASSROOM_TRAIN_RUN`、`RDK_CLASSROOM_EVAL_RUN`、`RDK_CLASSROOM_POLICY_SHA256` 和 `RDK_CLASSROOM_VIDEO_SHA256` 提供该实例及已校验的实验凭据。
 
 ## Studio SSH 安装训练 Worker
 
@@ -119,6 +119,35 @@ RDK_SSH_ACCEPTANCE=1 node scripts/accept-studio-ssh-worker.mjs
 需要空闲本地端口 18881 和依赖下载网络；结果保存在当前目录的
 `acceptance-report.json`。结束时仅停止本次拥有的 Worker，私有安装目录和隔离台账留作证据。
 它不替代真实 Studio SSH 连接、GPU 或真实开发机部署验收。
+
+## OriginMan 舞蹈独立评测场景
+
+给 `RDK_ORIGINMAN_DANCE_EVAL_BUNDLE_ROOT` 配置私有素材目录。子目录按
+`model/scene.xml` 的完整 SHA-256 命名，每个目录包含完整模型、网格、模型清单和
+`reference.npy`。平台按 Run 台账保存的场景摘要选择并验证素材，历史配置
+`RDK_ORIGINMAN_DANCE_EVAL_BUNDLE` 也须匹配该摘要。保留旧 Run 依赖的场景版本，
+以便服务升级后继续复评。同一场景可以供多个账号读取，策略文件和评测结果仍按账号归属。
+
+## OriginMan 环境包分发
+
+在平台服务器的私有目录放置已审核的 OriginMan 环境 ZIP，由运维账号执行：
+
+```bash
+sudo rdk-originman-publish /path/to/originman-env.zip
+```
+
+发布命令使用 [环境包分发脚本](../scripts/deploy-originman-environment.py)，在平台服务器
+校验包清单，通过指定的 SSH 连接把原始 ZIP 送到训练机。训练机用独立的接收账号重新验证
+压缩包和文件摘要，返回版本、训练场景摘要和标定摘要。两端使用按版本和摘要命名的目录保留
+历史发布，`current-package` 指向最后一次成功发布的环境包。对同一包重试会复用已验证的目录。
+
+运维安装接收端时，使用专用的 SSH 密钥，固定训练机主机密钥，在 `authorized_keys` 中启用
+`restrict` 和固定命令 `deploy-originman-environment.py --root <私有目录> receive`。
+平台端用 `publish --ssh-config <私有配置>` 指向该连接，压缩包与配置均位于 Web 根目录之外。
+
+`current-package` 用于环境包分发。训练 Worker 注册原生环境前需要补齐训练运行时及实际
+使用的参考轨迹，并在隔离环境验证模型接口、短训、导出和回放。按训练引擎的配置切换与验收
+流程启用新环境。已完成 Run 的产物继续通过原记录追溯。
 
 ## 认证配置（studio-cookie 嫁接 · web-cloud 部署）
 

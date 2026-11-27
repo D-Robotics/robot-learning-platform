@@ -81,6 +81,10 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   assert.equal(evaluationCount, 0);
   const final = await call(accept, waiting.nextArguments);
   assert.equal(final.simulationAcceptance.state, 'failed');
+  assert.equal(final.simulationAcceptance.evidenceStatus, 'verified');
+  assert.equal(final.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(final.simulationAcceptance.sectionsPassed, 0);
+  assert.equal(final.simulationAcceptance.sectionsEvaluated, 1);
   assert.deepEqual(final.simulationAcceptance.sections, checks);
   assert.match(final.studentReply, /未达标/);
   assert.equal(new URL(final.studioNavigation.arguments.url).searchParams.get('runId'), run.id);
@@ -89,6 +93,8 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   resultScene = 'c'.repeat(64);
   const stale = await call(accept);
   assert.equal(stale.simulationAcceptance.state, 'unverified');
+  assert.equal(stale.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(stale.simulationAcceptance.evidenceStatus, 'unverified');
   assert.equal(stale.studioNavigation, undefined);
   resultScene = scene;
   checks[0].passed = true;
@@ -98,6 +104,51 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   run.status = 'failed';
   assert.equal((await call(accept)).simulationAcceptance.state, 'not-evaluated');
   assert.equal(evaluationCount, 3);
+});
+
+test('WorkBuddy accepts the original blocks evaluation and returns a browser entry', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const run = {
+    id: 'reference-workbuddy',
+    status: 'completed',
+    taskId: 'originman-reference-track',
+    mock: false,
+    contractId: 'custom-policy-originman-reference-v2',
+    artifact: { format: 'onnx', sha256: 'a'.repeat(64), deployable: false },
+    metrics: {
+      originmanReference: {
+        qualityGatePassed: false,
+        framesEvaluated: 85,
+        framesExpected: 481,
+        sceneSha256: 'b'.repeat(64),
+        referenceSha256: 'c'.repeat(64),
+        sections: [{ id: 'wave', completed: false }],
+      },
+    },
+  };
+  const proxy = experienceProxy(
+    {
+      async request(method) {
+        if (method === 'initialize') return { capabilities: {}, serverInfo: { name: 'fixture' } };
+        return { structuredContent: { runId: run.id, status: run.status, taskId: run.taskId } };
+      },
+      readTrainingRun: async () => run,
+      verifyPolicyDownload: async () => true,
+      evaluateDanceRun: async () => assert.fail('Blocks uses the original trajectory evaluation'),
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/learning' } },
+  );
+  await proxy('initialize', { clientInfo: { name: 'WorkBuddy' } });
+  const { structuredContent: result } = await proxy('tools/call', {
+    name: 'rdk_originman_dance_acceptance',
+    arguments: { runId: run.id },
+  });
+  assert.equal(result.simulationAcceptance.evidenceSource, 'original-worker');
+  assert.equal(result.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(result.simulationAcceptance.framesEvaluated, 85);
+  assert.match(result.links.browser, /originman-reference-run\.html\?runId=reference-workbuddy/);
+  assert.equal(result.studioNavigation, undefined);
 });
 
 test('MCP business failures retain flat, nested and textual diagnostics', () => {
@@ -1631,8 +1682,22 @@ test('reference track opens the correct platform mount and keeps result navigati
   assert.deepEqual(read, []);
   assert.deepEqual(entry.studioNavigation, {
     tool: 'studio_open_url',
-    arguments: { url: 'https://platform.test/robotics-learning/originman-reference.html' },
+    arguments: {
+      url: 'https://platform.test/robotics-learning/originman-reference.html?mode=preset',
+    },
   });
+  for (const [task, expected] of [
+    ['reference-track', entry.studioNavigation.arguments.url],
+    ['reinforcement', entry.studioNavigation.arguments.url],
+    ['simulation', 'https://platform.test/robotics-learning/?robot=originman#classroom'],
+  ]) {
+    const guide = await proxy('tools/call', {
+      name: 'rdk_learning_guide',
+      arguments: { task, productId: 'originman' },
+    });
+    assert.equal(guide.structuredContent.studioNavigation.arguments.url, expected);
+    assert.equal(guide.structuredContent.trainingSubmitted, false);
+  }
   for (const [mode, expectedMessage] of [
     ['preset', /预置舞蹈.*自动筛查/],
     ['blocks', /加入编排.*自动筛查/],
@@ -1676,6 +1741,9 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
         qualityGatePassed: true,
         framesExpected: 200,
         framesEvaluated: 200,
+        zeroResidualFramesEvaluated: 200,
+        trackingRmseRad: 0.0901,
+        zeroResidualRmseRad: 0.0897,
         replay: { sha256: replaySha256 },
         video: {
           file: 'dance-replay.mp4',
@@ -1729,7 +1797,9 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
     assert.equal(model.runDelivery.policy, 'available');
     assert.match(model.links.replay, /\/originman-reference-run\.html\?.+#replay-heading$/);
     assert.match(model.studioNavigation.arguments.url, /\/originman-reference-run\.html\?/);
-    assert.match(model.studentReply, /跟跳评测通过.*200\/200 帧/);
+    assert.match(model.studentReply, /仿真完整度和稳定性达标.*200\/200 帧/);
+    assert.match(model.studentReply, /跟踪 RMSE 为 0\.0901 rad，零残差基线为 0\.0897 rad/);
+    assert.match(model.studentReply, /本轮误差比基线高 0\.4%/);
   }
   for (const name of [
     'rdk_training_status',
