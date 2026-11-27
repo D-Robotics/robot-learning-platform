@@ -803,6 +803,7 @@ test('reference playback seeks only to evaluated sections and handles old and mi
       [source]: {
         qualityGatePassed: true,
         selectedCheckpointSteps: 32768,
+        trainingFramesObserved: 162,
         framesExpected: 170,
         framesEvaluated: 105,
         trackingMaeRad: 0.02,
@@ -835,6 +836,10 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   assert.equal(workshop.pathname, '/robotics-learning/workshop.html');
   assert.equal(workshop.searchParams.get('computeResourceId'), 'workshop-worker');
   assert.match(document.getElementById('run-config-body').textContent, /回放与策略对应步数32,?768/);
+  assert.equal(document.getElementById('completion-heading').textContent, '训练采样覆盖');
+  assert.match(document.getElementById('completion-empty').textContent, /162 \/ 170 帧/);
+  assert.equal(document.getElementById('completion-method').hidden, true);
+  assert.equal(document.getElementById('completion-chart').hasAttribute('hidden'), true);
   const control = document.getElementById('replay-segment-controls');
   const select = document.getElementById('replay-segment');
   assert.equal(control.hidden, false);
@@ -905,11 +910,13 @@ test('reference Run discloses the delivered baseline and compares the evaluated 
       },
     },
   };
-  const detail = await startRunDetail({
-    document,
-    location,
-    fetchImpl: async () => Response.json({ ok: true, run }),
-  });
+  const open = () =>
+    startRunDetail({
+      document,
+      location,
+      fetchImpl: async () => Response.json({ ok: true, run }),
+    });
+  const detail = await open();
   t.after(() => detail.dispose());
   const byId = (id) => document.getElementById(id);
   assert.equal(byId('quality-status').textContent, '交付策略通过');
@@ -920,4 +927,15 @@ test('reference Run discloses the delivered baseline and compares the evaluated 
   assert.doesNotMatch(byId('quality-body').textContent, /undefined|NaN/);
   assert.doesNotMatch(byId('run-next-action').textContent, /播放/);
   assert.equal(byId('run-error').hidden, true);
+  detail.dispose();
+
+  const evidence = run.metrics.originmanReference;
+  evidence.referenceLeadFrames = 2;
+  evidence.uncompensatedRmseRad = 0.0334;
+  const compensated = await open();
+  t.after(() => compensated.dispose());
+  assert.equal(byId('run-policy-download').textContent, '下载参考基线（含延迟补偿） ONNX');
+  assert.match(byId('quality-body').textContent, /提前 40 ms 发出参考指令/);
+  assert.match(byId('quality-body').textContent, /补偿前的零残差 RMSE0\.0334 rad/);
+  assert.match(byId('quality-body').textContent, /PPO 相对补偿后基线的 RMSE 变化\+1\.28%/);
 });

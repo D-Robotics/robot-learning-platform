@@ -133,6 +133,16 @@ function drawCurve(document, run, completion = false) {
   const raw = Array.isArray(run.progress) ? run.progress : [];
   if (completion) {
     const caption = document.getElementById('completion-caption');
+    const reference = run.metrics?.originmanReference;
+    if (Number.isInteger(reference?.trainingFramesObserved)) {
+      svg.setAttribute('hidden', '');
+      empty.hidden = false;
+      text(document, 'completion-heading', '训练采样覆盖');
+      document.getElementById('completion-method')?.setAttribute('hidden', '');
+      empty.textContent = `分段采样覆盖 ${reference.trainingFramesObserved} / ${reference.framesExpected} 帧。完整执行结果见上方评测。`;
+      if (caption) caption.hidden = true;
+      return;
+    }
     const latest = raw.at(-1);
     if (caption) {
       caption.hidden = !raw.length;
@@ -257,6 +267,12 @@ function referenceQualityRows(evidence, composition) {
   }
   const selectedPolicy = referencePolicyLabel(evidence);
   if (selectedPolicy) rows.push(['已选策略', selectedPolicy]);
+  const compensated = evidence.referenceLeadFrames > 0;
+  if (compensated) {
+    rows.push(['执行器延迟补偿', `提前 ${evidence.referenceLeadFrames * 20} ms 发出参考指令`]);
+    if (Number.isFinite(evidence.uncompensatedRmseRad))
+      rows.push(['补偿前的零残差 RMSE', evidence.uncompensatedRmseRad.toFixed(4) + ' rad']);
+  }
   const deliveredPpo = selectedPolicy === '本轮 PPO 策略';
   const ppoRmse = evidence.ppoTrackingRmseRad ?? (deliveredPpo ? evidence.trackingRmseRad : undefined);
   const ppoFrames = evidence.ppoFramesEvaluated ?? (deliveredPpo ? evidence.framesEvaluated : undefined);
@@ -266,13 +282,13 @@ function referenceQualityRows(evidence, composition) {
     rows.push(['本轮 PPO 候选稳定性', evidence.ppoStabilityPassed ? '通过' : '未通过']);
   if (Number.isFinite(evidence.zeroResidualRmseRad)) {
     const evaluated = evidence.zeroResidualFramesEvaluated;
-    rows.push(['纯参考关节跟踪 RMSE', [evidence.zeroResidualRmseRad.toFixed(4) + ' rad', frameCount(evaluated)].filter(Boolean).join(' · ')]);
+    rows.push([compensated ? '补偿后的零残差 RMSE' : '纯参考关节跟踪 RMSE', [evidence.zeroResidualRmseRad.toFixed(4) + ' rad', frameCount(evaluated)].filter(Boolean).join(' · ')]);
     if (evidence.ppoStabilityPassed === false) {
       rows.push(['PPO 训练收益', 'PPO 候选未通过稳定性检查']);
     } else if (Number.isSafeInteger(evaluated) && evaluated > 0 && evaluated === evidence.framesExpected &&
         ppoFrames === evaluated && Number.isFinite(ppoRmse) && evidence.zeroResidualRmseRad > 0) {
       const difference = 100 * (ppoRmse / evidence.zeroResidualRmseRad - 1);
-      rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
+      rows.push([compensated ? 'PPO 相对补偿后基线的 RMSE 变化' : 'PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
     } else if (evidence.policySelection || Number.isFinite(ppoRmse)) {
       rows.push(['PPO 训练收益', '缺少全程同帧的对照']);
     }
@@ -295,7 +311,8 @@ function referenceQualityRows(evidence, composition) {
 }
 
 function referencePolicyLabel(reference) {
-  if (reference?.policySelection === 'reference-baseline') return '纯参考基线';
+  if (reference?.policySelection === 'reference-baseline')
+    return reference.referenceLeadFrames > 0 ? '参考基线（含延迟补偿）' : '纯参考基线';
   if (reference?.policySelection === 'ppo' || (!reference?.policySelection && reference?.selectedCheckpointSteps > 0))
     return '本轮 PPO 策略';
   return '';

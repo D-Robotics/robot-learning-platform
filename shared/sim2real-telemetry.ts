@@ -108,12 +108,15 @@ export interface Sim2RealRunMetrics {
   originmanReference?: SimulationReplayEvidence & {
     checkpointEvaluations?: number;
     selectedCheckpointSteps?: number;
+    trainingFramesObserved?: number;
     framesExpected: number;
     framesEvaluated: number;
     trackingMaeRad: number;
     trackingRmseRad?: number;
     zeroResidualRmseRad?: number;
     zeroResidualFramesEvaluated?: number;
+    referenceLeadFrames?: number;
+    uncompensatedRmseRad?: number;
     policySelection?: 'ppo' | 'reference-baseline';
     ppoTrackingRmseRad?: number;
     ppoFramesEvaluated?: number;
