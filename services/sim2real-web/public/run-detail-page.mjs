@@ -243,37 +243,46 @@ function renderDance(document, run) {
 
 function referenceQualityRows(evidence, composition) {
   if (!evidence) return [];
-  const rows = [
-    ['轨迹完成度', `${evidence.framesEvaluated} / ${evidence.framesExpected} 帧`],
-    ['平均关节跟踪误差', `${evidence.trackingMaeRad.toFixed(4)} rad`],
-    ['峰值倾角（通过标准 < 32°）', `${evidence.maxTiltDeg.toFixed(2)}°`],
-    ['末尾偏航（通过标准绝对值 < 5°）', `${evidence.finalYawDeg.toFixed(2)}°`],
-
+  const frameCount = (count) => Number.isSafeInteger(count) && Number.isSafeInteger(evidence.framesExpected)
+    ? `${count}/${evidence.framesExpected} 帧` : '';
+  const rows = [['轨迹完成度', frameCount(evidence.framesEvaluated)]].filter(([, value]) => value);
+  const measurements = [
+    ['平均关节跟踪误差', evidence.trackingMaeRad, 4, ' rad'],
+    ['峰值倾角（通过标准 < 32°）', evidence.maxTiltDeg, 2, '°'],
+    ['末尾偏航（通过标准绝对值 < 5°）', evidence.finalYawDeg, 2, '°'],
+    ['交付策略关节跟踪 RMSE', evidence.trackingRmseRad, 4, ' rad'],
   ];
-  if (Number.isFinite(evidence.trackingRmseRad))
-    rows.push(['已选策略的关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
-  if (evidence.policySelection === 'reference-baseline')
-    rows.push(['已选策略', '纯参考基线']);
-  else if (evidence.policySelection === 'ppo') rows.push(['已选策略', 'PPO']);
-  const ppoRmse = evidence.ppoTrackingRmseRad ?? evidence.trackingRmseRad;
-  const ppoFrames = evidence.ppoFramesEvaluated ?? evidence.framesEvaluated;
+  for (const [name, value, digits, unit] of measurements) {
+    if (Number.isFinite(value)) rows.push([name, value.toFixed(digits) + unit]);
+  }
+  const selectedPolicy = referencePolicyLabel(evidence);
+  if (selectedPolicy) rows.push(['已选策略', selectedPolicy]);
+  const deliveredPpo = selectedPolicy === '本轮 PPO 策略';
+  const ppoRmse = evidence.ppoTrackingRmseRad ?? (deliveredPpo ? evidence.trackingRmseRad : undefined);
+  const ppoFrames = evidence.ppoFramesEvaluated ?? (deliveredPpo ? evidence.framesEvaluated : undefined);
+  if (Number.isFinite(ppoRmse))
+    rows.push(['本轮 PPO 候选 RMSE', [ppoRmse.toFixed(4) + ' rad', frameCount(ppoFrames)].filter(Boolean).join(' · ')]);
+  if (typeof evidence.ppoStabilityPassed === 'boolean')
+    rows.push(['本轮 PPO 候选稳定性', evidence.ppoStabilityPassed ? '通过' : '未通过']);
   if (Number.isFinite(evidence.zeroResidualRmseRad)) {
     const evaluated = evidence.zeroResidualFramesEvaluated;
-    const rounds = ` · ${evaluated}/${evidence.framesExpected} 帧`;
-    rows.push(['纯参考关节跟踪 RMSE', evidence.zeroResidualRmseRad.toFixed(4) + ' rad' + rounds]);
-    if (evidence.ppoStabilityPassed === false)
+    rows.push(['纯参考关节跟踪 RMSE', [evidence.zeroResidualRmseRad.toFixed(4) + ' rad', frameCount(evaluated)].filter(Boolean).join(' · ')]);
+    if (evidence.ppoStabilityPassed === false) {
       rows.push(['PPO 训练收益', 'PPO 候选未通过稳定性检查']);
-    else if (evaluated === evidence.framesExpected && ppoFrames === evaluated &&
-        Number.isFinite(ppoRmse) && evidence.zeroResidualRmseRad > 0) {
+    } else if (Number.isSafeInteger(evaluated) && evaluated > 0 && evaluated === evidence.framesExpected &&
+        ppoFrames === evaluated && Number.isFinite(ppoRmse) && evidence.zeroResidualRmseRad > 0) {
       const difference = 100 * (ppoRmse / evidence.zeroResidualRmseRad - 1);
       rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
-    } else rows.push(['PPO 训练收益', '缺少全程同帧的对照']);
+    } else if (evidence.policySelection || Number.isFinite(ppoRmse)) {
+      rows.push(['PPO 训练收益', '缺少全程同帧的对照']);
+    }
   }
   if (Number.isFinite(evidence.onnxMaxAbsError))
     rows.push(['ONNX 最大推理差异', evidence.onnxMaxAbsError.toExponential(2)]);
   const sections = evidence.sections;
   if (composition && Array.isArray(sections) && sections.length === composition.ranges?.length &&
-      sections.every((section, index) => section.id === composition.ranges[index].id &&
+      sections.every((section, index) => section && composition.ranges[index] &&
+        section.id === composition.ranges[index].id &&
         section.framesExpected === composition.ranges[index].to - composition.ranges[index].from)) {
     sections.forEach((section, index) => {
       const metrics = [section.completed ? '完成' : '未完成', section.framesEvaluated + '/' + section.framesExpected + ' 帧'];
@@ -285,10 +294,19 @@ function referenceQualityRows(evidence, composition) {
   return rows;
 }
 
+function referencePolicyLabel(reference) {
+  if (reference?.policySelection === 'reference-baseline') return '纯参考基线';
+  if (reference?.policySelection === 'ppo' || (!reference?.policySelection && reference?.selectedCheckpointSteps > 0))
+    return '本轮 PPO 策略';
+  return '';
+}
+
 function renderQuality(document, run) {
   const evidence = danceEvidenceFor(run);
   const tracking = run.taskId === REFERENCE_TASK;
-  const reference = tracking ? run.metrics?.originmanReference : null;
+  const referenceMismatch = tracking && referenceEvidenceMismatch(run);
+  const reference = tracking && !referenceMismatch ? run.metrics?.originmanReference : null;
+  const policy = referencePolicyLabel(reference);
   const gate = evidence?.qualityGate;
   const passed = tracking ? reference?.qualityGatePassed : typeof evidence?.qualityGatePassed === 'boolean'
     ? evidence.qualityGatePassed
@@ -296,13 +314,19 @@ function renderQuality(document, run) {
       ? gate.passed
       : null;
   const isDance = run.taskId === 'originman-dance' || Boolean(evidence);
-  const gateLabel = tracking ? '仿真稳定性' : '风格门';
-  text(document, 'quality-status', passed === true ? gateLabel + '通过' : passed === false ? gateLabel + '未通过' : '待核验');
+  const gateLabel = tracking ? (policy ? '交付策略' : '跟跳评测') : '风格门';
+  text(document, 'quality-status', referenceMismatch ? '评测来源不一致' :
+    passed === true ? gateLabel + '通过' : passed === false ? gateLabel + '未通过' : '待核验');
   text(document, 'quality-summary', tracking
-    ? reference
-      ? '评测使用本次导出的 ONNX 和同一份参考轨迹。完整度、倾角和偏航同时达标才通过。'
+    ? referenceMismatch
+      ? 'Worker 回执与本轮训练的参考轨迹或初始站姿不一致。请核对本轮日志与训练配置。'
+      : reference
+      ? (policy ? `本轮交付的 ONNX 使用${policy}。` : '本轮记录未注明交付策略的选择来源。') +
+        '下列评测使用交付策略和本次参考轨迹，表格另列 Worker 提供的候选指标。'
       : run.status === 'failed'
         ? '训练或训练前物理筛查失败，请查看本轮日志。'
+        : run.status === 'completed'
+          ? '本轮已完成，平台尚未提供可读取的跟跳评测。'
         : '同一轨迹的 ONNX 仿真评测将在训练完成后显示。'
     : !isDance
     ? '该运行没有舞蹈专用质量门字段。'
@@ -348,7 +372,8 @@ function renderQuality(document, run) {
       body.append(row);
     }
   }
-  text(document, 'run-step-quality', passed === true ? '质量门已通过' : passed === false ? '质量门未通过' : '质量证据待核验');
+  text(document, 'run-step-quality', referenceMismatch ? '评测来源待核对' :
+    passed === true ? '质量门已通过' : passed === false ? '质量门未通过' : '质量证据待核验');
 }
 
 function referenceDigestMismatch(run) {
@@ -363,12 +388,16 @@ function referenceStanceMismatch(run) {
     run.metrics?.originmanReference?.stanceProfile !== expected;
 }
 
+function referenceEvidenceMismatch(run) {
+  return referenceDigestMismatch(run) || referenceStanceMismatch(run);
+}
+
 function verifiedDanceVideo(run) {
   const evidence = replayEvidenceFor(run);
   const video = evidence?.video;
   const policySha = run.artifact?.sha256;
   const replaySha = evidence?.replay?.sha256;
-  return !referenceDigestMismatch(run) && !referenceStanceMismatch(run) && run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
+  return !referenceEvidenceMismatch(run) && run.status === 'completed' && video?.file === 'dance-replay.mp4' &&
     SHA256_PATTERN.test(video.sha256 ?? '') && SHA256_PATTERN.test(policySha ?? '') &&
     video.policySha256 === policySha && SHA256_PATTERN.test(replaySha ?? '') &&
     video.sourceReplaySha256 === replaySha;
@@ -462,6 +491,12 @@ function renderVideo(document, location, run, runId) {
   if (!video || !empty) return;
   const href = danceVideoUrl(location, run, runId);
   renderReferenceSegments(document, run, video, valid && href);
+  const policyNote = document.getElementById('replay-policy-source');
+  if (policyNote) {
+    const label = referencePolicyLabel(run.metrics?.originmanReference);
+    policyNote.hidden = !(valid && href && label);
+    if (!policyNote.hidden) policyNote.textContent = `本段回放使用${label}。`;
+  }
   if (valid && href) {
     if (video.getAttribute('src') !== href.href) video.src = href.href;
     else if (video.error) video.load();
@@ -478,6 +513,7 @@ function renderVideo(document, location, run, runId) {
     video.load();
   }
   empty.hidden = false;
+  text(document, 'run-step-replay', '回放待核验');
   const evidence = replayEvidenceFor(run);
   if (referenceDigestMismatch(run)) {
     text(document, 'replay-status', '训练轨迹摘要不一致');
@@ -538,11 +574,13 @@ function renderRun(document, location, run, runId, evidenceIssue, artifactRegist
   text(document, 'run-policy-sha', run.artifact?.sha256 ?? '尚未生成策略摘要');
   const download = document.getElementById('run-policy-download');
   const canDownload = run.status === 'completed' && run.backend === 'local' && !run.mock &&
-    !referenceStanceMismatch(run) &&
+    !referenceEvidenceMismatch(run) &&
     run.externalRunId && run.artifact?.format?.toLowerCase() === 'onnx' &&
     SHA256_PATTERN.test(run.artifact.sha256 ?? '');
   if (canDownload) {
     download.href = new URL(`./api/sim2real/runs/${encodeURIComponent(runId)}/artifact`, location.href).href;
+    const label = tracking ? referencePolicyLabel(reference) : '';
+    download.textContent = label ? `下载${label} ONNX` : '下载本次 ONNX 策略';
   } else {
     download.removeAttribute('href');
   }
@@ -581,7 +619,11 @@ function renderRun(document, location, run, runId, evidenceIssue, artifactRegist
     : run.status === 'running'
       ? '本次训练正在运行；曲线只显示该 Run 实际上报的采样点。'
       : run.status === 'completed' && tracking
-        ? '本次跟跳训练已结束。请查看同源评测、回放和 ONNX 下载。'
+        ? referenceEvidenceMismatch(run)
+          ? '本次跟跳训练已结束。请先核对评测来源。'
+          : ['本次跟跳训练已结束。', reference ? '查看同源评测。' : '评测暂不可用。',
+              replayVerified && replayUrl ? '可播放本轮回放。' : '本轮回放暂不可用。',
+              canDownload ? '可下载交付 ONNX。' : 'ONNX 暂不可下载。'].join('')
       : run.status === 'completed' && isDance && replayVerified && replayUrl
         ? '本次舞蹈训练已结束；风格门结果已显示，可以播放已核验的本次仿真回放。'
         : run.status === 'completed' && isDance
@@ -789,8 +831,9 @@ export async function startRunDetail({
   let replayTimer = null;
   let checkingReplay = false;
   const replayRecoverable = (run) => run?.taskId === REFERENCE_TASK && run.status === 'completed' &&
-    run.mock === false && run.training?.video !== false && !run.links?.danceVideo &&
-    Boolean(run.metrics?.originmanReference?.replay?.sha256) && !referenceStanceMismatch(run);
+    run.mock === false && run.training?.video !== false &&
+    !(verifiedDanceVideo(run) && danceVideoUrl(location, run, runId)) &&
+    Boolean(run.metrics?.originmanReference?.replay?.sha256) && !referenceEvidenceMismatch(run);
   const updateReplayRecovery = async (start = false) => {
     if (disposed || checkingReplay || replayTimer !== null || !replayRetry || !replayRecoverable(lastRun)) return;
     checkingReplay = true;

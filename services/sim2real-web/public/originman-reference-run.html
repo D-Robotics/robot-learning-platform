@@ -6,7 +6,7 @@
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./experiment.css?v=reference-replay-2" />
-    <script type="module" src="./run-detail-page.mjs?v=13"></script>
+    <script type="module" src="./run-detail-page.mjs?v=14"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -80,6 +80,7 @@
             <h2 id="replay-heading">本次仿真回放</h2>
             <span id="replay-status">尚未核验</span>
           </div>
+          <p id="replay-policy-source" hidden></p>
           <video id="run-video" controls playsinline preload="none" hidden aria-label="本次 ONNX 策略的跟跳仿真视频"></video>
           <div id="replay-segment-controls" hidden>
             <label>舞段 <select id="replay-segment"></select></label>
