@@ -83,10 +83,33 @@ class TestReferenceBudget(unittest.TestCase):
             ]),
         ):
             _, _, steps, _, result, _, checkpoints = worker.train_and_export(
-                None, Path(directory), None, 65_536, 1, 7, SimpleNamespace(stance_profile=None, contract_id=worker.CONTRACT, bpm=100.0),
+                None, Path(directory), None, 65_536, 1, 7, SimpleNamespace(
+                    stance_profile=None, contract_id=worker.CONTRACT, bpm=100.0, reference_lead_frames=0),
                 [], stop_when_passing=stop_when_passing,
             )
         return steps, result["selectedCheckpointSteps"], [item["steps"] for item in checkpoints]
+
+    def test_screen_selects_lead_only_when_it_improves_a_stable_full_replay(self):
+        original = {"qualityGatePassed": True, "trackingRmseRad": .08}
+        for compensated, expected in (
+            ({"qualityGatePassed": True, "trackingRmseRad": .04}, worker.ACTUATOR_LEAD_FRAMES),
+            ({"qualityGatePassed": False, "trackingRmseRad": .02}, 0),
+            ({"qualityGatePassed": True, "trackingRmseRad": .09}, 0),
+        ):
+            with self.subTest(compensated=compensated):
+                env = SimpleNamespace(motion_contract=True, reference_lead_frames=0)
+                uncalibrated = SimpleNamespace()
+                with (
+                    patch.object(worker, "ReferenceTracking", side_effect=[env, uncalibrated]),
+                    patch.object(worker, "evaluate", side_effect=[
+                        (original, []), (compensated, []), (original, []),
+                    ]),
+                ):
+                    chosen, report = worker.reference_gate(None, None)
+                self.assertIs(chosen, env)
+                self.assertEqual(chosen.reference_lead_frames, expected)
+                self.assertEqual(report["referenceLeadFrames"], expected)
+                self.assertEqual(report["gate"], compensated if expected else original)
 
     def test_long_composition_accepts_every_range_including_a_short_pose(self):
         ranges = [{"id": "short", "from": 0, "to": 2}]

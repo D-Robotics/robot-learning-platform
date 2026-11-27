@@ -114,6 +114,8 @@ export interface Sim2RealRunMetrics {
     trackingRmseRad?: number;
     zeroResidualRmseRad?: number;
     zeroResidualFramesEvaluated?: number;
+    referenceLeadFrames?: number;
+    uncompensatedRmseRad?: number;
     policySelection?: 'ppo' | 'reference-baseline';
     ppoTrackingRmseRad?: number;
     ppoFramesEvaluated?: number;

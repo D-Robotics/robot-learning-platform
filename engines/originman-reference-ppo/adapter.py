@@ -37,6 +37,7 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+ACTUATOR_LEAD_FRAMES = round(PROFILE["simulation"]["lagSeconds"] * HZ)
 MAX_REFERENCE_FRAMES = 12_000
 MIN_MOTION_FRAMES = 2
 # A composition can repeat each of its 128 blocks up to eight times.
@@ -93,10 +94,11 @@ def validate_trajectory(value):
 
 class ReferenceTracking(gym.Env):
     def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None, *,
-                 contract_id=CONTRACT, bpm=100.0):
+                 contract_id=CONTRACT, bpm=100.0, reference_lead_frames=0):
         self.contract_id = contract_id
         self.bpm = bpm
         self.motion_contract = contract_id == CONTRACT
+        self.reference_lead_frames = reference_lead_frames
         config = Config(stride=0, lift=0, sway=0)
         if stance_profile == SOURCE_STANCE:
             # The delivered position samples are relative to an uncrouched
@@ -203,7 +205,9 @@ class ReferenceTracking(gym.Env):
             correction = RESIDUAL_AUTHORITY * self.residual_scale * action
         else:
             correction = .16 * action
-        target = np.clip(desired + correction, *self.limits.T)
+        command_frame = min(self.tick + self.reference_lead_frames, len(self.target) - 1)
+        command = self.neutral + self.target[command_frame]
+        target = np.clip(command + correction, *self.limits.T)
         control = self.data.ctrl[self.actuators]
         self.data.ctrl[self.actuators] = control + self.lag_mix * (target - control)
         mujoco.mj_step(self.model, self.data, nstep=self.substeps)
@@ -296,7 +300,15 @@ def evaluate(env, policy, ranges=()):
 def reference_gate(bundle, trajectory, stance_profile=None, **policy):
     env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile, **policy)
     zero = lambda _obs: np.zeros(18)
-    calibrated, _ = evaluate(env, zero)
+    uncompensated, _ = evaluate(env, zero)
+    calibrated = uncompensated
+    if env.motion_contract and ACTUATOR_LEAD_FRAMES > 0:
+        env.reference_lead_frames = ACTUATOR_LEAD_FRAMES
+        compensated, _ = evaluate(env, zero)
+        if improves_reference(compensated, uncompensated):
+            calibrated = compensated
+        else:
+            env.reference_lead_frames = 0
     try:
         original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False, **policy), zero)
         original_evidence = {"existingSceneGate": original}
@@ -304,6 +316,8 @@ def reference_gate(bundle, trajectory, stance_profile=None, **policy):
         original_evidence = {"existingSceneLimitViolation": error.violation}
     return env, {
         "gate": calibrated,
+        "referenceLeadFrames": env.reference_lead_frames,
+        **({"uncompensatedGate": uncompensated} if env.reference_lead_frames else {}),
         **original_evidence,
         "calibrationSha256": (
             hashlib.sha256(PROFILE_PATH.read_bytes() + b"\0" + stance_profile.encode()).hexdigest()
@@ -380,9 +394,10 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
     stance_profile = evaluation_env.stance_profile
     contract_id = evaluation_env.contract_id
     bpm = evaluation_env.bpm
+    reference_lead_frames = evaluation_env.reference_lead_frames
     factory = lambda: ReferenceTracking(
         bundle, trajectory, stance_profile=stance_profile, contract_id=contract_id,
-        bpm=bpm,
+        bpm=bpm, reference_lead_frames=reference_lead_frames,
     )
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
@@ -527,10 +542,13 @@ def main():
     if not gate_allows_training(report["gate"]):
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
+    policy_provenance = policy_metadata(contract_id, scene_hash, TRACKED)
+    if env.reference_lead_frames:
+        policy_provenance["rdk.reference.lead_frames"] = str(env.reference_lead_frames)
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
         bundle, output, trajectory, budget, num_envs, seed, env, ranges,
         stop_when_passing=not provenance, baseline=report["gate"],
-        metadata=policy_metadata(contract_id, scene_hash, TRACKED),
+        metadata=policy_provenance,
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
@@ -541,8 +559,11 @@ def main():
     replay_sha = digest(replay_path)
     results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
                    sceneSha256=scene_hash, replay={"sha256": replay_sha},
+                   referenceLeadFrames=env.reference_lead_frames,
                    zeroResidualRmseRad=report["gate"]["trackingRmseRad"],
                    zeroResidualFramesEvaluated=report["gate"]["framesEvaluated"])
+    if report.get("uncompensatedGate", {}).get("qualityGatePassed"):
+        results["uncompensatedRmseRad"] = report["uncompensatedGate"]["trackingRmseRad"]
     if stance_profile:
         results.update(stanceProfile=stance_profile, calibrationSha256=report["calibrationSha256"])
     video_path = output / "dance-replay.mp4"

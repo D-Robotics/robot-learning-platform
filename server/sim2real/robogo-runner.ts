@@ -660,6 +660,8 @@ function safeReferenceMetrics(
     trackingRmseRad,
     zeroResidualRmseRad,
     zeroResidualFramesEvaluated,
+    referenceLeadFrames,
+    uncompensatedRmseRad,
     policySelection,
     ppoTrackingRmseRad,
     ppoFramesEvaluated,
@@ -717,6 +719,14 @@ function safeReferenceMetrics(
       onnxMaxAbsError < 1e-6 && { onnxMaxAbsError }),
     ...(typeof trajectorySha256 === 'string' &&
       /^[a-f0-9]{64}$/.test(trajectorySha256) && { trajectorySha256 }),
+    ...(typeof referenceLeadFrames === 'number' &&
+      Number.isSafeInteger(referenceLeadFrames) &&
+      referenceLeadFrames >= 0 &&
+      referenceLeadFrames <= 50 && { referenceLeadFrames }),
+    ...(typeof uncompensatedRmseRad === 'number' &&
+      Number.isFinite(uncompensatedRmseRad) &&
+      uncompensatedRmseRad >= 0 &&
+      uncompensatedRmseRad <= 20 && { uncompensatedRmseRad }),
     ...(typeof zeroResidualRmseRad === 'number' &&
       Number.isFinite(zeroResidualRmseRad) &&
       zeroResidualRmseRad >= 0 &&

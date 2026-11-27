@@ -250,23 +250,31 @@ function referenceQualityRows(evidence, composition) {
     ['末尾偏航（通过标准绝对值 < 5°）', `${evidence.finalYawDeg.toFixed(2)}°`],
 
   ];
+  const compensated = evidence.referenceLeadFrames > 0;
   if (Number.isFinite(evidence.trackingRmseRad))
     rows.push(['已选策略的关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
   if (evidence.policySelection === 'reference-baseline')
-    rows.push(['已选策略', '纯参考基线']);
+    rows.push(['已选策略', compensated ? '参考基线（含延迟补偿）' : '纯参考基线']);
   else if (evidence.policySelection === 'ppo') rows.push(['已选策略', 'PPO']);
+  if (compensated) {
+    rows.push(['执行器延迟补偿', `提前 ${evidence.referenceLeadFrames * 20} ms 发出参考指令`]);
+    if (Number.isFinite(evidence.uncompensatedRmseRad))
+      rows.push(['补偿前的零残差 RMSE', evidence.uncompensatedRmseRad.toFixed(4) + ' rad']);
+  }
   const ppoRmse = evidence.ppoTrackingRmseRad ?? evidence.trackingRmseRad;
   const ppoFrames = evidence.ppoFramesEvaluated ?? evidence.framesEvaluated;
   if (Number.isFinite(evidence.zeroResidualRmseRad)) {
     const evaluated = evidence.zeroResidualFramesEvaluated;
     const rounds = ` · ${evaluated}/${evidence.framesExpected} 帧`;
-    rows.push(['纯参考关节跟踪 RMSE', evidence.zeroResidualRmseRad.toFixed(4) + ' rad' + rounds]);
+    rows.push([compensated ? '补偿后的零残差 RMSE' : '纯参考关节跟踪 RMSE',
+      evidence.zeroResidualRmseRad.toFixed(4) + ' rad' + rounds]);
     if (evidence.ppoStabilityPassed === false)
       rows.push(['PPO 训练收益', 'PPO 候选未通过稳定性检查']);
     else if (evaluated === evidence.framesExpected && ppoFrames === evaluated &&
         Number.isFinite(ppoRmse) && evidence.zeroResidualRmseRad > 0) {
       const difference = 100 * (ppoRmse / evidence.zeroResidualRmseRad - 1);
-      rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
+      rows.push([compensated ? 'PPO 相对补偿后基线的 RMSE 变化' : 'PPO 相对纯参考的 RMSE 变化',
+        (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
     } else rows.push(['PPO 训练收益', '缺少全程同帧的对照']);
   }
   if (Number.isFinite(evidence.onnxMaxAbsError))
