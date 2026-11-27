@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 os.environ.setdefault('MUJOCO_GL', 'glfw' if sys.platform == 'darwin' else 'egl')
+os.environ.setdefault('LP_NUM_THREADS', '2')
 import mujoco
 import numpy as np
 
@@ -47,13 +48,18 @@ def main():
     writer = subprocess.Popen([
         executable, '-v', 'error', '-f', 'rawvideo', '-pix_fmt', 'rgb24',
         '-s', '640x480', '-r', '50', '-i', 'pipe:0', '-an', '-c:v',
-        'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-movflags', '+faststart', str(args.output),
+        'libx264', '-pix_fmt', 'yuv420p', '-crf', '18', '-movflags', '+faststart',
+        '-threads', '2', str(args.output),
     ], stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
         for qpos in frames:
             data.qpos[:] = qpos
             mujoco.mj_forward(model, data)
             renderer.update_scene(data, camera=camera)
+            # Preserve visible poses while avoiding software shadow maps and reflections
+            # on the platform's shared CPU replay renderer.
+            renderer.scene.flags[mujoco.mjtRndFlag.mjRND_SHADOW] = 0
+            renderer.scene.flags[mujoco.mjtRndFlag.mjRND_REFLECTION] = 0
             writer.stdin.write(renderer.render().tobytes())
         writer.stdin.close()
         errors = writer.stderr.read()
@@ -71,7 +77,7 @@ def main():
         'durationSeconds': len(frames) / 50,
         'renderSettings': {'cameraAzimuth': 135, 'cameraElevation': -12,
                            'cameraDistance': 1.25, 'headlightAmbient': 0.4,
-                           'headlightDiffuse': 0.8},
+                           'headlightDiffuse': 0.8, 'shadows': False, 'reflections': False},
     }
     args.output.with_suffix('.receipt.json').write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))

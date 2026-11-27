@@ -61,6 +61,8 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
     metrics: {
       originmanDance: {
         qualityGatePassed: false,
+        policySelection: 'ppo',
+        referenceGuided: true,
         evaluations: [
           {
             bpm: 128,
@@ -117,6 +119,7 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   });
 
   assert.equal(page.runId, 'run_42');
+  assert.match(f.document.getElementById('quality-body').textContent, /参考动作控制器加 PPO 修正/);
   assert.deepEqual(
     Array.from(f.document.querySelectorAll('#dance-reference-links a'), (link) => [
       link.getAttribute('href'),
@@ -782,6 +785,9 @@ test('reference playback seeks only to evaluated sections and handles old and mi
     taskId: 'originman-reference-track',
     computeResourceId: 'workshop-worker',
     status: 'completed',
+    backend: 'local',
+    mock: false,
+    externalRunId: 'worker-ref',
     training: {
       originmanReferenceSummary: { trajectorySha256: digest('d') },
       originmanReferenceComposition: {
@@ -795,7 +801,9 @@ test('reference playback seeks only to evaluated sections and handles old and mi
     artifact: { sha256: digest('a'), format: 'onnx' },
     metrics: {
       [source]: {
+        qualityGatePassed: true,
         selectedCheckpointSteps: 32768,
+        trainingFramesObserved: 162,
         framesExpected: 170,
         framesEvaluated: 105,
         trackingMaeRad: 0.02,
@@ -828,9 +836,14 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   assert.equal(workshop.pathname, '/robotics-learning/workshop.html');
   assert.equal(workshop.searchParams.get('computeResourceId'), 'workshop-worker');
   assert.match(document.getElementById('run-config-body').textContent, /回放与策略对应步数32,?768/);
+  assert.equal(document.getElementById('completion-heading').textContent, '训练采样覆盖');
+  assert.match(document.getElementById('completion-empty').textContent, /162 \/ 170 帧/);
+  assert.equal(document.getElementById('completion-method').hidden, true);
+  assert.equal(document.getElementById('completion-chart').hasAttribute('hidden'), true);
   const control = document.getElementById('replay-segment-controls');
   const select = document.getElementById('replay-segment');
   assert.equal(control.hidden, false);
+  assert.equal(document.getElementById('run-policy-download').hidden, false);
   assert.equal(select.options.length, 2);
   select.value = '1.2';
   document.getElementById('replay-segment-seek').click();
@@ -847,6 +860,10 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   const mismatched = await open();
   assert.equal(control.hidden, true);
   assert.match(document.getElementById('replay-status').textContent, /摘要不一致/);
+  assert.equal(document.getElementById('quality-status').textContent, '评测来源不一致');
+  assert.equal(document.getElementById('quality-table').hidden, true);
+  assert.equal(document.getElementById('reference-replay-retry').hidden, true);
+  assert.equal(document.getElementById('run-policy-download').hidden, true);
   mismatched.dispose();
 
   delete run.metrics[source].trajectorySha256;
@@ -855,4 +872,70 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   assert.equal(document.getElementById('run-video').hidden, false);
   assert.equal(document.getElementById('run-reference-file-sha').textContent, digest('e'));
   historical.dispose();
+});
+
+test('reference Run discloses the delivered baseline and compares the evaluated PPO candidate', async (t) => {
+  const template = fs.readFileSync(
+    new URL('./public/originman-reference-run.html', import.meta.url),
+    'utf8',
+  );
+  const dom = new JSDOM(template, {
+    url: 'https://platform.test/robotics-learning/originman-reference-run.html?runId=run_ref',
+  });
+  t.after(() => dom.window.close());
+  const { document, location } = dom.window;
+  const run = {
+    id: 'run_ref',
+    taskId: 'originman-reference-track',
+    status: 'completed',
+    backend: 'local',
+    mock: false,
+    externalRunId: 'worker-ref',
+    artifact: { format: 'onnx', sha256: digest('a') },
+    training: { originmanReferenceSummary: { trajectorySha256: digest('d') } },
+    metrics: {
+      originmanReference: {
+        policySelection: 'reference-baseline',
+        qualityGatePassed: true,
+        trackingRmseRad: 0.0145938,
+        zeroResidualFramesEvaluated: 200,
+        zeroResidualRmseRad: 0.0145938,
+        ppoFramesEvaluated: 200,
+        ppoTrackingRmseRad: 0.01478,
+        ppoStabilityPassed: true,
+        framesExpected: 200,
+        framesEvaluated: 200,
+        trajectorySha256: digest('d'),
+        maxTiltDeg: 0.13,
+      },
+    },
+  };
+  const open = () =>
+    startRunDetail({
+      document,
+      location,
+      fetchImpl: async () => Response.json({ ok: true, run }),
+    });
+  const detail = await open();
+  t.after(() => detail.dispose());
+  const byId = (id) => document.getElementById(id);
+  assert.equal(byId('quality-status').textContent, '交付策略通过');
+  assert.match(byId('quality-summary').textContent, /纯参考基线/);
+  assert.equal(byId('run-policy-download').textContent, '下载纯参考基线 ONNX');
+  assert.match(byId('quality-body').textContent, /本轮 PPO 候选 RMSE0\.0148 rad · 200\/200 帧/);
+  assert.match(byId('quality-body').textContent, /PPO 相对纯参考的 RMSE 变化\+1\.28%/);
+  assert.doesNotMatch(byId('quality-body').textContent, /undefined|NaN/);
+  assert.doesNotMatch(byId('run-next-action').textContent, /播放/);
+  assert.equal(byId('run-error').hidden, true);
+  detail.dispose();
+
+  const evidence = run.metrics.originmanReference;
+  evidence.referenceLeadFrames = 2;
+  evidence.uncompensatedRmseRad = 0.0334;
+  const compensated = await open();
+  t.after(() => compensated.dispose());
+  assert.equal(byId('run-policy-download').textContent, '下载参考基线（含延迟补偿） ONNX');
+  assert.match(byId('quality-body').textContent, /提前 40 ms 发出参考指令/);
+  assert.match(byId('quality-body').textContent, /补偿前的零残差 RMSE0\.0334 rad/);
+  assert.match(byId('quality-body').textContent, /PPO 相对补偿后基线的 RMSE 变化\+1\.28%/);
 });

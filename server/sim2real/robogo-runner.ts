@@ -508,6 +508,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   const replay = asRecord(source.replay);
   const video = asRecord(source.video);
   const scene = asRecord(source.sceneProvenance);
+  const usedReference = source.referenceGuided === true;
   const evaluations = (
     Array.isArray(source.evaluations) ? source.evaluations.slice(0, 3) : []
   ).flatMap((item) => {
@@ -547,6 +548,11 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   });
   return {
     evaluations,
+    ...(usedReference ? { referenceGuided: true } : {}),
+    ...(source.policySelection === 'ppo' ||
+    (usedReference && source.policySelection === 'reference-baseline')
+      ? { policySelection: source.policySelection }
+      : {}),
     ...(digest(scene.sceneSha256) ? { sceneProvenance: { sceneSha256: scene.sceneSha256 } } : {}),
     ...(typeof source.qualityGatePassed === 'boolean'
       ? { qualityGatePassed: source.qualityGatePassed }
@@ -654,6 +660,12 @@ function safeReferenceMetrics(
     trackingRmseRad,
     zeroResidualRmseRad,
     zeroResidualFramesEvaluated,
+    referenceLeadFrames,
+    uncompensatedRmseRad,
+    policySelection,
+    ppoTrackingRmseRad,
+    ppoFramesEvaluated,
+    ppoStabilityPassed,
     trajectorySha256,
     onnxMaxAbsError,
     sections: rawSections,
@@ -666,6 +678,7 @@ function safeReferenceMetrics(
     calibrationSha256,
     checkpointEvaluations,
     selectedCheckpointSteps,
+    trainingFramesObserved,
   } = value as Record<string, unknown>;
   if (
     typeof framesExpected !== 'number' ||
@@ -707,6 +720,18 @@ function safeReferenceMetrics(
       onnxMaxAbsError < 1e-6 && { onnxMaxAbsError }),
     ...(typeof trajectorySha256 === 'string' &&
       /^[a-f0-9]{64}$/.test(trajectorySha256) && { trajectorySha256 }),
+    ...(typeof referenceLeadFrames === 'number' &&
+      Number.isSafeInteger(referenceLeadFrames) &&
+      referenceLeadFrames >= 0 &&
+      referenceLeadFrames <= 50 && { referenceLeadFrames }),
+    ...(typeof trainingFramesObserved === 'number' &&
+      Number.isSafeInteger(trainingFramesObserved) &&
+      trainingFramesObserved > 0 &&
+      trainingFramesObserved <= framesExpected && { trainingFramesObserved }),
+    ...(typeof uncompensatedRmseRad === 'number' &&
+      Number.isFinite(uncompensatedRmseRad) &&
+      uncompensatedRmseRad >= 0 &&
+      uncompensatedRmseRad <= 20 && { uncompensatedRmseRad }),
     ...(typeof zeroResidualRmseRad === 'number' &&
       Number.isFinite(zeroResidualRmseRad) &&
       zeroResidualRmseRad >= 0 &&
@@ -717,6 +742,22 @@ function safeReferenceMetrics(
       zeroResidualFramesEvaluated <= framesExpected && {
         zeroResidualRmseRad,
         zeroResidualFramesEvaluated,
+      }),
+    ...(policySelection === 'reference-baseline' || policySelection === 'ppo'
+      ? { policySelection }
+      : {}),
+    ...(typeof ppoTrackingRmseRad === 'number' &&
+      Number.isFinite(ppoTrackingRmseRad) &&
+      ppoTrackingRmseRad >= 0 &&
+      ppoTrackingRmseRad <= 20 &&
+      typeof ppoFramesEvaluated === 'number' &&
+      Number.isSafeInteger(ppoFramesEvaluated) &&
+      ppoFramesEvaluated > 0 &&
+      ppoFramesEvaluated <= framesExpected &&
+      typeof ppoStabilityPassed === 'boolean' && {
+        ppoTrackingRmseRad,
+        ppoFramesEvaluated,
+        ppoStabilityPassed,
       }),
     ...(sections && { sections }),
     maxTiltDeg,
@@ -737,11 +778,15 @@ function safeReferenceMetrics(
     checkpointEvaluations <= 64
       ? { checkpointEvaluations }
       : {}),
-    ...(typeof selectedCheckpointSteps === 'number' &&
-      selectedCheckpointSteps >= 8192 &&
-      selectedCheckpointSteps % 4096 === 0 &&
-      trainingSteps !== undefined &&
-      selectedCheckpointSteps <= trainingSteps && { selectedCheckpointSteps }),
+    ...(policySelection === 'reference-baseline' && selectedCheckpointSteps === 0
+      ? { selectedCheckpointSteps }
+      : typeof selectedCheckpointSteps === 'number' &&
+          selectedCheckpointSteps >= 8192 &&
+          selectedCheckpointSteps % 4096 === 0 &&
+          trainingSteps !== undefined &&
+          selectedCheckpointSteps <= trainingSteps
+        ? { selectedCheckpointSteps }
+        : {}),
     ...(replay && { replay }),
     ...(video && { video }),
   };

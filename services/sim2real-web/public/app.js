@@ -2406,9 +2406,11 @@ function originmanCourseRun() {
 function originmanCourseEvaluated(run) {
   const result = run?.metrics?.originmanReference;
   const summary = run?.training?.originmanReferenceSummary;
+  const expectedStance = run?.training?.originmanReferenceComposition?.stanceProfile;
   return Boolean(run?.status === 'completed' && run.mock === false &&
-    result?.replay?.sha256 && summary?.trajectorySha256 &&
-    result.trajectorySha256 === summary.trajectorySha256);
+    typeof result?.qualityGatePassed === 'boolean' && result.replay?.sha256 &&
+    summary?.trajectorySha256 && result.trajectorySha256 === summary.trajectorySha256 &&
+    (!expectedStance || result.stanceProfile === expectedStance));
 }
 
 function runHasCompletedEvaluation(run) {

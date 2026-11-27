@@ -454,6 +454,9 @@ describe('RoboGo Sim2Real runner adapter', () => {
       qualityGatePassed: true,
       referenceSha256: 'a'.repeat(64),
       sceneSha256: 'b'.repeat(64),
+      referenceLeadFrames: 6,
+      uncompensatedRmseRad: 0.08,
+      trainingFramesObserved: 10_000,
     };
     const poll = async (sections: readonly unknown[], overrides: Partial<typeof evaluation> = {}) =>
       (
@@ -496,6 +499,23 @@ describe('RoboGo Sim2Real runner adapter', () => {
     it('retains a single section spanning the longest supported trajectory', async () => {
       const sections = [segment('long-action', evaluation.framesExpected)];
       expect((await poll(sections))?.sections).toEqual(sections);
+    });
+
+    it('retains validated actuator compensation evidence', async () => {
+      expect(await poll([])).toMatchObject({
+        referenceLeadFrames: 6,
+        uncompensatedRmseRad: 0.08,
+      });
+      const invalid = await poll([], { referenceLeadFrames: -1, uncompensatedRmseRad: -0.01 });
+      expect(invalid?.referenceLeadFrames).toBeUndefined();
+      expect(invalid?.uncompensatedRmseRad).toBeUndefined();
+    });
+
+    it('retains training coverage within the full reference frame count', async () => {
+      expect((await poll([]))?.trainingFramesObserved).toBe(10_000);
+      expect(
+        (await poll([], { trainingFramesObserved: 12_001 }))?.trainingFramesObserved,
+      ).toBeUndefined();
     });
 
     it('retains unfinished sections and leaves space for transition frames', async () => {

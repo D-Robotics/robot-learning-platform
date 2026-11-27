@@ -1,16 +1,67 @@
 import contextlib
 import io
+import math
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from adapter import environment_for_contract
+import numpy as np
+import torch
+
+from adapter import environment_for_contract, policy_metadata
+from body import physics_substeps
+from calibrated_motions import MESH_SCENE
+from choreography_reference import JOINT_NAMES, ReferenceControl
 from dance_env import ConfigurableChoreography
 from dance_env_v2 import ExplicitAlternationChoreography
 from train import resolve_training_device, train
 
 
 class ContractVersionTests(unittest.TestCase):
+    def test_50hz_clock_uses_the_scene_timestep_and_preserves_untagged_replay(self):
+        self.assertEqual(physics_substeps(0.002), 10)
+        self.assertEqual(physics_substeps(0.001), 20)
+        self.assertEqual(physics_substeps(0.002, legacy_timing=True), 20)
+        with self.assertRaisesRegex(ValueError, 'does not divide'):
+            physics_substeps(0.003)
+
+    def test_reference_policy_export_uses_the_same_phase_and_joint_order_as_training(self):
+        reference = ReferenceControl([
+            {"type": "weight-shift", "beats": 8, "intensity": .5},
+            {"type": "squat-rise", "beats": 8, "intensity": .6},
+        ], JOINT_NAMES)
+        observations = np.zeros((8, 78), dtype=np.float32)
+        residuals = np.tile(np.linspace(-1.2, 1.2, 18, dtype=np.float32), (8, 1))
+        for i, phase in enumerate((0., .24, .5, .99999) * 2):
+            observations[i, 65 + i // 4] = 1.
+            observations[i, 73:75] = [math.sin(math.tau * phase), math.cos(math.tau * phase)]
+        expected = np.asarray([reference.command(obs, action) for obs, action in zip(observations, residuals)])
+        exported = reference(torch.from_numpy(observations), torch.from_numpy(residuals)).detach().numpy()
+        np.testing.assert_allclose(exported, expected, atol=2e-6)
+
+    def test_knee_feedback_is_applied_only_to_its_segment_and_preserved_on_export(self):
+        reference = ReferenceControl([
+            {"type": "alternating-arms", "beats": 8, "intensity": .35},
+            {"type": "alternating-knee-lift", "beats": 8, "intensity": .3},
+        ], JOINT_NAMES, mesh_scene=True)
+        observations = np.zeros((4, 78), dtype=np.float32)
+        observations[:, 73:75] = [1., 0.]
+        observations[:2, 65] = observations[2:, 66] = 1.
+        observations[[1, 3], 0] = .2
+        residuals = np.zeros((4, 18), dtype=np.float32)
+        expected = np.asarray([reference.command(obs, action) for obs, action in zip(observations, residuals)])
+        np.testing.assert_array_equal(expected[0], expected[1])
+        self.assertGreater(float(np.max(np.abs(expected[2] - expected[3]))), .05)
+        actual = reference(torch.from_numpy(observations), torch.from_numpy(residuals)).detach().numpy()
+        np.testing.assert_allclose(actual, expected, atol=2e-6)
+
+    def test_section_entry_measurements_are_opted_in_by_policy_metadata(self):
+        contract = 'custom-policy-originman-dance-v2'
+        ordinary = policy_metadata(contract, MESH_SCENE, JOINT_NAMES)
+        self.assertNotIn('rdk.metrics.frame', ordinary)
+        patched = policy_metadata(contract, MESH_SCENE, JOINT_NAMES, section_frame=True)
+        self.assertEqual(patched['rdk.metrics.frame'], 'section-entry-v1')
+
     def test_old_models_keep_their_original_observation_semantics(self):
         self.assertIs(environment_for_contract({'id': 'custom-policy-originman-dance-v1'}), ConfigurableChoreography)
 
@@ -35,12 +86,14 @@ class ContractVersionTests(unittest.TestCase):
         class StopBeforeLearning(Exception):
             pass
 
-        environment = Mock(names=[], observation_space=Mock(shape=(78,)), action_space=Mock(shape=(18,)))
+        environment = Mock(names=[], observation_space=Mock(shape=(78,)), action_space=Mock(shape=(18,)),
+                           model=Mock(opt=Mock(timestep=0.001)), substeps=20)
         with patch('train.SubprocVecEnv') as vector, patch('train.PPO', side_effect=StopBeforeLearning) as ppo:
             with self.assertRaises(StopBeforeLearning):
                 train(bundle=Path('.'), output=Path('.'),
-                      dance_config={'trainingSteps': 8192, 'seed': 7}, num_envs=64,
-                      environment_class=lambda *_args, **_kwargs: environment, device='cpu')
+                      dance_config={'trainingSteps': 8192, 'seed': 7, 'bpm': 100}, num_envs=64,
+                      environment_class=lambda *_args, **_kwargs: environment, device='cpu',
+                      scene_sha='unverified-scene')
         self.assertEqual(len(vector.call_args.args[0]), 64)
         self.assertEqual(ppo.call_args.kwargs['n_steps'] * 64, 4096)
         vector.return_value.close.assert_called_once()

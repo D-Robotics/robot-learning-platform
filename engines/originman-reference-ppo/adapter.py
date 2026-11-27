@@ -22,7 +22,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "engines/originman-dance-ppo"))
-from adapter import read_request, validate_bundle, write_manifest, write_onnx
+from adapter import policy_metadata, read_request, validate_bundle, write_manifest, write_onnx
 from env import Config, OriginManEnv
 from train import WorkerProgress, resolve_training_device
 
@@ -37,6 +37,7 @@ JOINTS = PROFILE["robot"]["jointOrder"]
 TRACKED = [name for name in JOINTS if not name.startswith("head_")]
 HZ = PROFILE["trajectory"]["fps"]
 DT = 1 / HZ
+ACTUATOR_LEAD_FRAMES = round(PROFILE["simulation"]["lagSeconds"] * HZ)
 MAX_REFERENCE_FRAMES = 12_000
 MIN_MOTION_FRAMES = 2
 # A composition can repeat each of its 128 blocks up to eight times.
@@ -48,6 +49,9 @@ RECORDING_SLOT = np.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
 SOURCE_STANCE = "source-neutral-v1"
 ROLLOUT_STEPS = 4096
 CHECKPOINT_STEPS = 32768
+TRAINING_WINDOW_FRAMES = 384
+TRAINING_STATE_STRIDE = 32
+SIM_STATE = mujoco.mjtState.mjSTATE_INTEGRATION
 
 
 def digest(path):
@@ -93,10 +97,11 @@ def validate_trajectory(value):
 
 class ReferenceTracking(gym.Env):
     def __init__(self, bundle, trajectory, calibrated=True, stance_profile=None, *,
-                 contract_id=CONTRACT, bpm=100.0):
+                 contract_id=CONTRACT, bpm=100.0, reference_lead_frames=0):
         self.contract_id = contract_id
         self.bpm = bpm
         self.motion_contract = contract_id == CONTRACT
+        self.reference_lead_frames = reference_lead_frames
         config = Config(stride=0, lift=0, sway=0)
         if stance_profile == SOURCE_STANCE:
             # The delivered position samples are relative to an uncrouched
@@ -203,7 +208,9 @@ class ReferenceTracking(gym.Env):
             correction = RESIDUAL_AUTHORITY * self.residual_scale * action
         else:
             correction = .16 * action
-        target = np.clip(desired + correction, *self.limits.T)
+        command_frame = min(self.tick + self.reference_lead_frames, len(self.target) - 1)
+        command = self.neutral + self.target[command_frame]
+        target = np.clip(command + correction, *self.limits.T)
         control = self.data.ctrl[self.actuators]
         self.data.ctrl[self.actuators] = control + self.lag_mix * (target - control)
         mujoco.mj_step(self.model, self.data, nstep=self.substeps)
@@ -296,7 +303,15 @@ def evaluate(env, policy, ranges=()):
 def reference_gate(bundle, trajectory, stance_profile=None, **policy):
     env = ReferenceTracking(bundle, trajectory, stance_profile=stance_profile, **policy)
     zero = lambda _obs: np.zeros(18)
-    calibrated, _ = evaluate(env, zero)
+    uncompensated, _ = evaluate(env, zero)
+    calibrated = uncompensated
+    if env.motion_contract and ACTUATOR_LEAD_FRAMES > 0:
+        env.reference_lead_frames = ACTUATOR_LEAD_FRAMES
+        compensated, _ = evaluate(env, zero)
+        if improves_reference(compensated, uncompensated):
+            calibrated = compensated
+        else:
+            env.reference_lead_frames = 0
     try:
         original, _ = evaluate(ReferenceTracking(bundle, trajectory, calibrated=False, **policy), zero)
         original_evidence = {"existingSceneGate": original}
@@ -304,6 +319,8 @@ def reference_gate(bundle, trajectory, stance_profile=None, **policy):
         original_evidence = {"existingSceneLimitViolation": error.violation}
     return env, {
         "gate": calibrated,
+        "referenceLeadFrames": env.reference_lead_frames,
+        **({"uncompensatedGate": uncompensated} if env.reference_lead_frames else {}),
         **original_evidence,
         "calibrationSha256": (
             hashlib.sha256(PROFILE_PATH.read_bytes() + b"\0" + stance_profile.encode()).hexdigest()
@@ -365,34 +382,157 @@ def composition_ranges(training, frames):
     return ranges
 
 
+def improves_reference(candidate, baseline):
+    return (
+        candidate["qualityGatePassed"] and
+        (not baseline["qualityGatePassed"] or
+         candidate["trackingRmseRad"] < baseline["trackingRmseRad"] - 1e-9)
+    )
+
+
+def sample_reference_windows(env):
+    env.reset()
+    states = []
+    errors = []
+    zero = np.zeros(len(TRACKED))
+    for frame in range(len(env.target)):
+        if frame % TRAINING_STATE_STRIDE == 0:
+            state = np.empty(mujoco.mj_stateSize(env.model, SIM_STATE))
+            mujoco.mj_getState(env.model, env.data, state, SIM_STATE)
+            states.append((frame, state))
+        _, _, failed, _, info = env.step(zero)
+        if failed:
+            raise ValueError("verified reference fell while preparing training windows")
+        errors.append(info["jointSquaredError"])
+    return states, np.asarray(errors)
+
+
+class ReferenceTrainingWindows(gym.Wrapper):
+    """Start practice windows from the running baseline, including its actuator state."""
+    def __init__(self, env, windows):
+        super().__init__(env)
+        self.states, self.baseline_errors = windows
+
+    def reset(self, *, seed=None, options=None):
+        env = self.env
+        _, info = env.reset(seed=seed, options=options)
+        self.start_frame, state = self.states[env.np_random.integers(len(self.states))]
+        mujoco.mj_setState(env.model, env.data, state, SIM_STATE)
+        mujoco.mj_forward(env.model, env.data)
+        env.tick = self.start_frame
+        return env.observe(), info
+
+    def step(self, action):
+        env = self.env
+        observation, _, failed, complete, info = env.step(action)
+        frame = env.tick - 1
+        # Compare squared errors at the same frame to reduce reward variance across the dance.
+        gain = (self.baseline_errors[frame] - info["jointSquaredError"]) / MOTION_REFERENCE_SIGMA_RAD ** 2
+        reward = gain - .001 * info["tilt"] - .003 * np.mean(env.previous ** 2) - 6 * failed
+        end_window = env.tick - self.start_frame >= TRAINING_WINDOW_FRAMES
+        info["referenceFrame"] = frame
+        # A sampled window is not a full execution of the choreography.
+        info["episodeDone"] = False
+        return observation, reward, failed, complete or (end_window and not failed), info
+
+
+class ReferenceCoverageProgress(WorkerProgress):
+    def __init__(self, budget, frames):
+        super().__init__(budget, ROLLOUT_STEPS, engine=ENGINE)
+        self.frames_seen = np.zeros(frames, dtype=bool)
+
+    def _on_step(self):
+        for info in self.locals["infos"]:
+            self.frames_seen[info["referenceFrame"]] = True
+        return super()._on_step()
+
+    @property
+    def observed_frames(self):
+        return int(np.count_nonzero(self.frames_seen))
+
+
+def initialize_reference_feedback(policy):
+    """Let PPO adjust each joint's position and velocity feedback from zero correction."""
+    network = policy.mlp_extractor.policy_net
+    inputs, _, features, _ = network
+    output = policy.action_net
+    joints = torch.arange(len(TRACKED), device=output.weight.device)
+    position = 11
+    velocity = position + len(TRACKED)
+    target = velocity + len(TRACKED)
+    with torch.no_grad():
+        inputs.weight.zero_()
+        inputs.bias.zero_()
+        inputs.weight[joints, position + joints] = -4
+        inputs.weight[joints, target + joints] = 4
+        inputs.weight[len(TRACKED) + joints, velocity + joints] = 5
+        features.weight.zero_()
+        features.bias.zero_()
+        features.weight[:2 * len(TRACKED), :2 * len(TRACKED)].copy_(
+            torch.eye(2 * len(TRACKED), device=output.weight.device)
+        )
+        output.weight.zero_()
+        output.bias.zero_()
+    network.requires_grad_(False)
+    output.bias.requires_grad_(False)
+    connections = torch.zeros_like(output.weight)
+    connections[joints, joints] = 1
+    connections[joints, len(TRACKED) + joints] = 1
+    output.weight.register_hook(lambda gradient: gradient * connections)
+
+
 def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges,
-                     *, stop_when_passing):
+                     *, stop_when_passing, baseline=None, metadata=None):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
     contract_id = evaluation_env.contract_id
     bpm = evaluation_env.bpm
-    factory = lambda: ReferenceTracking(
-        bundle, trajectory, stance_profile=stance_profile, contract_id=contract_id,
-        bpm=bpm,
+    reference_lead_frames = evaluation_env.reference_lead_frames
+    use_feedback = bool(
+        contract_id == CONTRACT and reference_lead_frames > 0
+        and baseline and baseline["qualityGatePassed"]
+        and len(trajectory[0]) > TRAINING_WINDOW_FRAMES
     )
+    windows = sample_reference_windows(evaluation_env) if use_feedback else None
+
+    def factory():
+        env = ReferenceTracking(
+            bundle, trajectory, stance_profile=stance_profile, contract_id=contract_id,
+            bpm=bpm, reference_lead_frames=reference_lead_frames,
+        )
+        return ReferenceTrainingWindows(env, windows) if windows is not None else env
+
     sim = (SubprocVecEnv([factory] * num_envs, start_method="spawn") if num_envs > 1 else factory())
     try:
+        # Hold exploration through the actuator's low-pass response instead of resampling every tick.
+        feedback_options = {"use_sde": True, "sde_sample_freq": 16} if use_feedback else {}
         learner = PPO("MlpPolicy", sim, seed=seed, device=device, n_steps=ROLLOUT_STEPS // num_envs,
-                      batch_size=128, n_epochs=4, learning_rate=3e-4,
+                      batch_size=128, n_epochs=4, learning_rate=.012 if use_feedback else 3e-4,
                       policy_kwargs={"net_arch": [160, 160] if contract_id == CONTRACT else [128, 128],
-                                     "log_std_init": -2.8})
+                                     "log_std_init": -3.0 if use_feedback else -2.8},
+                      **feedback_options)
         checkpoints = []
         best = None
         candidate_weights = output / "candidate.zip"
         candidate_policy = output / "candidate.onnx"
-        progress = WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE)
+        baseline_weights = output / "baseline-candidate.zip"
+        if use_feedback:
+            initialize_reference_feedback(learner.policy)
+        elif baseline is not None:
+            with torch.no_grad():
+                learner.policy.action_net.weight.zero_()
+                learner.policy.action_net.bias.zero_()
+        if baseline is not None and baseline["qualityGatePassed"]:
+            learner.save(baseline_weights)
+        progress = (ReferenceCoverageProgress(budget, len(trajectory[0])) if use_feedback else
+                    WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE))
         while learner.num_timesteps < budget:
             learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
                           reset_num_timesteps=False,
                           callback=progress)
             learner.save(candidate_weights)
-            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id])
+            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id], metadata=metadata)
             session = ReferenceEvaluator(onnx.load(candidate_policy))
             parity_error = 0.0
 
@@ -414,6 +554,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 if parity_error >= 1e-6:
                     raise ValueError("exported ONNX failed the reference policy parity check")
             checkpoints.append({"steps": learner.num_timesteps, "policySha256": policy_sha,
+                                **({"trainingFramesObserved": progress.observed_frames} if use_feedback else {}),
                                 **result})
             score = (result["qualityGatePassed"], result["framesEvaluated"],
                      -result["trackingRmseRad"], -result["maxTiltDeg"])
@@ -423,13 +564,46 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 best = (score, policy_sha, {**result, "selectedCheckpointSteps": learner.num_timesteps}, frames)
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
-            if stop_when_passing and result["qualityGatePassed"]:
+            if stop_when_passing and (
+                improves_reference(result, baseline) if baseline is not None else result["qualityGatePassed"]
+            ):
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
         candidate_weights.unlink(missing_ok=True)
         candidate_policy.unlink(missing_ok=True)
         _, policy_sha, result, frames = best
+        if baseline is not None:
+            comparison = {
+                "ppoTrackingRmseRad": result["trackingRmseRad"],
+                "ppoFramesEvaluated": result["framesEvaluated"],
+                "ppoStabilityPassed": result["qualityGatePassed"],
+            }
+            if baseline["qualityGatePassed"] and not improves_reference(result, baseline):
+                baseline_weights.replace(output / "final.zip")
+                policy = output / "policy.onnx"
+                policy_sha = write_onnx(output / "final.zip", policy, OBSERVATIONS[contract_id], metadata=metadata)
+                session = ReferenceEvaluator(onnx.load(policy))
+                baseline_parity = 0.0
+
+                def predict_baseline(observation):
+                    nonlocal baseline_parity
+                    values = session.run(None, {"observation": observation[None]})[0][0]
+                    baseline_parity = max(baseline_parity, float(np.max(np.abs(values))))
+                    return values
+
+                result, frames = evaluate(evaluation_env, predict_baseline, ranges)
+                if (not result["qualityGatePassed"] or baseline_parity >= 1e-6 or
+                        abs(result["trackingRmseRad"] - baseline["trackingRmseRad"]) > 1e-9):
+                    raise ValueError("exported reference baseline differs from its original simulation")
+                result.update(selectedCheckpointSteps=0, policySelection="reference-baseline",
+                              onnxMaxAbsError=baseline_parity)
+            else:
+                result["policySelection"] = "ppo"
+            result.update(comparison)
+        baseline_weights.unlink(missing_ok=True)
+        if use_feedback:
+            result["trainingFramesObserved"] = progress.observed_frames
         return str(learner.device), device_name, learner.num_timesteps, policy_sha, result, frames, checkpoints
     finally:
         sim.close()
@@ -481,9 +655,13 @@ def main():
     if not gate_allows_training(report["gate"]):
         raise ValueError("reference refused by zero-residual simulation gate; see frame count and peak tilt in logs")
 
+    policy_provenance = policy_metadata(contract_id, scene_hash, TRACKED)
+    if env.reference_lead_frames:
+        policy_provenance["rdk.reference.lead_frames"] = str(env.reference_lead_frames)
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
         bundle, output, trajectory, budget, num_envs, seed, env, ranges,
-        stop_when_passing=not provenance,
+        stop_when_passing=not provenance, baseline=report["gate"],
+        metadata=policy_provenance,
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
@@ -494,8 +672,11 @@ def main():
     replay_sha = digest(replay_path)
     results.update(referenceSha256=digest(reference_path), trajectorySha256=reference_digest,
                    sceneSha256=scene_hash, replay={"sha256": replay_sha},
+                   referenceLeadFrames=env.reference_lead_frames,
                    zeroResidualRmseRad=report["gate"]["trackingRmseRad"],
                    zeroResidualFramesEvaluated=report["gate"]["framesEvaluated"])
+    if report.get("uncompensatedGate", {}).get("qualityGatePassed"):
+        results["uncompensatedRmseRad"] = report["uncompensatedGate"]["trackingRmseRad"]
     if stance_profile:
         results.update(stanceProfile=stance_profile, calibrationSha256=report["calibrationSha256"])
     video_path = output / "dance-replay.mp4"

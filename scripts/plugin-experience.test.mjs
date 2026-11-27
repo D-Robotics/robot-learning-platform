@@ -145,10 +145,37 @@ test('WorkBuddy accepts the original blocks evaluation and returns a browser ent
     arguments: { runId: run.id },
   });
   assert.equal(result.simulationAcceptance.evidenceSource, 'original-worker');
-  assert.equal(result.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(result.simulationAcceptance.stabilityStatus, 'failed');
+  assert.equal(result.simulationAcceptance.learningStatus, 'unstable');
   assert.equal(result.simulationAcceptance.framesEvaluated, 85);
   assert.match(result.links.browser, /originman-reference-run\.html\?runId=reference-workbuddy/);
   assert.equal(result.studioNavigation, undefined);
+});
+
+test('a stable selected baseline still reports the original PPO regression', async () => {
+  const { referenceLearningResult } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/dance-evaluation.mjs');
+  assert.deepEqual(
+    referenceLearningResult({
+      qualityGatePassed: true,
+      policySelection: 'reference-baseline',
+      framesEvaluated: 477,
+      framesExpected: 477,
+      trackingRmseRad: 0.09,
+      zeroResidualFramesEvaluated: 477,
+      zeroResidualRmseRad: 0.09,
+      ppoFramesEvaluated: 477,
+      ppoTrackingRmseRad: 0.0906,
+      ppoStabilityPassed: true,
+    }),
+    {
+      stabilityStatus: 'passed',
+      learningStatus: 'regressed',
+      policySelection: 'reference-baseline',
+      ppoTrackingRmseRad: 0.0906,
+      zeroResidualRmseRad: 0.09,
+    },
+  );
 });
 
 test('MCP business failures retain flat, nested and textual diagnostics', () => {
