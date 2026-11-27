@@ -168,6 +168,14 @@ export async function connectAuthenticatedCore({
       { httpStatus: session.httpStatus ?? 503, nextAction: session.nextAction },
     );
   }
+  function assertMotionAccount(accountId, expectedAccountId) {
+    if (expectedAccountId !== undefined && accountId !== expectedAccountId)
+      throw new PluginRequestError(
+        'WORKSPACE_ACCOUNT_CHANGED',
+        '学习平台账号已切换。请用当前账号重新预览后提交。',
+        { httpStatus: 409 },
+      );
+  }
   async function readWorkspaceJson(route, signal, accountId, request = {}) {
     const response = await fetchPlatform(
       '/api/v1/duck' + route,
@@ -705,20 +713,24 @@ export async function connectAuthenticatedCore({
         await verifiedWorkspaceAccount(),
       );
     },
-    async previewOriginmanMotion(composition, { signal } = {}) {
-      return readWorkspaceJson(
+    async previewOriginmanMotion(composition, { signal, expectedAccountId } = {}) {
+      const workspaceAccountId = await verifiedWorkspaceAccount();
+      assertMotionAccount(workspaceAccountId, expectedAccountId);
+      const preview = await readWorkspaceJson(
         '/originman-motion/preview',
         signal,
-        await verifiedWorkspaceAccount(),
+        workspaceAccountId,
         {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(composition),
         },
       );
+      return { ...preview, workspaceAccountId };
     },
-    async submitOriginmanMotion(args, { signal } = {}) {
+    async submitOriginmanMotion(args, { signal, expectedAccountId } = {}) {
       const accountId = await verifiedWorkspaceAccount();
+      assertMotionAccount(accountId, expectedAccountId);
       const {
         contextId,
         computeResourceId,

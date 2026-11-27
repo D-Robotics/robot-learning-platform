@@ -1676,6 +1676,9 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
         qualityGatePassed: true,
         framesExpected: 200,
         framesEvaluated: 200,
+        zeroResidualFramesEvaluated: 200,
+        trackingRmseRad: 0.0901,
+        zeroResidualRmseRad: 0.0897,
         replay: { sha256: replaySha256 },
         video: {
           file: 'dance-replay.mp4',
@@ -1729,7 +1732,9 @@ test('follow-up lookup verifies the same replay and ONNX even via the general Ru
     assert.equal(model.runDelivery.policy, 'available');
     assert.match(model.links.replay, /\/originman-reference-run\.html\?.+#replay-heading$/);
     assert.match(model.studioNavigation.arguments.url, /\/originman-reference-run\.html\?/);
-    assert.match(model.studentReply, /跟跳评测通过.*200\/200 帧/);
+    assert.match(model.studentReply, /仿真完整度和稳定性达标.*200\/200 帧/);
+    assert.match(model.studentReply, /跟踪 RMSE 为 0\.0901 rad，零残差基线为 0\.0897 rad/);
+    assert.match(model.studentReply, /本轮误差比基线高 0\.4%/);
   }
   for (const name of [
     'rdk_training_status',
