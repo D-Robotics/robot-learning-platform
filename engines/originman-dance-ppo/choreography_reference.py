@@ -6,7 +6,12 @@ import gymnasium as gym
 import numpy as np
 import torch
 
-CALIBRATED_SCENE = "8b38982c3b1789b13702b370b60ab14df240a4051a75a9a545bd50ba31ed680a"
+from calibrated_motions import MESH_SCENE, knee_cycle, knee_feedback, load_phase_table, sample_table
+
+CALIBRATED_SCENES = frozenset({
+    "8b38982c3b1789b13702b370b60ab14df240a4051a75a9a545bd50ba31ed680a",
+    MESH_SCENE,
+})
 CALIBRATED_SECTIONS = frozenset({"alternating-arms", "weight-shift", "squat-rise", "open-pose"})
 
 JOINT_NAMES = (
@@ -106,7 +111,7 @@ class ReferenceControl(torch.nn.Module):
     segments = 1024
     authority = 0.08
 
-    def __init__(self, sections, names):
+    def __init__(self, sections, names, *, mesh_scene=False):
         super().__init__()
         order = [JOINT[name] for name in names]
         scale = np.asarray([
@@ -115,29 +120,64 @@ class ReferenceControl(torch.nn.Module):
             else .88
             for name in names
         ])
+        mixed = mesh_scene and any(section["type"] not in CALIBRATED_SECTIONS for section in sections)
+        published = None
+        if mesh_scene and len(sections) == 1 and sections[0]["beats"] == 4:
+            table, source_intensity = load_phase_table(sections[0]["type"])
+            if sections[0]["intensity"] == source_intensity:
+                published = table
+        if mixed:
+            self.segments = 4096
+        tables = {kind: load_phase_table(kind) for kind in {item["type"] for item in sections}
+                  if mixed and published is None and kind not in CALIBRATED_SECTIONS}
         points = []
+        feedback = []
         start = np.zeros(N_JOINTS)
-        progress_samples = np.linspace(0, 1, self.segments + 1)
-        for section in sections:
+        for index, section in enumerate(sections):
             kind, beats, intensity = section["type"], section["beats"], section["intensity"]
-            for progress in progress_samples:
+            correction = (knee_feedback()[order] if published is None and kind == "alternating-knee-lift"
+                          else np.zeros((18, 6)))
+            feedback.append(correction)
+            for progress in np.linspace(0, 1, self.segments + 1):
                 local = beats * progress
-                target = section_offsets(kind, local, progress, intensity)
-                # At 50 Hz, jumping from a lateral weight shift to the tall
-                # squat stance can lose support. Blend through the first 3/4 beat.
-                target = start + _smoothstep(local / .75) * (target - start)
-                points.append(target[order] / scale)
-            start = section_offsets(kind, beats, 1., intensity)
+                if published is not None:
+                    target = sample_table(published, local)[order]
+                elif kind == "alternating-knee-lift":
+                    target = knee_cycle(tables[kind][0], local % 4)[order]
+                elif kind in tables:
+                    phase = local % 4
+                    table, source_intensity = tables[kind]
+                    target = sample_table(table, phase)[order] * (1 + .4 * (intensity - source_intensity))
+                    if kind == "side-tap" and beats > 4:
+                        # Plant the foot at the end of the cycle before starting a new tap.
+                        target *= 1 - _smoothstep((phase - 3.5) / .5)
+                        if local >= 4:
+                            target *= _smoothstep(phase / .34)
+                else:
+                    # A shallow crouch cannot meet the 24 mm descent/ascent requirement.
+                    depth = max(.6, intensity) if mixed and kind == "squat-rise" else intensity
+                    target = section_offsets(kind, local, progress, depth)[order] / scale
+                if published is None and (not mixed or kind in ("weight-shift", "squat-rise")):
+                    blend = _smoothstep(local / (.5 if mixed else .75))
+                    target = start + blend * (target - start)
+                # Bring the command toward neutral before the first lift.
+                if (mixed and kind == "alternating-arms" and index + 1 < len(sections)
+                        and sections[index + 1]["type"] == "alternating-knee-lift"):
+                    target *= 1 - _smoothstep((local - beats + .8) / .8)
+                points.append(target)
+            start = points[-1]
         self.register_buffer("points", torch.tensor(np.asarray(points), dtype=torch.float32))
+        self.register_buffer("feedback", torch.tensor(np.asarray(feedback), dtype=torch.float32))
         self.section_count = len(sections)
 
     def command(self, obs, residual):
         phase = (math.atan2(float(obs[73]), float(obs[74])) / math.tau) % 1
         lower = min(int(phase * self.segments), self.segments - 1)
         fraction = phase * self.segments - lower
-        index = int(np.argmax(obs[65:65 + self.section_count])) * (self.segments + 1) + lower
+        section = int(np.argmax(obs[65:65 + self.section_count]))
+        index = section * (self.segments + 1) + lower
         left, right = self.points.numpy()[index:index + 2]
-        target = left + fraction * (right - left)
+        target = left + fraction * (right - left) + self.feedback.numpy()[section] @ obs[:6]
         return np.clip(target + self.authority * np.clip(residual, -1, 1), -1, 1)
 
     def forward(self, obs, residual):
@@ -145,9 +185,11 @@ class ReferenceControl(torch.nn.Module):
         position = phase * self.segments
         lower = position.to(torch.int64).clamp(max=self.segments - 1)
         fraction = (position - lower).unsqueeze(1)
-        index = torch.argmax(obs[:, 65:65 + self.section_count], dim=1) * (self.segments + 1) + lower
+        section = torch.argmax(obs[:, 65:65 + self.section_count], dim=1)
+        index = section * (self.segments + 1) + lower
         left = self.points[index]
         target = left + fraction * (self.points[index + 1] - left)
+        target = target + torch.bmm(self.feedback[section], obs[:, :6].unsqueeze(2)).squeeze(2)
         return (target + self.authority * residual.clamp(-1, 1)).clamp(-1, 1)
 
 

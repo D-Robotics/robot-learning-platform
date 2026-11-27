@@ -20,8 +20,9 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from body import DT
+from calibrated_motions import MESH_SCENE
 from choreography_reference import (
-    CALIBRATED_SCENE, CALIBRATED_SECTIONS, ReferenceControl, ResidualChoreography,
+    CALIBRATED_SCENES, CALIBRATED_SECTIONS, ReferenceControl, ResidualChoreography,
 )
 from dance_env import (
     ConfigurableChoreography, FOOT_SECTION_TYPES, TRACKED_SECTION_TYPES, squat_rise_phase,
@@ -209,10 +210,20 @@ def evaluate(env, actor, bpm, *, trace=False):
     return report
 
 
+def choreography_quality(rows):
+    completed = sum(row["completed"] for row in rows)
+    passed = [sum(item["passed"] for item in row["sectionResults"]) for row in rows]
+    return (all(row["allSectionsPassed"] for row in rows), completed, min(passed), sum(passed))
+
+
 def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
-          environment_class=ConfigurableChoreography, device: str = "auto"):
+          environment_class=ConfigurableChoreography, device: str = "auto", scene_sha=None):
     device = resolve_training_device(device)
-    dance = environment_class(bundle, dance_config, training=False)
+    if scene_sha is None:
+        scene_sha = hashlib.sha256((bundle / "model/scene.xml").read_bytes()).hexdigest()
+    phase_v2 = getattr(environment_class, "observation_adapter_id", None) == "originman-dance-phase-v2"
+    section_frame = phase_v2 and scene_sha == MESH_SCENE
+    dance = environment_class(bundle, dance_config, training=False, section_frame=section_frame)
     contract = {
         "observationSize": int(dance.observation_space.shape[0]),
         "actionSize": int(dance.action_space.shape[0]),
@@ -229,18 +240,24 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
     reference = None
     reference_candidate = None
     zero_action = np.zeros(18, dtype=np.float32)
-    if (contract["observationAdapterId"] == "originman-dance-phase-v2"
-            and all(item["type"] in CALIBRATED_SECTIONS for item in dance.sections)
-            and hashlib.sha256((bundle / "model/scene.xml").read_bytes()).hexdigest() == CALIBRATED_SCENE):
-        candidate = ReferenceControl(dance.sections, dance.names)
-        reference_candidate = [evaluate(dance, lambda obs: candidate.command(obs, zero_action), bpm,
-                                        trace=(bpm == nominal_bpm)) for bpm in bpms]
-        if all(row["allSectionsPassed"] for row in reference_candidate):
-            reference = candidate
-            print(json.dumps({"event": "dance-reference-baseline-passed", "bpms": bpms}), flush=True)
+    if phase_v2 and (section_frame or (
+        scene_sha in CALIBRATED_SCENES and all(item["type"] in CALIBRATED_SECTIONS for item in dance.sections)
+    )):
+        try:
+            candidate = ReferenceControl(dance.sections, dance.names, mesh_scene=section_frame)
+        except (OSError, ValueError) as error:
+            print(json.dumps({"event": "dance-reference-unavailable", "message": str(error)}), flush=True)
+        else:
+            reference_candidate = [evaluate(dance, lambda obs: candidate.command(obs, zero_action), bpm,
+                                            trace=(bpm == nominal_bpm)) for bpm in bpms]
+            passed = all(row["allSectionsPassed"] for row in reference_candidate)
+            if passed or (section_frame and all(row["completed"] for row in reference_candidate)):
+                reference = candidate
+                print(json.dumps({"event": "dance-reference-baseline", "bpms": bpms,
+                                  "qualityGatePassed": passed}), flush=True)
 
     def make_training_env():
-        env = environment_class(bundle, dance_config, training=True)
+        env = environment_class(bundle, dance_config, training=True, section_frame=section_frame)
         return ResidualChoreography(env, reference) if reference is not None else env
 
     env_fns = [make_training_env] * num_envs
@@ -289,7 +306,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
 
         evaluations = [evaluate(dance, predict, bpm, trace=(bpm == nominal_bpm)) for bpm in bpms]
         policy_selection = "ppo"
-        if reference is not None and not all(row["allSectionsPassed"] for row in evaluations):
+        if reference is not None and choreography_quality(reference_candidate) > choreography_quality(evaluations):
             evaluations = reference_candidate
             reference_checkpoint.replace(output / "final.zip")
             policy_selection = "reference-baseline"
@@ -317,6 +334,7 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             "selectedCheckpointSteps": int(model.num_timesteps) if policy_selection == "ppo" else 0,
             "policySelection": policy_selection,
             "referenceGuided": reference is not None,
+            "sectionFrame": section_frame,
             "rolloutIterations": int(math.ceil(model.num_timesteps / rollout_size)),
             "optimizerSteps": int(
                 math.ceil(model.num_timesteps / rollout_size)

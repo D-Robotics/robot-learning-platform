@@ -156,13 +156,16 @@ class OnnxablePolicy(torch.nn.Module):
         return self.reference(observation, action) if self.reference is not None else action
 
 
-def policy_metadata(contract_id, scene_hash, action_joints):
-    return {
+def policy_metadata(contract_id, scene_hash, action_joints, *, section_frame=False):
+    result = {
         "rdk.contract.id": contract_id,
         "rdk.scene.sha256": scene_hash,
         "rdk.action.joints": ",".join(action_joints),
         "rdk.control.hz": "50",
     }
+    if section_frame:
+        result["rdk.metrics.frame"] = "section-entry-v1"
+    return result
 
 
 def write_onnx(checkpoint: Path, path: Path, observation_size: int, *, metadata=None, reference=None):
@@ -242,17 +245,20 @@ def main():
 
     report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs,
                    environment_class=environment_class,
-                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto").strip().lower())
+                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto").strip().lower(),
+                   scene_sha=model_bundle["sceneSha256"])
     report["engineSourceSha256"] = {
         name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
         for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py",
-                     "choreography_reference.py", "render_replay.py"]
+                     "choreography_reference.py", "calibrated_motions.py", "render_replay.py"]
     }
     onnx_path = output / "policy.onnx"
     policy_sha = write_onnx(
         output / "final.zip", onnx_path, expected_observation_size,
-        metadata=policy_metadata(contract["id"], model_bundle["sceneSha256"], report["contract"]["actionJoints"]),
-        reference=ReferenceControl(dance_config["sections"], report["contract"]["actionJoints"])
+        metadata=policy_metadata(contract["id"], model_bundle["sceneSha256"], report["contract"]["actionJoints"],
+                                 section_frame=report["sectionFrame"]),
+        reference=ReferenceControl(dance_config["sections"], report["contract"]["actionJoints"],
+                                   mesh_scene=report["sectionFrame"])
         if report["referenceGuided"] else None,
     )
     if training.get("video") is True and report.get("replay"):

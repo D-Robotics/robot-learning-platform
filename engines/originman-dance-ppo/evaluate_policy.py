@@ -10,6 +10,7 @@ import numpy as np
 import onnxruntime as ort
 
 from adapter import environment_for_contract, policy_metadata, validate_bundle
+from calibrated_motions import MESH_SCENE
 from dance_env import validate_dance_config
 from train import evaluate
 
@@ -37,7 +38,13 @@ def main():
     # Older releases never embedded runtime metadata and advanced 20 steps
     # per action even on the 2 ms scene. Reproduce that clock for those policies.
     legacy_timing = not any(key.startswith('rdk.') for key in metadata)
-    environment = environment_class(bundle, dance, training=False, legacy_timing=legacy_timing)
+    section_frame = 'rdk.metrics.frame' in metadata
+    if section_frame and (request['sceneSha256'] != MESH_SCENE or
+                          request['contractId'] != 'custom-policy-originman-dance-v2'):
+        raise ValueError('section-relative evaluation requires the calibrated mesh scene and v2 contract')
+    environment = environment_class(
+        bundle, dance, training=False, legacy_timing=legacy_timing, section_frame=section_frame,
+    )
 
     def actor(observation):
         action = session.run(['action'], {'observation': observation[None, :]})[0][0]
@@ -50,7 +57,8 @@ def main():
     evaluations = []
     trace = directory / 'dance-replay.npz'
     try:
-        expected = policy_metadata(request['contractId'], request['sceneSha256'], environment.names)
+        expected = policy_metadata(request['contractId'], request['sceneSha256'], environment.names,
+                                   section_frame=section_frame)
         if not legacy_timing and any(metadata.get(key) != value for key, value in expected.items()):
             raise ValueError('ONNX contract, scene, control clock or action order does not match the source run')
         for bpm in tempos:
