@@ -69,6 +69,7 @@ import {
   createDanceEvaluationReader,
   danceEvaluation,
   recordedDanceQuality,
+  referenceLearningResult,
 } from './dance-evaluation.mjs';
 import {
   DANCE_TRAINING_TOOLS,
@@ -334,17 +335,14 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
         : '仿真完整度或稳定性未达标。';
       if (Number.isInteger(evidence.framesEvaluated) && Number.isInteger(evidence.framesExpected))
         studentReply += `完成 ${evidence.framesEvaluated}/${evidence.framesExpected} 帧。`;
-      const { trackingRmseRad, zeroResidualRmseRad } = evidence;
-      if (
-        evidence.framesExpected > 0 &&
-        evidence.framesEvaluated === evidence.framesExpected &&
-        evidence.zeroResidualFramesEvaluated === evidence.framesExpected &&
-        Number.isFinite(trackingRmseRad) &&
-        trackingRmseRad >= 0 &&
-        Number.isFinite(zeroResidualRmseRad) &&
-        zeroResidualRmseRad >= 0
-      ) {
-        studentReply += `跟踪 RMSE 为 ${trackingRmseRad.toFixed(4)} rad，零残差基线为 ${zeroResidualRmseRad.toFixed(4)} rad。`;
+      const comparison = referenceLearningResult(evidence);
+      if (comparison.policySelection === 'reference-baseline')
+        studentReply += '本轮保留稳定的纯参考策略。';
+      if (comparison.learningStatus === 'unstable')
+        studentReply += '本轮 PPO 候选未通过仿真稳定性检查。';
+      const { ppoTrackingRmseRad: trackingRmseRad, zeroResidualRmseRad } = comparison;
+      if (Number.isFinite(trackingRmseRad) && comparison.learningStatus !== 'unstable') {
+        studentReply += `PPO 跟踪 RMSE 为 ${trackingRmseRad.toFixed(4)} rad，零残差基线为 ${zeroResidualRmseRad.toFixed(4)} rad。`;
         if (zeroResidualRmseRad > 0) {
           const change = 100 * (trackingRmseRad / zeroResidualRmseRad - 1);
           const magnitude = Math.abs(change).toFixed(1);
@@ -353,7 +351,7 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
               ? '本轮误差与基线基本持平。'
               : `本轮误差比基线${change < 0 ? '低' : '高'} ${magnitude}%。`;
         }
-      } else {
+      } else if (comparison.learningStatus === 'unknown') {
         studentReply += '当前没有全程同帧的零残差对照，跟踪改善待确认。';
       }
     }

@@ -1,6 +1,6 @@
 import type { Sim2RealComputeResource, Sim2RealRunRecord } from '../../shared/sim2real.js';
 import { fetchLocalRunArtifact } from './local-runner.js';
-import { readPolicyArtifact } from './policy-artifact-store.js';
+import { readPolicyArtifact, retainPolicyArtifact } from './policy-artifact-store.js';
 import { getSim2RealComputeResourceSecret, readSim2RealRelayArtifact } from './sim2real-store.js';
 
 export type RunPolicyRetention =
@@ -69,6 +69,7 @@ export async function resolveRunPolicyDownload(
   options: {
     timeoutMs?: number;
     allowWorker?: (resource: Sim2RealComputeResource) => boolean;
+    retain?: boolean;
   } = {},
 ) {
   const policy = validateRunPolicy(run);
@@ -117,5 +118,15 @@ export async function resolveRunPolicyDownload(
       message: '制品摘要与台账记录不一致，已拒绝下发。',
       retention,
     } as const;
-  return { ok: true, ...fetched, source: 'worker', retention } as const;
+  const retained =
+    options.retain && (await retainPolicyArtifact(fetched.sha256, fetched.bytes, owner));
+  const archiveReceipt: RunPolicyRetention = retained
+    ? { state: 'retained', sha256: fetched.sha256, bytes: fetched.bytes.length }
+    : retention;
+  return {
+    ok: true,
+    ...fetched,
+    source: 'worker',
+    retention: archiveReceipt,
+  } as const;
 }

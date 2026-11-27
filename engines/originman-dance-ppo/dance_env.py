@@ -229,13 +229,14 @@ def validate_dance_config(value: dict) -> dict:
 class ConfigurableChoreography(Dance):
     """The policy follows a student-authored schedule using bounded reward terms."""
 
-    def __init__(self, bundle, dance_config, training=False):
+    def __init__(self, bundle, dance_config, training=False, *, legacy_timing=False, section_frame=False):
         self.dance_config = validate_dance_config(dance_config)
         self.reward = {**DEFAULT_REWARD_TUNING, **self.dance_config.get("rewardTuning", {})}
         self.sections = self.dance_config["sections"]
         self.starts = np.cumsum([0] + [item["beats"] for item in self.sections[:-1]]).astype(float)
         self.ends = self.starts + np.asarray([item["beats"] for item in self.sections], dtype=float)
-        super().__init__(bundle, training=training)
+        self.section_frame = section_frame
+        super().__init__(bundle, training=training, legacy_timing=legacy_timing)
         self.observation_space = gym.spaces.Box(
             -np.inf,
             np.inf,
@@ -258,6 +259,9 @@ class ConfigurableChoreography(Dance):
             index = int(self.np_random.integers(len(self.sections)))
             self.start_beat = float(self.starts[index])
             self.end_beat = float(self.ends[index])
+        self.section_index = self.condition()[1]
+        self.section_entry_lateral = float(self.data.xpos[self.torso, 1])
+        self.section_entry_feet = self.home_feet
         return self.observe(), {}
 
     def condition(self):
@@ -291,12 +295,17 @@ class ConfigurableChoreography(Dance):
         _, _, failed, _, info = super().step(action)
         beat, index, local, progress, section = self.condition()
         root = self.data.xpos[self.torso]
+        if self.section_frame and index != self.section_index:
+            self.section_index = index
+            self.section_entry_lateral = float(root[1])
+            self.section_entry_feet = self.data.geom_xpos[list(self.foot_geoms)].copy()
         orientation = self.data.xmat[self.torso].reshape(3, 3)
         hand = (self.data.xpos[self.hands] - root) @ orientation
         asymmetry = float(hand[0, 0] - hand[1, 0])
         spread = float(hand[0, 1] - hand[1, 1])
         arm_forward = float(np.mean(hand[:, 0]))
         lateral = float(root[1])
+        section_lateral = lateral - self.section_entry_lateral if self.section_frame else lateral
         height = float(root[2])
         speed = float(info["armSpeed"] + info["legSpeed"])
         pulse = float(info["pulse"])
@@ -313,8 +322,8 @@ class ConfigurableChoreography(Dance):
         elif section["type"] == "weight-shift":
             target = self.reward["weightShiftTargetM"] * slow
             style = intensity * (
-                self.reward["weightShiftWeight"] * math.exp(-((lateral - target) / self.reward["weightShiftToleranceM"]) ** 2)
-                + 0.8 * np.clip(slow * lateral / self.reward["weightShiftTargetM"], -1, 1)
+                self.reward["weightShiftWeight"] * math.exp(-((section_lateral - target) / self.reward["weightShiftToleranceM"]) ** 2)
+                + 0.8 * np.clip(slow * section_lateral / self.reward["weightShiftTargetM"], -1, 1)
                 + 0.55 * accent
             )
         elif section["type"] == "squat-rise":
@@ -335,7 +344,7 @@ class ConfigurableChoreography(Dance):
         else:
             tracking, active, contact_matches = tracked_style(
                 section["type"], local, intensity, hand, orientation[2],
-                self.data.geom_xpos[list(self.foot_geoms)] - self.home_feet,
+                self.data.geom_xpos[list(self.foot_geoms)] - self.section_entry_feet,
                 info["footContacts"],
             )
             style = 4.0 * tracking
@@ -362,7 +371,7 @@ class ConfigurableChoreography(Dance):
             sectionBeat=local,
             sectionProgress=progress,
             phraseBeat=beat,
-            lateralM=lateral,
+            lateralM=section_lateral,
             heightM=height,
             handAsymmetryM=asymmetry,
             handSpanM=spread,

@@ -19,11 +19,21 @@ DT = .02
 BEATS = 8
 
 
+def physics_substeps(timestep, legacy_timing=False):
+    if legacy_timing:
+        return 20
+    substeps = round(DT / timestep)
+    if substeps < 1 or not math.isclose(substeps * timestep, DT):
+        raise ValueError("scene physics step does not divide the 50 Hz control interval")
+    return substeps
+
+
 class Dance(gym.Env):
-    def __init__(self, bundle, training=False):
+    def __init__(self, bundle, training=False, *, legacy_timing=False):
         self.robot = OriginManEnv(bundle / "model/scene.xml", Config(stride=0, lift=0, sway=0),
                                   reference=np.load(bundle / "reference.npy"))
         self.model, self.data = self.robot.model, self.robot.data
+        self.substeps = physics_substeps(self.model.opt.timestep, legacy_timing)
         self.actuators = np.array([i for i in range(self.model.nu)
                                   if not self.model.actuator(i).name.startswith("head_")])
         self.names = [self.model.actuator(int(i)).name for i in self.actuators]
@@ -79,7 +89,7 @@ class Dance(gym.Env):
         command = old + np.clip(np.clip(action, -1, 1) - old, -.20, .20)
         target = self.robot.home[self.qa] + command * self.scale
         self.data.ctrl[self.actuators] = np.clip(target, *self.model.actuator_ctrlrange[self.actuators].T)
-        mujoco.mj_step(self.model, self.data, nstep=20)
+        mujoco.mj_step(self.model, self.data, nstep=self.substeps)
         self.ticks += 1
         self.previous = command
         beat = self.beat()

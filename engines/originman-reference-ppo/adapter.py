@@ -22,7 +22,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "engines/originman-dance-ppo"))
-from adapter import read_request, validate_bundle, write_manifest, write_onnx
+from adapter import policy_metadata, read_request, validate_bundle, write_manifest, write_onnx
 from env import Config, OriginManEnv
 from train import WorkerProgress, resolve_training_device
 
@@ -365,8 +365,16 @@ def composition_ranges(training, frames):
     return ranges
 
 
+def improves_reference(candidate, baseline):
+    return (
+        candidate["qualityGatePassed"] and
+        (not baseline["qualityGatePassed"] or
+         candidate["trackingRmseRad"] < baseline["trackingRmseRad"] - 1e-9)
+    )
+
+
 def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges,
-                     *, stop_when_passing):
+                     *, stop_when_passing, baseline=None, metadata=None):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
@@ -386,13 +394,20 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
         best = None
         candidate_weights = output / "candidate.zip"
         candidate_policy = output / "candidate.onnx"
+        baseline_weights = output / "baseline-candidate.zip"
+        if baseline is not None:
+            with torch.no_grad():
+                learner.policy.action_net.weight.zero_()
+                learner.policy.action_net.bias.zero_()
+            if baseline["qualityGatePassed"]:
+                learner.save(baseline_weights)
         progress = WorkerProgress(budget, ROLLOUT_STEPS, engine=ENGINE)
         while learner.num_timesteps < budget:
             learner.learn(total_timesteps=min(CHECKPOINT_STEPS, budget - learner.num_timesteps),
                           reset_num_timesteps=False,
                           callback=progress)
             learner.save(candidate_weights)
-            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id])
+            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id], metadata=metadata)
             session = ReferenceEvaluator(onnx.load(candidate_policy))
             parity_error = 0.0
 
@@ -423,13 +438,44 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                 best = (score, policy_sha, {**result, "selectedCheckpointSteps": learner.num_timesteps}, frames)
             print(json.dumps({"event": "reference-checkpoint-evaluation", **checkpoints[-1]},
                              allow_nan=False), flush=True)
-            if stop_when_passing and result["qualityGatePassed"]:
+            if stop_when_passing and (
+                improves_reference(result, baseline) if baseline is not None else result["qualityGatePassed"]
+            ):
                 break
         device_name = (torch.cuda.get_device_name(learner.device) if learner.device.type == "cuda"
                        else learner.device.type)
         candidate_weights.unlink(missing_ok=True)
         candidate_policy.unlink(missing_ok=True)
         _, policy_sha, result, frames = best
+        if baseline is not None:
+            comparison = {
+                "ppoTrackingRmseRad": result["trackingRmseRad"],
+                "ppoFramesEvaluated": result["framesEvaluated"],
+                "ppoStabilityPassed": result["qualityGatePassed"],
+            }
+            if baseline["qualityGatePassed"] and not improves_reference(result, baseline):
+                baseline_weights.replace(output / "final.zip")
+                policy = output / "policy.onnx"
+                policy_sha = write_onnx(output / "final.zip", policy, OBSERVATIONS[contract_id], metadata=metadata)
+                session = ReferenceEvaluator(onnx.load(policy))
+                baseline_parity = 0.0
+
+                def predict_baseline(observation):
+                    nonlocal baseline_parity
+                    values = session.run(None, {"observation": observation[None]})[0][0]
+                    baseline_parity = max(baseline_parity, float(np.max(np.abs(values))))
+                    return values
+
+                result, frames = evaluate(evaluation_env, predict_baseline, ranges)
+                if (not result["qualityGatePassed"] or baseline_parity >= 1e-6 or
+                        abs(result["trackingRmseRad"] - baseline["trackingRmseRad"]) > 1e-9):
+                    raise ValueError("exported reference baseline differs from its original simulation")
+                result.update(selectedCheckpointSteps=0, policySelection="reference-baseline",
+                              onnxMaxAbsError=baseline_parity)
+            else:
+                result["policySelection"] = "ppo"
+            result.update(comparison)
+        baseline_weights.unlink(missing_ok=True)
         return str(learner.device), device_name, learner.num_timesteps, policy_sha, result, frames, checkpoints
     finally:
         sim.close()
@@ -483,7 +529,8 @@ def main():
 
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
         bundle, output, trajectory, budget, num_envs, seed, env, ranges,
-        stop_when_passing=not provenance,
+        stop_when_passing=not provenance, baseline=report["gate"],
+        metadata=policy_metadata(contract_id, scene_hash, TRACKED),
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"

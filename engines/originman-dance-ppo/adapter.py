@@ -20,6 +20,7 @@ import torch
 from dance_env import ConfigurableChoreography, validate_dance_config
 from dance_env_v2 import ExplicitAlternationChoreography
 from asset_provenance import verified_sha256, verify_joint_names
+from choreography_reference import ReferenceControl
 from train import train
 
 ENGINE_ID = "originman-dance-ppo"
@@ -145,19 +146,33 @@ def validate_bundle(bundle: Path):
 
 
 class OnnxablePolicy(torch.nn.Module):
-    def __init__(self, policy):
+    def __init__(self, policy, reference=None):
         super().__init__()
         self.policy = policy
+        self.reference = reference
 
     def forward(self, observation):
-        return self.policy._predict(observation, deterministic=True)
+        action = self.policy._predict(observation, deterministic=True)
+        return self.reference(observation, action) if self.reference is not None else action
 
 
-def write_onnx(checkpoint: Path, path: Path, observation_size: int):
+def policy_metadata(contract_id, scene_hash, action_joints, *, section_frame=False):
+    result = {
+        "rdk.contract.id": contract_id,
+        "rdk.scene.sha256": scene_hash,
+        "rdk.action.joints": ",".join(action_joints),
+        "rdk.control.hz": "50",
+    }
+    if section_frame:
+        result["rdk.metrics.frame"] = "section-entry-v1"
+    return result
+
+
+def write_onnx(checkpoint: Path, path: Path, observation_size: int, *, metadata=None, reference=None):
     from stable_baselines3 import PPO
 
     model = PPO.load(checkpoint, device="cpu")
-    wrapper = OnnxablePolicy(model.policy).eval()
+    wrapper = OnnxablePolicy(model.policy, reference).eval()
     sample = torch.zeros((1, observation_size), dtype=torch.float32)
     torch.onnx.export(
         wrapper,
@@ -174,6 +189,9 @@ def write_onnx(checkpoint: Path, path: Path, observation_size: int):
     output_size = int(graph.graph.output[0].type.tensor_type.shape.dim[-1].dim_value)
     if (input_size, output_size) != (observation_size, 18):
         fail(f"ONNX contract mismatch: expected {observation_size}->18, got {input_size}->{output_size}")
+    if metadata:
+        onnx.helper.set_model_props(graph, metadata)
+        onnx.save(graph, path)
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -227,13 +245,22 @@ def main():
 
     report = train(bundle=bundle, output=output, dance_config=dance_config, num_envs=num_envs,
                    environment_class=environment_class,
-                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto").strip().lower())
+                   device=os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto").strip().lower(),
+                   scene_sha=model_bundle["sceneSha256"])
     report["engineSourceSha256"] = {
         name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-        for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py", "render_replay.py"]
+        for name in ["adapter.py", "body.py", "env.py", "train.py", "dance_env.py", "dance_env_v2.py",
+                     "choreography_reference.py", "calibrated_motions.py", "render_replay.py"]
     }
     onnx_path = output / "policy.onnx"
-    policy_sha = write_onnx(output / "final.zip", onnx_path, expected_observation_size)
+    policy_sha = write_onnx(
+        output / "final.zip", onnx_path, expected_observation_size,
+        metadata=policy_metadata(contract["id"], model_bundle["sceneSha256"], report["contract"]["actionJoints"],
+                                 section_frame=report["sectionFrame"]),
+        reference=ReferenceControl(dance_config["sections"], report["contract"]["actionJoints"],
+                                   mesh_scene=report["sectionFrame"])
+        if report["referenceGuided"] else None,
+    )
     if training.get("video") is True and report.get("replay"):
         video_path = output / "dance-replay.mp4"
         try:
@@ -293,6 +320,7 @@ def main():
             "maxTiltDeg": row["maxTiltDeg"],
             "sections": sections,
         })
+    selected_steps = report["selectedCheckpointSteps"]
     result = {
         "status": "completed",
         "engine": ENGINE_ID,
@@ -302,15 +330,15 @@ def main():
         "hardwareEligible": False,
         "cuda": report["trainingDevice"].startswith("cuda"),
         "checkpoint": {
-            "checkpointId": f"originman-dance-{run_id}-steps{report['trainedSteps']}",
+            "checkpointId": f"originman-dance-{run_id}-steps{selected_steps}",
             "artifactRef": checkpoint_ref,
-            "iteration": report["rolloutIterations"],
+            "iteration": report["rolloutIterations"] if selected_steps else 0,
         },
         "artifact": {
             "artifactId": f"originman-dance-policy-{run_id}",
             "artifactRef": artifact_ref,
             "ref": artifact_ref,
-            "version": f"steps-{report['trainedSteps']}",
+            "version": f"steps-{selected_steps}" if selected_steps else "reference-baseline",
             "role": "policy",
             "name": "policy.onnx",
             "kind": "compiled",
@@ -338,6 +366,8 @@ def main():
             "qualityGate": quality,
             "originmanDance": {
                 "qualityGatePassed": quality["passed"],
+                "policySelection": report["policySelection"],
+                "referenceGuided": report["referenceGuided"],
                 "evaluations": dance_evaluations,
                 "replay": report.get("replay"),
                 **({"video": report["video"]} if report.get("video") else {}),

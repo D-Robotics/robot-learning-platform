@@ -508,6 +508,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   const replay = asRecord(source.replay);
   const video = asRecord(source.video);
   const scene = asRecord(source.sceneProvenance);
+  const usedReference = source.referenceGuided === true;
   const evaluations = (
     Array.isArray(source.evaluations) ? source.evaluations.slice(0, 3) : []
   ).flatMap((item) => {
@@ -547,6 +548,11 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   });
   return {
     evaluations,
+    ...(usedReference ? { referenceGuided: true } : {}),
+    ...(source.policySelection === 'ppo' ||
+    (usedReference && source.policySelection === 'reference-baseline')
+      ? { policySelection: source.policySelection }
+      : {}),
     ...(digest(scene.sceneSha256) ? { sceneProvenance: { sceneSha256: scene.sceneSha256 } } : {}),
     ...(typeof source.qualityGatePassed === 'boolean'
       ? { qualityGatePassed: source.qualityGatePassed }
@@ -654,6 +660,10 @@ function safeReferenceMetrics(
     trackingRmseRad,
     zeroResidualRmseRad,
     zeroResidualFramesEvaluated,
+    policySelection,
+    ppoTrackingRmseRad,
+    ppoFramesEvaluated,
+    ppoStabilityPassed,
     trajectorySha256,
     onnxMaxAbsError,
     sections: rawSections,
@@ -718,6 +728,22 @@ function safeReferenceMetrics(
         zeroResidualRmseRad,
         zeroResidualFramesEvaluated,
       }),
+    ...(policySelection === 'reference-baseline' || policySelection === 'ppo'
+      ? { policySelection }
+      : {}),
+    ...(typeof ppoTrackingRmseRad === 'number' &&
+      Number.isFinite(ppoTrackingRmseRad) &&
+      ppoTrackingRmseRad >= 0 &&
+      ppoTrackingRmseRad <= 20 &&
+      typeof ppoFramesEvaluated === 'number' &&
+      Number.isSafeInteger(ppoFramesEvaluated) &&
+      ppoFramesEvaluated > 0 &&
+      ppoFramesEvaluated <= framesExpected &&
+      typeof ppoStabilityPassed === 'boolean' && {
+        ppoTrackingRmseRad,
+        ppoFramesEvaluated,
+        ppoStabilityPassed,
+      }),
     ...(sections && { sections }),
     maxTiltDeg,
     finalYawDeg,
@@ -737,11 +763,15 @@ function safeReferenceMetrics(
     checkpointEvaluations <= 64
       ? { checkpointEvaluations }
       : {}),
-    ...(typeof selectedCheckpointSteps === 'number' &&
-      selectedCheckpointSteps >= 8192 &&
-      selectedCheckpointSteps % 4096 === 0 &&
-      trainingSteps !== undefined &&
-      selectedCheckpointSteps <= trainingSteps && { selectedCheckpointSteps }),
+    ...(policySelection === 'reference-baseline' && selectedCheckpointSteps === 0
+      ? { selectedCheckpointSteps }
+      : typeof selectedCheckpointSteps === 'number' &&
+          selectedCheckpointSteps >= 8192 &&
+          selectedCheckpointSteps % 4096 === 0 &&
+          trainingSteps !== undefined &&
+          selectedCheckpointSteps <= trainingSteps
+        ? { selectedCheckpointSteps }
+        : {}),
     ...(replay && { replay }),
     ...(video && { video }),
   };

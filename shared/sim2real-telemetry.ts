@@ -91,6 +91,8 @@ export interface Sim2RealRunMetrics {
   trainingDeviceName?: string;
   originmanDance?: SimulationReplayEvidence & {
     qualityGatePassed?: boolean;
+    policySelection?: 'ppo' | 'reference-baseline';
+    referenceGuided?: boolean;
     sceneProvenance?: { sceneSha256?: string };
     evaluations: {
       bpm: number;
@@ -112,6 +114,10 @@ export interface Sim2RealRunMetrics {
     trackingRmseRad?: number;
     zeroResidualRmseRad?: number;
     zeroResidualFramesEvaluated?: number;
+    policySelection?: 'ppo' | 'reference-baseline';
+    ppoTrackingRmseRad?: number;
+    ppoFramesEvaluated?: number;
+    ppoStabilityPassed?: boolean;
     trajectorySha256?: string;
     onnxMaxAbsError?: number;
     sections?: {

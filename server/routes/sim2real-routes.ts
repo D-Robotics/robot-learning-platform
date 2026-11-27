@@ -1,3 +1,4 @@
+import { ExperimentError } from '../sim2real/experiment-sessions.js';
 import { originmanReferenceDigest } from '../sim2real/originman-reference-digest.js';
 import {
   OriginmanMotionError,
@@ -127,6 +128,7 @@ import {
   listSim2RealDeployments,
   listSim2RealModels,
   listSim2RealRuns,
+  listActiveLocalWorkerRuns,
   summarizeSim2RealWorkspaceRuns,
   getSim2RealProject,
   listSim2RealProjects,
@@ -647,10 +649,9 @@ function studioConnectRequestBody(value: unknown): Record<string, unknown> | nul
   return bridgeId ? { bridgeId } : null;
 }
 
-async function checkRegisteredWorker(
-  secret: NonNullable<Awaited<ReturnType<typeof getSim2RealComputeResourceSecret>>>,
-  owner?: string,
-) {
+type RegisteredWorker = NonNullable<Awaited<ReturnType<typeof getSim2RealComputeResourceSecret>>>;
+
+async function checkRegisteredWorker(secret: RegisteredWorker, owner?: string) {
   const runnerUrl = secret.resource.runnerUrl;
   const runnerToken = secret.runnerToken ?? '';
   const checkedAt = new Date().toISOString();
@@ -673,6 +674,44 @@ async function checkRegisteredWorker(
     source: secret.resource.source,
   });
   return { updated, diagnostic };
+}
+
+async function requireOriginmanReferenceWorker(
+  resourceId: string,
+  owner?: string,
+): Promise<RegisteredWorker> {
+  const selected = await getSim2RealComputeResourceSecret(resourceId, owner);
+  if (!selected || selected.resource.source === 'local-agent') {
+    throw new ExperimentError(
+      'ORIGINMAN_REFERENCE_WORKER_MISSING',
+      '请选择已连接且支持参考轨迹跟跳的训练 Worker。',
+    );
+  }
+
+  // A health lease can outlive a Worker release or engine configuration change.
+  // Check the selected endpoint before screening or reserving a new Run.
+  const { updated, diagnostic } = await checkRegisteredWorker(selected, owner);
+  if (!updated) {
+    throw new ExperimentError(
+      'ORIGINMAN_REFERENCE_WORKER_MISSING',
+      '算力配置已变更，请重新选择 Worker。',
+    );
+  }
+  if (updated.status !== 'online') {
+    throw new ExperimentError(
+      'ORIGINMAN_REFERENCE_WORKER_UNAVAILABLE',
+      diagnostic.message + ' ' + diagnostic.recovery,
+      503,
+    );
+  }
+  if (updated.mock !== false || !updated.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)) {
+    throw new ExperimentError(
+      'ORIGINMAN_REFERENCE_WORKER_MISSING',
+      '所选 Worker 未提供参考轨迹跟跳引擎（originman-reference-ppo）。请选择支持跟跳的 Worker。',
+    );
+  }
+
+  return { ...selected, resource: updated };
 }
 
 function computeResourceHealthFailure(
@@ -1804,8 +1843,9 @@ async function dispatchRunBackend(input: {
   owner: string | undefined;
   model: Sim2RealModelRecord;
   parsed: ParsedRunRequest;
+  referenceWorker?: RegisteredWorker;
 }): Promise<RunBackendOutcome> {
-  const { request, auth, owner, model, parsed } = input;
+  const { request, auth, owner, model, parsed, referenceWorker } = input;
   const { backend, taskId, training, resumeFrom, idempotencyKey, computeResourceId } = parsed;
   const browserSupported = model.manifest.simulator.backends.includes('browser');
   const robogoSupported = model.manifest.simulator.backends.includes('robogo');
@@ -1953,6 +1993,14 @@ async function dispatchRunBackend(input: {
     if (computeResourceId && !selectedResource) {
       return { status: 'blocked', summary: '所选 GPU 训练资源不存在，或不属于当前账号。' };
     }
+    if (
+      referenceWorker &&
+      (selectedResource?.resource.runnerUrl !== referenceWorker.resource.runnerUrl ||
+        selectedResource?.resource.source !== referenceWorker.resource.source ||
+        (selectedResource?.runnerToken ?? '') !== (referenceWorker.runnerToken ?? ''))
+    ) {
+      return { status: 'blocked', summary: '算力配置已变更，请重新选择 Worker。' };
+    }
     // A local-agent resource is deliberately browser-relayed. The platform
     // server cannot reach a user's 127.0.0.1, so reserve the run and let the
     // browser submit the normalized payload to the Agent instead.
@@ -1984,6 +2032,13 @@ async function dispatchRunBackend(input: {
             ? `所选 GPU 训练资源的健康检查已超过 ${sim2RealComputeHealthTtlSeconds()} 秒；请重新测试连接。`
             : '所选 GPU 训练资源尚未通过最近一次健康检查；请先测试连接并确认在线。',
       };
+    }
+    if (
+      referenceWorker &&
+      (selectedResource?.resource.mock !== false ||
+        !selectedResource.resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE))
+    ) {
+      return { status: 'blocked', summary: '所选 Worker 已不支持跟跳引擎，请重新选择 Worker。' };
     }
     const selectedRunner = computeResourceId
       ? {
@@ -2228,6 +2283,7 @@ export interface Sim2RealRouterOptions {
    * without the route module importing any transport.
    */
   onTelemetryIngestFailure?: Sim2RealTelemetryRouteDeps['onIngestFailure'];
+  registerRunMaintenance?: (reconcile: () => Promise<void>) => void;
 }
 
 function normalizeApiPrefix(value: string | undefined): string {
@@ -2583,6 +2639,109 @@ export function createSim2RealRouter(
     }
   };
 
+  const retainCompletedTrainingPolicy = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    accountId: string,
+  ) => {
+    if (
+      !['originman-dance', ORIGINMAN_REFERENCE_TASK].includes(run.taskId ?? '') ||
+      run.status !== 'completed' ||
+      run.mock !== false
+    )
+      return;
+    try {
+      await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 10_000, retain: true });
+    } catch (error) {
+      console.warn('[sim2real] unable to retain completed policy', redactInternalError(error));
+    }
+  };
+
+  const recordWorkerStatus = async (
+    run: Sim2RealRunRecord,
+    latest: Sim2RealRobogoRunResult,
+    owner: string | undefined,
+    accountId: string,
+  ) => {
+    const current = await updateSim2RealRun(
+      run.id,
+      {
+        status: latest.status,
+        ...(latest.message ? { summary: latest.message } : {}),
+        ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
+        ...(run.mock === true || latest.mock === true
+          ? { mock: true }
+          : latest.mock === false
+            ? { mock: false }
+            : {}),
+        ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
+        ...(latest.artifact ? { artifact: latest.artifact } : {}),
+        ...(latest.metrics ? { metrics: latest.metrics } : {}),
+        ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
+        ...(latest.progress ? { progress: latest.progress } : {}),
+        ...(['completed', 'failed', 'cancelled'].includes(latest.status) && !run.finishedAt
+          ? { finishedAt: new Date().toISOString() }
+          : {}),
+      },
+      owner,
+    );
+    if (current?.status === 'completed') {
+      await Promise.all([
+        attachEvalTelemetryForRun(current, owner),
+        retainCompletedDanceVideo(current, owner, accountId),
+        retainCompletedTrainingPolicy(current, owner, accountId),
+      ]);
+    }
+    return current ?? run;
+  };
+
+  let runMaintenanceActive = false;
+  let runMaintenanceOffset = 0;
+  options.registerRunMaintenance?.(async () => {
+    if (runMaintenanceActive) return;
+    runMaintenanceActive = true;
+    try {
+      const targets = await listActiveLocalWorkerRuns();
+      if (!targets.length) return;
+      const count = Math.min(4, targets.length);
+      const batch = Array.from(
+        { length: count },
+        (_, index) => targets[(runMaintenanceOffset + index) % targets.length],
+      );
+      runMaintenanceOffset = (runMaintenanceOffset + count) % targets.length;
+      await Promise.allSettled(
+        batch.map(async ({ run, owner }) => {
+          const accountId = owner ?? (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+          if (!accountId || !run.externalRunId) return;
+          const runner = await resolveRunRunner(run.computeResourceId, owner);
+          if (!runner) return;
+          const latest = await requestLocalTrainingStatus({
+            ...runner,
+            accountId,
+            externalRunId: run.externalRunId,
+            timeoutMs: 5000,
+          });
+          if (
+            latest.externalRunId !== run.externalRunId ||
+            !['completed', 'failed', 'cancelled'].includes(latest.status)
+          )
+            return;
+          // A foreground request may already have persisted this terminal result.
+          const current = await getSim2RealRun(run.id, owner);
+          if (
+            !current ||
+            current.externalRunId !== run.externalRunId ||
+            !['queued', 'running', 'cancelling'].includes(current.status)
+          )
+            return;
+          await recordWorkerStatus(current, latest, owner, accountId);
+        }),
+      );
+    } finally {
+      runMaintenanceActive = false;
+    }
+  });
+
   // One shared guard covers every route registered below, including both the
   // core handlers and the telemetry/device sub-routers.
   router.use((request, response, next) => {
@@ -2803,7 +2962,10 @@ export function createSim2RealRouter(
   );
   registerSim2RealWorkshopRoutes(
     router,
-    { requestOwner: (request, response) => requestOwner(request, response, auth) },
+    {
+      requestOwner: (request, response) => requestOwner(request, response, auth),
+      requireOriginmanReferenceWorker,
+    },
     { prefix },
   );
   const classroomOwner = (request: Request, response: Response) =>
@@ -3977,25 +4139,7 @@ export function createSim2RealRouter(
                     allowEnvironmentToken: !auth.isMultiUserDeployment(),
                     externalRunId: run.externalRunId,
                   });
-            const update = {
-              status: latest.status,
-              ...(latest.message ? { summary: latest.message } : {}),
-              ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
-              ...(run.mock === true || latest.mock === true
-                ? { mock: true }
-                : latest.mock === false
-                  ? { mock: false }
-                  : {}),
-              ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
-              ...(latest.artifact ? { artifact: latest.artifact } : {}),
-              ...(latest.metrics ? { metrics: latest.metrics } : {}),
-              ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
-              ...(latest.progress ? { progress: latest.progress } : {}),
-              ...(['completed', 'failed', 'cancelled'].includes(latest.status) && !run.finishedAt
-                ? { finishedAt: new Date().toISOString() }
-                : {}),
-            };
-            current = (await updateSim2RealRun(run.id, update, owner)) ?? run;
+            current = await recordWorkerStatus(run, latest, owner, accountId);
             if (
               current.status === 'queued' &&
               run.backend === 'local' &&
@@ -4004,16 +4148,6 @@ export function createSim2RealRouter(
               latest.externalRunId === run.externalRunId
             ) {
               workerQueue = latest.queue;
-            }
-            // The poll only runs while the ledger copy is queued/running, so a
-            // completed status here is always the first observed completion:
-            // pull the engine's evaluation telemetry into the replay pipeline
-            // so the run page can render it without manual re-recording.
-            if (current.status === 'completed') {
-              await Promise.all([
-                attachEvalTelemetryForRun(current, owner),
-                retainCompletedDanceVideo(current, owner, accountId),
-              ]);
             }
           } catch (error) {
             if (isSim2RealRunnerNotFound(error)) {
@@ -5291,21 +5425,6 @@ export function createSim2RealRouter(
           );
           return;
         }
-        const resource = await getSim2RealComputeResource(computeResourceId!, owner);
-        if (
-          !resource ||
-          resource.source === 'local-agent' ||
-          resource.mock !== false ||
-          !resource.engines?.includes(ORIGINMAN_REFERENCE_ENGINE)
-        ) {
-          sendApiError(
-            response,
-            409,
-            'ORIGINMAN_REFERENCE_WORKER_MISSING',
-            '所选 Worker 不支持参考轨迹跟跳引擎。',
-          );
-          return;
-        }
       }
       // A project supplies its dataset snapshot by default.  An explicit
       // datasetIds array overrides that default, but every id must be visible
@@ -5408,22 +5527,24 @@ export function createSim2RealRouter(
         );
         return;
       }
-      if (composition && training?.originmanReference) {
-        const credentials = await getSim2RealComputeResourceSecret(computeResourceId!, owner);
-        if (!credentials) {
-          sendApiError(
-            response,
-            409,
-            'ORIGINMAN_REFERENCE_WORKER_MISSING',
-            '所选 Worker 已不可用。请重新选择并检查连接。',
-          );
+      let referenceWorker: RegisteredWorker | undefined;
+      if (taskId === ORIGINMAN_REFERENCE_TASK) {
+        try {
+          referenceWorker = await requireOriginmanReferenceWorker(computeResourceId!, owner);
+        } catch (error) {
+          if (!(error instanceof ExperimentError)) throw error;
+          sendApiError(response, error.status, error.code, error.message, {
+            retryable: error.status === 503,
+          });
           return;
         }
+      }
+      if (referenceWorker && composition && training?.originmanReference) {
         const report = await screenOriginmanReferenceWithWorker({
-          runnerUrl: credentials.resource.runnerUrl,
-          token: credentials.runnerToken,
+          runnerUrl: referenceWorker.resource.runnerUrl,
+          token: referenceWorker.runnerToken,
           accountId: owner ?? 'local-dev',
-          resourceId: credentials.resource.id,
+          resourceId: referenceWorker.resource.id,
           trajectory: training.originmanReference.trajectory,
           stanceProfile: composition.stanceProfile,
         }).catch(() => null);
@@ -5522,7 +5643,14 @@ export function createSim2RealRouter(
         }
       }
 
-      const outcome = await dispatchRunBackend({ request, auth, owner, model, parsed });
+      const outcome = await dispatchRunBackend({
+        request,
+        auth,
+        owner,
+        model,
+        parsed,
+        referenceWorker,
+      });
       try {
         const finalRunInput = {
           status: outcome.status,
@@ -5560,13 +5688,14 @@ export function createSim2RealRouter(
               { idempotencyKey, requestFingerprint },
             );
         if (!run) throw new Sim2RealError('sim2real_run_reservation_lost');
-        await retainCompletedDanceVideo(
-          run,
-          owner,
+        const retentionAccountId =
           auth.resolvePrincipal(request)?.accountId ??
-            owner ??
-            (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
-        );
+          owner ??
+          (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+        await Promise.all([
+          retainCompletedDanceVideo(run, owner, retentionAccountId),
+          retainCompletedTrainingPolicy(run, owner, retentionAccountId),
+        ]);
         if (idempotencyKey) response.setHeader('Idempotency-Key', idempotencyKey);
         response.status(201).json({ ok: true, run });
       } catch (error) {

@@ -85,6 +85,11 @@ it('admits long reference uploads only through the bounded signed-account transp
   const screenRequests: Record<string, unknown>[] = [];
   const trainRequests: Record<string, unknown>[] = [];
   const worker = http.createServer((request, response) => {
+    if (request.method === 'GET' && request.url === '/healthz') {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({ ok: true, mock: false, engines: ['originman-reference-ppo'] }));
+      return;
+    }
     void (async () => {
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));

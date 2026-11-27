@@ -20,6 +20,10 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
 from body import DT
+from calibrated_motions import MESH_SCENE
+from choreography_reference import (
+    CALIBRATED_SCENES, CALIBRATED_SECTIONS, ReferenceControl, ResidualChoreography,
+)
 from dance_env import (
     ConfigurableChoreography, FOOT_SECTION_TYPES, TRACKED_SECTION_TYPES, squat_rise_phase,
 )
@@ -206,25 +210,57 @@ def evaluate(env, actor, bpm, *, trace=False):
     return report
 
 
+def choreography_quality(rows):
+    completed = sum(row["completed"] for row in rows)
+    passed = [sum(item["passed"] for item in row["sectionResults"]) for row in rows]
+    return (all(row["allSectionsPassed"] for row in rows), completed, min(passed), sum(passed))
+
+
 def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
-          environment_class=ConfigurableChoreography, device: str = "auto"):
+          environment_class=ConfigurableChoreography, device: str = "auto", scene_sha=None):
     device = resolve_training_device(device)
-    dance = environment_class(bundle, dance_config, training=False)
+    if scene_sha is None:
+        scene_sha = hashlib.sha256((bundle / "model/scene.xml").read_bytes()).hexdigest()
+    phase_v2 = getattr(environment_class, "observation_adapter_id", None) == "originman-dance-phase-v2"
+    section_frame = phase_v2 and scene_sha == MESH_SCENE
+    dance = environment_class(bundle, dance_config, training=False, section_frame=section_frame)
     contract = {
         "observationSize": int(dance.observation_space.shape[0]),
         "actionSize": int(dance.action_space.shape[0]),
         "observationAdapterId": getattr(dance, "observation_adapter_id", "originman-dance-phase-v1"),
         "actionAdapterId": "originman-20d-joint-offset-v1",
         "controlHz": 50,
-        "physicsTimestepSeconds": 0.001,
-        "decimation": 20,
+        "physicsTimestepSeconds": float(dance.model.opt.timestep),
+        "decimation": dance.substeps,
         "actionJoints": list(dance.names),
     }
     torch.set_num_threads(1)
-    env_fns = [
-        (lambda rank=rank: environment_class(bundle, dance_config, training=True))
-        for rank in range(num_envs)
-    ]
+    nominal_bpm = dance_config["bpm"]
+    bpms = sorted({max(80.0, nominal_bpm * .95), nominal_bpm, min(140.0, nominal_bpm * 1.05)})
+    reference = None
+    reference_candidate = None
+    zero_action = np.zeros(18, dtype=np.float32)
+    if phase_v2 and (section_frame or (
+        scene_sha in CALIBRATED_SCENES and all(item["type"] in CALIBRATED_SECTIONS for item in dance.sections)
+    )):
+        try:
+            candidate = ReferenceControl(dance.sections, dance.names, mesh_scene=section_frame)
+        except (OSError, ValueError) as error:
+            print(json.dumps({"event": "dance-reference-unavailable", "message": str(error)}), flush=True)
+        else:
+            reference_candidate = [evaluate(dance, lambda obs: candidate.command(obs, zero_action), bpm,
+                                            trace=(bpm == nominal_bpm)) for bpm in bpms]
+            passed = all(row["allSectionsPassed"] for row in reference_candidate)
+            if passed or (section_frame and all(row["completed"] for row in reference_candidate)):
+                reference = candidate
+                print(json.dumps({"event": "dance-reference-baseline", "bpms": bpms,
+                                  "qualityGatePassed": passed}), flush=True)
+
+    def make_training_env():
+        env = environment_class(bundle, dance_config, training=True, section_frame=section_frame)
+        return ResidualChoreography(env, reference) if reference is not None else env
+
+    env_fns = [make_training_env] * num_envs
     start_method = multiprocessing.get_start_method() if device == "cpu" else "spawn"
     vector = SubprocVecEnv(env_fns, start_method=start_method) if num_envs > 1 else None
     train_env = vector or env_fns[0]()
@@ -242,32 +278,41 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             n_steps=steps_per_environment,
             batch_size=128,
             n_epochs=4,
-            learning_rate=3e-4,
+            learning_rate=3e-5 if reference is not None else 3e-4,
             gamma=0.99,
             gae_lambda=0.95,
             ent_coef=0.001,
             policy_kwargs={"net_arch": [160, 160], "log_std_init": -1.1},
             verbose=0,
         )
+        # The free-base body is already stable at zero action. Applying the
+        # same initial exploration variance to weight-bearing legs and arms
+        # makes the legs destabilize the stance before a beat can be learned.
+        reference_checkpoint = output / "reference-initialization.zip"
+        with torch.no_grad():
+            if reference is None:
+                model.policy.log_std[dance.legs] = -2.8
+            else:
+                model.policy.action_net.weight.zero_()
+                model.policy.action_net.bias.zero_()
+                model.policy.log_std.fill_(-3.5)
+        if reference is not None:
+            model.save(reference_checkpoint)
         model.learn(total_timesteps=total_timesteps, callback=callback, progress_bar=False)
-        model.save(output / "final")
-        nominal_bpm = dance_config["bpm"]
-        bpms = sorted(
-            {
-                max(80.0, nominal_bpm * 0.95),
-                nominal_bpm,
-                min(140.0, nominal_bpm * 1.05),
-            }
-        )
-        evaluations = [
-            evaluate(
-                dance,
-                lambda obs: model.predict(obs, deterministic=True)[0],
-                bpm,
-                trace=(bpm == nominal_bpm),
-            )
-            for bpm in bpms
-        ]
+
+        def predict(obs):
+            action = model.predict(obs, deterministic=True)[0]
+            return reference.command(obs, action) if reference is not None else action
+
+        evaluations = [evaluate(dance, predict, bpm, trace=(bpm == nominal_bpm)) for bpm in bpms]
+        policy_selection = "ppo"
+        if reference is not None and choreography_quality(reference_candidate) > choreography_quality(evaluations):
+            evaluations = reference_candidate
+            reference_checkpoint.replace(output / "final.zip")
+            policy_selection = "reference-baseline"
+        else:
+            model.save(output / "final")
+        reference_checkpoint.unlink(missing_ok=True)
         trace = evaluations[bpms.index(nominal_bpm)]
         replay = None
         if "qpos" in trace:
@@ -286,6 +331,10 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             "danceConfig": dance_config,
             "requestedTrainingSteps": dance_config["trainingSteps"],
             "trainedSteps": int(model.num_timesteps),
+            "selectedCheckpointSteps": int(model.num_timesteps) if policy_selection == "ppo" else 0,
+            "policySelection": policy_selection,
+            "referenceGuided": reference is not None,
+            "sectionFrame": section_frame,
             "rolloutIterations": int(math.ceil(model.num_timesteps / rollout_size)),
             "optimizerSteps": int(
                 math.ceil(model.num_timesteps / rollout_size)

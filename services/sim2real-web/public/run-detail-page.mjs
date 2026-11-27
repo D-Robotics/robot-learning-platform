@@ -251,16 +251,23 @@ function referenceQualityRows(evidence, composition) {
 
   ];
   if (Number.isFinite(evidence.trackingRmseRad))
-    rows.push(['关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
+    rows.push(['已选策略的关节跟踪 RMSE', evidence.trackingRmseRad.toFixed(4) + ' rad']);
+  if (evidence.policySelection === 'reference-baseline')
+    rows.push(['已选策略', '纯参考基线']);
+  else if (evidence.policySelection === 'ppo') rows.push(['已选策略', 'PPO']);
+  const ppoRmse = evidence.ppoTrackingRmseRad ?? evidence.trackingRmseRad;
+  const ppoFrames = evidence.ppoFramesEvaluated ?? evidence.framesEvaluated;
   if (Number.isFinite(evidence.zeroResidualRmseRad)) {
     const evaluated = evidence.zeroResidualFramesEvaluated;
     const rounds = ` · ${evaluated}/${evidence.framesExpected} 帧`;
     rows.push(['纯参考关节跟踪 RMSE', evidence.zeroResidualRmseRad.toFixed(4) + ' rad' + rounds]);
-    if (evaluated === evidence.framesExpected && evidence.framesEvaluated === evaluated &&
-        Number.isFinite(evidence.trackingRmseRad) && evidence.zeroResidualRmseRad > 0) {
-      const difference = 100 * (evidence.trackingRmseRad / evidence.zeroResidualRmseRad - 1);
-      rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(1) + '%']);
-    }
+    if (evidence.ppoStabilityPassed === false)
+      rows.push(['PPO 训练收益', 'PPO 候选未通过稳定性检查']);
+    else if (evaluated === evidence.framesExpected && ppoFrames === evaluated &&
+        Number.isFinite(ppoRmse) && evidence.zeroResidualRmseRad > 0) {
+      const difference = 100 * (ppoRmse / evidence.zeroResidualRmseRad - 1);
+      rows.push(['PPO 相对纯参考的 RMSE 变化', (difference > 0 ? '+' : '') + difference.toFixed(2) + '%']);
+    } else rows.push(['PPO 训练收益', '缺少全程同帧的对照']);
   }
   if (Number.isFinite(evidence.onnxMaxAbsError))
     rows.push(['ONNX 最大推理差异', evidence.onnxMaxAbsError.toExponential(2)]);
@@ -289,7 +296,7 @@ function renderQuality(document, run) {
       ? gate.passed
       : null;
   const isDance = run.taskId === 'originman-dance' || Boolean(evidence);
-  const gateLabel = tracking ? '跟跳评测' : '风格门';
+  const gateLabel = tracking ? '仿真稳定性' : '风格门';
   text(document, 'quality-status', passed === true ? gateLabel + '通过' : passed === false ? gateLabel + '未通过' : '待核验');
   text(document, 'quality-summary', tracking
     ? reference
@@ -322,6 +329,10 @@ function renderQuality(document, run) {
     if (label) label.textContent += summary + next;
   }
   const rows = tracking ? referenceQualityRows(reference, run.training?.originmanReferenceComposition) : metricRows(evidence);
+  if (!tracking && evidence?.policySelection === 'reference-baseline')
+    rows.push(['导出策略', '参考动作控制器。PPO 本轮未通过全部速度的验收。']);
+  else if (!tracking && evidence?.policySelection === 'ppo' && evidence.referenceGuided)
+    rows.push(['导出策略', '参考动作控制器加 PPO 修正。']);
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
   if (table && body) {
