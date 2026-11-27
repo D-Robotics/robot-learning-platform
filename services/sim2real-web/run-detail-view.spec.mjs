@@ -61,6 +61,8 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
     metrics: {
       originmanDance: {
         qualityGatePassed: false,
+        policySelection: 'ppo',
+        referenceGuided: true,
         evaluations: [
           {
             bpm: 128,
@@ -117,6 +119,7 @@ test('dance Run detail selects the exact account-scoped record and visualizes it
   });
 
   assert.equal(page.runId, 'run_42');
+  assert.match(f.document.getElementById('quality-body').textContent, /参考动作控制器加 PPO 修正/);
   assert.deepEqual(
     Array.from(f.document.querySelectorAll('#dance-reference-links a'), (link) => [
       link.getAttribute('href'),

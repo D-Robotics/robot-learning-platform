@@ -329,6 +329,10 @@ function renderQuality(document, run) {
     if (label) label.textContent += summary + next;
   }
   const rows = tracking ? referenceQualityRows(reference, run.training?.originmanReferenceComposition) : metricRows(evidence);
+  if (!tracking && evidence?.policySelection === 'reference-baseline')
+    rows.push(['导出策略', '参考动作控制器。PPO 本轮未通过全部速度的验收。']);
+  else if (!tracking && evidence?.policySelection === 'ppo' && evidence.referenceGuided)
+    rows.push(['导出策略', '参考动作控制器加 PPO 修正。']);
   const table = document.getElementById('quality-table');
   const body = document.getElementById('quality-body');
   if (table && body) {

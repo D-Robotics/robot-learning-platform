@@ -9,7 +9,7 @@ import sys
 import numpy as np
 import onnxruntime as ort
 
-from adapter import environment_for_contract, validate_bundle
+from adapter import environment_for_contract, policy_metadata, validate_bundle
 from dance_env import validate_dance_config
 from train import evaluate
 
@@ -29,10 +29,15 @@ def main():
     if sha(policy) != request['policySha256']:
         raise ValueError('policy does not match the source run')
     dance = validate_dance_config(request['dance'])
-    environment = environment_for_contract({'id': request['contractId']})(bundle, dance, training=False)
+    environment_class = environment_for_contract({'id': request['contractId']})
     options = ort.SessionOptions()
     options.intra_op_num_threads = options.inter_op_num_threads = 1
     session = ort.InferenceSession(str(policy), sess_options=options, providers=['CPUExecutionProvider'])
+    metadata = session.get_modelmeta().custom_metadata_map
+    # Older releases never embedded runtime metadata and advanced 20 steps
+    # per action even on the 2 ms scene. Reproduce that clock for those policies.
+    legacy_timing = not any(key.startswith('rdk.') for key in metadata)
+    environment = environment_class(bundle, dance, training=False, legacy_timing=legacy_timing)
 
     def actor(observation):
         action = session.run(['action'], {'observation': observation[None, :]})[0][0]
@@ -45,6 +50,9 @@ def main():
     evaluations = []
     trace = directory / 'dance-replay.npz'
     try:
+        expected = policy_metadata(request['contractId'], request['sceneSha256'], environment.names)
+        if not legacy_timing and any(metadata.get(key) != value for key, value in expected.items()):
+            raise ValueError('ONNX contract, scene, control clock or action order does not match the source run')
         for bpm in tempos:
             row = evaluate(environment, actor, bpm, trace=bpm == nominal)
             if bpm == nominal:

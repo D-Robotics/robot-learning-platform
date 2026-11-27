@@ -508,6 +508,7 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   const replay = asRecord(source.replay);
   const video = asRecord(source.video);
   const scene = asRecord(source.sceneProvenance);
+  const usedReference = source.referenceGuided === true;
   const evaluations = (
     Array.isArray(source.evaluations) ? source.evaluations.slice(0, 3) : []
   ).flatMap((item) => {
@@ -547,6 +548,11 @@ function safeDanceMetrics(value: unknown): Sim2RealRunMetrics['originmanDance'] 
   });
   return {
     evaluations,
+    ...(usedReference ? { referenceGuided: true } : {}),
+    ...(source.policySelection === 'ppo' ||
+    (usedReference && source.policySelection === 'reference-baseline')
+      ? { policySelection: source.policySelection }
+      : {}),
     ...(digest(scene.sceneSha256) ? { sceneProvenance: { sceneSha256: scene.sceneSha256 } } : {}),
     ...(typeof source.qualityGatePassed === 'boolean'
       ? { qualityGatePassed: source.qualityGatePassed }

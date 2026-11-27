@@ -59,7 +59,7 @@ class TestReferenceBudget(unittest.TestCase):
             def save(self, weights):
                 weights.write_text("fixture")
 
-        def export_weights(_weights, policy, _observations):
+        def export_weights(_weights, policy, _observations, *, metadata):
             policy.write_text("fixture")
             return "a" * 64
 

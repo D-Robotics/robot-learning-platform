@@ -229,13 +229,13 @@ def validate_dance_config(value: dict) -> dict:
 class ConfigurableChoreography(Dance):
     """The policy follows a student-authored schedule using bounded reward terms."""
 
-    def __init__(self, bundle, dance_config, training=False):
+    def __init__(self, bundle, dance_config, training=False, *, legacy_timing=False):
         self.dance_config = validate_dance_config(dance_config)
         self.reward = {**DEFAULT_REWARD_TUNING, **self.dance_config.get("rewardTuning", {})}
         self.sections = self.dance_config["sections"]
         self.starts = np.cumsum([0] + [item["beats"] for item in self.sections[:-1]]).astype(float)
         self.ends = self.starts + np.asarray([item["beats"] for item in self.sections], dtype=float)
-        super().__init__(bundle, training=training)
+        super().__init__(bundle, training=training, legacy_timing=legacy_timing)
         self.observation_space = gym.spaces.Box(
             -np.inf,
             np.inf,

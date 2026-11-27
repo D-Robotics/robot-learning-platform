@@ -91,6 +91,8 @@ export interface Sim2RealRunMetrics {
   trainingDeviceName?: string;
   originmanDance?: SimulationReplayEvidence & {
     qualityGatePassed?: boolean;
+    policySelection?: 'ppo' | 'reference-baseline';
+    referenceGuided?: boolean;
     sceneProvenance?: { sceneSha256?: string };
     evaluations: {
       bpm: number;

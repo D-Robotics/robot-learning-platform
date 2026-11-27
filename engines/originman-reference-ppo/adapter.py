@@ -22,7 +22,7 @@ import torch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "engines/originman-dance-ppo"))
-from adapter import read_request, validate_bundle, write_manifest, write_onnx
+from adapter import policy_metadata, read_request, validate_bundle, write_manifest, write_onnx
 from env import Config, OriginManEnv
 from train import WorkerProgress, resolve_training_device
 
@@ -374,7 +374,7 @@ def improves_reference(candidate, baseline):
 
 
 def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluation_env, ranges,
-                     *, stop_when_passing, baseline=None):
+                     *, stop_when_passing, baseline=None, metadata=None):
     torch.set_num_threads(1)
     device = resolve_training_device(os.environ.get("RDK_ORIGINMAN_DANCE_DEVICE", "auto"))
     stance_profile = evaluation_env.stance_profile
@@ -407,7 +407,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
                           reset_num_timesteps=False,
                           callback=progress)
             learner.save(candidate_weights)
-            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id])
+            policy_sha = write_onnx(candidate_weights, candidate_policy, OBSERVATIONS[contract_id], metadata=metadata)
             session = ReferenceEvaluator(onnx.load(candidate_policy))
             parity_error = 0.0
 
@@ -456,7 +456,7 @@ def train_and_export(bundle, output, trajectory, budget, num_envs, seed, evaluat
             if baseline["qualityGatePassed"] and not improves_reference(result, baseline):
                 baseline_weights.replace(output / "final.zip")
                 policy = output / "policy.onnx"
-                policy_sha = write_onnx(output / "final.zip", policy, OBSERVATIONS[contract_id])
+                policy_sha = write_onnx(output / "final.zip", policy, OBSERVATIONS[contract_id], metadata=metadata)
                 session = ReferenceEvaluator(onnx.load(policy))
                 baseline_parity = 0.0
 
@@ -530,6 +530,7 @@ def main():
     device, device_name, actual_steps, policy_sha, results, frames, checkpoints = train_and_export(
         bundle, output, trajectory, budget, num_envs, seed, env, ranges,
         stop_when_passing=not provenance, baseline=report["gate"],
+        metadata=policy_metadata(contract_id, scene_hash, TRACKED),
     )
     results["checkpointEvaluations"] = len(checkpoints)
     replay_path = output / "reference-replay.npz"
