@@ -1654,6 +1654,9 @@ export function createSim2RealWebApp(): Express {
       { runOnDevice, auth: studioSsoAuth },
       {
         prefix: SIM2REAL_VERSIONED_API_PREFIX,
+        registerRunMaintenance: (reconcile) => {
+          app.locals.reconcileLocalWorkerRuns = reconcile;
+        },
         ...(dobsReporter.enabled
           ? {
               onTelemetryIngestFailure: (failure) => {
@@ -2125,11 +2128,19 @@ export async function startSim2RealWebServer(): Promise<void> {
     );
   });
   hardenSim2RealHttpServer(server);
+  const reconcileRuns = () => {
+    void app.locals.reconcileLocalWorkerRuns().catch((error: unknown) => {
+      console.warn('[sim2real-web] worker reconciliation unavailable:', redactInternalError(error));
+    });
+  };
+  const runMaintenance = setInterval(reconcileRuns, 20_000);
+  runMaintenance.unref();
 
   let closing = false;
   const close = (signal: string): void => {
     if (closing) return;
     closing = true;
+    clearInterval(runMaintenance);
     console.log('[sim2real-web] received ' + signal + '; closing');
     void app.locals.dshRuntime?.fiber?.dispose?.();
     const forceExit = setTimeout(() => process.exit(1), 5_000);

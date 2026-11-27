@@ -127,6 +127,7 @@ import {
   listSim2RealDeployments,
   listSim2RealModels,
   listSim2RealRuns,
+  listActiveLocalWorkerRuns,
   summarizeSim2RealWorkspaceRuns,
   getSim2RealProject,
   listSim2RealProjects,
@@ -2228,6 +2229,7 @@ export interface Sim2RealRouterOptions {
    * without the route module importing any transport.
    */
   onTelemetryIngestFailure?: Sim2RealTelemetryRouteDeps['onIngestFailure'];
+  registerRunMaintenance?: (reconcile: () => Promise<void>) => void;
 }
 
 function normalizeApiPrefix(value: string | undefined): string {
@@ -2582,6 +2584,109 @@ export function createSim2RealRouter(
       );
     }
   };
+
+  const retainCompletedTrainingPolicy = async (
+    run: Sim2RealRunRecord,
+    owner: string | undefined,
+    accountId: string,
+  ) => {
+    if (
+      !['originman-dance', ORIGINMAN_REFERENCE_TASK].includes(run.taskId ?? '') ||
+      run.status !== 'completed' ||
+      run.mock !== false
+    )
+      return;
+    try {
+      await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 10_000, retain: true });
+    } catch (error) {
+      console.warn('[sim2real] unable to retain completed policy', redactInternalError(error));
+    }
+  };
+
+  const recordWorkerStatus = async (
+    run: Sim2RealRunRecord,
+    latest: Sim2RealRobogoRunResult,
+    owner: string | undefined,
+    accountId: string,
+  ) => {
+    const current = await updateSim2RealRun(
+      run.id,
+      {
+        status: latest.status,
+        ...(latest.message ? { summary: latest.message } : {}),
+        ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
+        ...(run.mock === true || latest.mock === true
+          ? { mock: true }
+          : latest.mock === false
+            ? { mock: false }
+            : {}),
+        ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
+        ...(latest.artifact ? { artifact: latest.artifact } : {}),
+        ...(latest.metrics ? { metrics: latest.metrics } : {}),
+        ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
+        ...(latest.progress ? { progress: latest.progress } : {}),
+        ...(['completed', 'failed', 'cancelled'].includes(latest.status) && !run.finishedAt
+          ? { finishedAt: new Date().toISOString() }
+          : {}),
+      },
+      owner,
+    );
+    if (current?.status === 'completed') {
+      await Promise.all([
+        attachEvalTelemetryForRun(current, owner),
+        retainCompletedDanceVideo(current, owner, accountId),
+        retainCompletedTrainingPolicy(current, owner, accountId),
+      ]);
+    }
+    return current ?? run;
+  };
+
+  let runMaintenanceActive = false;
+  let runMaintenanceOffset = 0;
+  options.registerRunMaintenance?.(async () => {
+    if (runMaintenanceActive) return;
+    runMaintenanceActive = true;
+    try {
+      const targets = await listActiveLocalWorkerRuns();
+      if (!targets.length) return;
+      const count = Math.min(4, targets.length);
+      const batch = Array.from(
+        { length: count },
+        (_, index) => targets[(runMaintenanceOffset + index) % targets.length],
+      );
+      runMaintenanceOffset = (runMaintenanceOffset + count) % targets.length;
+      await Promise.allSettled(
+        batch.map(async ({ run, owner }) => {
+          const accountId = owner ?? (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+          if (!accountId || !run.externalRunId) return;
+          const runner = await resolveRunRunner(run.computeResourceId, owner);
+          if (!runner) return;
+          const latest = await requestLocalTrainingStatus({
+            ...runner,
+            accountId,
+            externalRunId: run.externalRunId,
+            timeoutMs: 5000,
+          });
+          if (
+            latest.externalRunId !== run.externalRunId ||
+            !['completed', 'failed', 'cancelled'].includes(latest.status)
+          )
+            return;
+          // A foreground request may already have persisted this terminal result.
+          const current = await getSim2RealRun(run.id, owner);
+          if (
+            !current ||
+            current.externalRunId !== run.externalRunId ||
+            !['queued', 'running', 'cancelling'].includes(current.status)
+          )
+            return;
+          await recordWorkerStatus(current, latest, owner, accountId);
+        }),
+      );
+    } finally {
+      runMaintenanceActive = false;
+    }
+  });
 
   // One shared guard covers every route registered below, including both the
   // core handlers and the telemetry/device sub-routers.
@@ -3977,25 +4082,7 @@ export function createSim2RealRouter(
                     allowEnvironmentToken: !auth.isMultiUserDeployment(),
                     externalRunId: run.externalRunId,
                   });
-            const update = {
-              status: latest.status,
-              ...(latest.message ? { summary: latest.message } : {}),
-              ...(latest.failureDetail ? { failureDetail: latest.failureDetail } : {}),
-              ...(run.mock === true || latest.mock === true
-                ? { mock: true }
-                : latest.mock === false
-                  ? { mock: false }
-                  : {}),
-              ...(latest.checkpoint ? { checkpoint: latest.checkpoint } : {}),
-              ...(latest.artifact ? { artifact: latest.artifact } : {}),
-              ...(latest.metrics ? { metrics: latest.metrics } : {}),
-              ...(latest.taskEvaluation ? { taskEvaluation: latest.taskEvaluation } : {}),
-              ...(latest.progress ? { progress: latest.progress } : {}),
-              ...(['completed', 'failed', 'cancelled'].includes(latest.status) && !run.finishedAt
-                ? { finishedAt: new Date().toISOString() }
-                : {}),
-            };
-            current = (await updateSim2RealRun(run.id, update, owner)) ?? run;
+            current = await recordWorkerStatus(run, latest, owner, accountId);
             if (
               current.status === 'queued' &&
               run.backend === 'local' &&
@@ -4004,16 +4091,6 @@ export function createSim2RealRouter(
               latest.externalRunId === run.externalRunId
             ) {
               workerQueue = latest.queue;
-            }
-            // The poll only runs while the ledger copy is queued/running, so a
-            // completed status here is always the first observed completion:
-            // pull the engine's evaluation telemetry into the replay pipeline
-            // so the run page can render it without manual re-recording.
-            if (current.status === 'completed') {
-              await Promise.all([
-                attachEvalTelemetryForRun(current, owner),
-                retainCompletedDanceVideo(current, owner, accountId),
-              ]);
             }
           } catch (error) {
             if (isSim2RealRunnerNotFound(error)) {
@@ -5560,13 +5637,14 @@ export function createSim2RealRouter(
               { idempotencyKey, requestFingerprint },
             );
         if (!run) throw new Sim2RealError('sim2real_run_reservation_lost');
-        await retainCompletedDanceVideo(
-          run,
-          owner,
+        const retentionAccountId =
           auth.resolvePrincipal(request)?.accountId ??
-            owner ??
-            (!auth.isMultiUserDeployment() ? 'local-dev' : ''),
-        );
+          owner ??
+          (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+        await Promise.all([
+          retainCompletedDanceVideo(run, owner, retentionAccountId),
+          retainCompletedTrainingPolicy(run, owner, retentionAccountId),
+        ]);
         if (idempotencyKey) response.setHeader('Idempotency-Key', idempotencyKey);
         response.status(201).json({ ok: true, run });
       } catch (error) {

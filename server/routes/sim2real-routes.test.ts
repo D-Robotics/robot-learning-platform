@@ -9,11 +9,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_MICRODUCK_MODEL, type Sim2RealModelManifest } from '../../shared/sim2real.js';
 import type { Sim2RealAuthPort } from '../sim2real/sim2real-auth.js';
 import { originmanReferenceDigest } from '../sim2real/originman-reference-digest.js';
+import { readPolicyArtifact } from '../sim2real/policy-artifact-store.js';
 import {
   appendSim2RealTelemetry,
   createSim2RealArtifact,
   createSim2RealComputeResource,
   createSim2RealRun,
+  getSim2RealRun,
   reserveSim2RealRun,
   storeSim2RealRelayArtifact,
   updateSim2RealComputeResource,
@@ -74,6 +76,77 @@ async function fixture() {
   process.env.RDK_SIM2REAL_DEPLOYMENT = 'local';
   return createSim2RealRouter();
 }
+
+it('reconciles an unattended Worker result and retains the exact ONNX only for its owner', async () => {
+  await fixture();
+  let reconcile: (() => Promise<void>) | undefined;
+  createSim2RealRouter(
+    {},
+    {
+      registerRunMaintenance: (action) => {
+        reconcile = action;
+      },
+    },
+  );
+  const worker = await createSim2RealComputeResource(
+    { name: 'Classroom fixture', runnerUrl: 'http://127.0.0.1:19092/train' },
+    'owner-a',
+  );
+  const bytes = Buffer.from('authenticated original ONNX fixture');
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const run = await createSim2RealRun(
+    {
+      modelId: BUILTIN_MICRODUCK_MODEL.id,
+      backend: 'local',
+      status: 'running',
+      mock: false,
+      taskId: 'originman-dance',
+      computeResourceId: worker.id,
+      externalRunId: 'worker-owned-run',
+      summary: 'awaiting completion',
+    },
+    'owner-a',
+  );
+  const calls: string[] = [];
+  const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, options) => {
+    expect(new Headers(options?.headers).get('x-sim2real-account')).toBe('owner-a');
+    const pathname = new URL(String(input)).pathname;
+    calls.push(pathname);
+    return pathname.endsWith('/artifact')
+      ? new Response(bytes, {
+          headers: { 'content-length': String(bytes.length), 'x-artifact-sha256': sha256 },
+        })
+      : pathname.endsWith('/telemetry')
+        ? new Response(null, { status: 404 })
+        : Response.json({
+            status: 'completed',
+            runId: 'worker-owned-run',
+            mock: false,
+            artifact: {
+              artifactId: 'fixture-policy',
+              artifactRef: 'artifact://fixture/policy.onnx',
+              kind: 'compiled',
+              format: 'onnx',
+              sha256,
+              deployable: false,
+            },
+          });
+  });
+  try {
+    await reconcile!();
+    expect(await getSim2RealRun(run.id, 'owner-a')).toMatchObject({ status: 'completed' });
+    expect(await getSim2RealRun(run.id, 'owner-b')).toBeNull();
+    expect(await readPolicyArtifact(sha256, 'owner-a')).toEqual({ state: 'retained', bytes });
+    expect(await readPolicyArtifact(sha256, 'owner-b')).toEqual({ state: 'not-retained' });
+    await reconcile!();
+    expect(calls.filter((url) => !url.endsWith('/telemetry'))).toEqual([
+      '/runs/worker-owned-run',
+      '/runs/worker-owned-run/artifact',
+    ]);
+  } finally {
+    fetchMock.mockRestore();
+  }
+});
 
 it('uses the same trusted Worker resource for manual and submit screening, and skips both on Run replay', async () => {
   const router = await fixture();

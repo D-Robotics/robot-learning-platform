@@ -2768,6 +2768,21 @@ export async function listSim2RealRuns(owner?: string): Promise<Sim2RealRunRecor
     .map((item) => copy(withoutRunPrivate(item)));
 }
 
+/** Internal maintenance targets; these ownership references never enter API responses. */
+export async function listActiveLocalWorkerRuns() {
+  const ledger = await readLedger();
+  return ledger.runs
+    .filter(
+      (run) =>
+        run.backend === 'local' &&
+        !run.relayAgentUrl &&
+        run.externalRunId &&
+        run.computeResourceId &&
+        ['queued', 'running', 'cancelling'].includes(run.status),
+    )
+    .map((run) => ({ run: copy(withoutRunPrivate(run)), owner: run.owner }));
+}
+
 export async function summarizeSim2RealWorkspaceRuns(owner?: string) {
   const ledger = await readLedger();
   const statuses = {

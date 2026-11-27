@@ -112,6 +112,10 @@ export interface Sim2RealRunMetrics {
     trackingRmseRad?: number;
     zeroResidualRmseRad?: number;
     zeroResidualFramesEvaluated?: number;
+    policySelection?: 'ppo' | 'reference-baseline';
+    ppoTrackingRmseRad?: number;
+    ppoFramesEvaluated?: number;
+    ppoStabilityPassed?: boolean;
     trajectorySha256?: string;
     onnxMaxAbsError?: number;
     sections?: {

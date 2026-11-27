@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
@@ -20,26 +20,55 @@ async function checkDirectory(directory: string) {
   }
 }
 
+async function policyDirectory(owner?: string) {
+  const configuredRoot = (process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
+  if (!configuredRoot) throw new Error('Policy archive is not configured');
+  const base = path.join(await fs.realpath(configuredRoot), 'policy-artifacts');
+  const scope = digest(owner === undefined ? 'local-workspace' : `account:${owner}`);
+  return { base, directory: path.join(base, scope) };
+}
+
+/** Store only the exact bytes verified by the owner-scoped Run download. */
+export async function retainPolicyArtifact(sha256: string, bytes: Buffer, owner?: string) {
+  if (!bytes.length || bytes.length > MAX_POLICY_BYTES || digest(bytes) !== sha256) return false;
+  let temporary: string | undefined;
+  try {
+    const { base, directory } = await policyDirectory(owner);
+    for (const entry of [base, directory]) {
+      await fs.mkdir(entry, { mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EEXIST') throw error;
+      });
+      await checkDirectory(entry);
+    }
+    temporary = path.join(directory, `${randomUUID()}.tmp`);
+    const file = await fs.open(temporary, 'wx', 0o600);
+    try {
+      await file.writeFile(bytes);
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    await fs.rename(temporary, path.join(directory, `${sha256}.onnx`));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (temporary) await fs.rm(temporary, { force: true }).catch(() => undefined);
+  }
+}
+
 /** Read the existing owner-scoped archive. The caller authorizes the Run first. */
 export async function readPolicyArtifact(
   sha256: string,
   owner?: string,
 ): Promise<PolicyArtifactRead> {
-  const configuredRoot = (process.env.RDK_SIM2REAL_STORAGE_DIR ?? '').trim();
-  if (!configuredRoot || !/^[a-f0-9]{64}$/.test(sha256)) return { state: 'unavailable' };
-  const root = await fs.realpath(configuredRoot).catch(() => null);
-  if (!root) return { state: 'unavailable' };
-
-  const base = path.join(root, 'policy-artifacts');
-  const ownerDirectory = path.join(
-    base,
-    digest(owner === undefined ? 'local-workspace' : `account:${owner}`),
-  );
+  if (!/^[a-f0-9]{64}$/.test(sha256)) return { state: 'unavailable' };
   let handle: fs.FileHandle | undefined;
   try {
+    const { base, directory } = await policyDirectory(owner);
     await checkDirectory(base);
-    await checkDirectory(ownerDirectory);
-    const file = path.join(ownerDirectory, `${sha256}.onnx`);
+    await checkDirectory(directory);
+    const file = path.join(directory, `${sha256}.onnx`);
     const before = await fs.lstat(file);
     if (
       !before.isFile() ||

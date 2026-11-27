@@ -11,7 +11,7 @@ const object = (properties, required) => ({
 export const DANCE_ACCEPTANCE_TOOL = {
   name: 'rdk_originman_dance_acceptance',
   description:
-    '一键验收明确的 OriginMan 舞蹈 Run。沿同一 Run 等待训练完成，自动用本轮 ONNX 做独立仿真评测并核对场景与契约。按 studioNavigation 在右侧显示判定、未通过项、回放和策略下载。只涉及仿真评测。',
+    '沿同一条 OriginMan 舞蹈 Run 等待训练结束。舞段编排用原 ONNX 做独立仿真评测；参考跟跳核对原评测并分别给出仿真稳定性和 PPO 训练收益。用返回的导航或链接查看结果与回放。仅仿真。',
   inputSchema: object(
     {
       runId,
@@ -121,8 +121,47 @@ async function independentDanceReport(run, upstream, signal) {
   return result;
 }
 
+export function referenceLearningResult(report) {
+  const baseline = report?.zeroResidualRmseRad;
+  const candidate = report?.ppoTrackingRmseRad ?? report?.trackingRmseRad;
+  const candidateFrames = report?.ppoFramesEvaluated ?? report?.framesEvaluated;
+  const candidateStable = report?.ppoStabilityPassed ?? report?.qualityGatePassed;
+  const comparable =
+    report?.framesExpected > 0 &&
+    candidateFrames === report.framesExpected &&
+    report.zeroResidualFramesEvaluated === report.framesExpected &&
+    Number.isFinite(baseline) &&
+    baseline >= 0 &&
+    Number.isFinite(candidate) &&
+    candidate >= 0;
+  const difference = comparable ? candidate - baseline : null;
+  const learningStatus =
+    candidateStable === false
+      ? 'unstable'
+      : difference === null
+        ? 'unknown'
+        : Math.abs(difference) <= 1e-9
+          ? 'matched'
+          : difference < 0
+            ? 'improved'
+            : 'regressed';
+  return {
+    stabilityStatus:
+      report?.qualityGatePassed === true
+        ? 'passed'
+        : report?.qualityGatePassed === false
+          ? 'failed'
+          : 'unknown',
+    learningStatus,
+    ...(report?.policySelection && { policySelection: report.policySelection }),
+    ...(difference !== null && { ppoTrackingRmseRad: candidate, zeroResidualRmseRad: baseline }),
+  };
+}
+
 export function recordedDanceQuality(run) {
-  const evidence = run.metrics?.originmanDance ?? run.metrics?.originmanReference;
+  if (run.taskId === 'originman-reference-track')
+    return referenceLearningResult(run.metrics?.originmanReference);
+  const evidence = run.metrics?.originmanDance;
   const sections = evidence?.evaluations?.find(
     (row) => row.bpm === run.training?.originmanDance?.bpm,
   )?.sections;
@@ -161,7 +200,7 @@ export async function acceptDanceSimulation(run, { upstream, signal }) {
     )
       throw Error('本轮参考轨迹、场景或仿真结果记录不完整。');
     return {
-      ...recordedDanceQuality(run),
+      ...referenceLearningResult(report),
       state: report.qualityGatePassed ? 'passed' : 'failed',
       evidenceStatus: 'verified',
       evidenceSource: 'original-worker',

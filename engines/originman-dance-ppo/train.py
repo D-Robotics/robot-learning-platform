@@ -249,6 +249,11 @@ def train(*, bundle: Path, output: Path, dance_config: dict, num_envs: int,
             policy_kwargs={"net_arch": [160, 160], "log_std_init": -1.1},
             verbose=0,
         )
+        # The free-base body is already stable at zero action. Applying the
+        # same initial exploration variance to weight-bearing legs and arms
+        # makes the legs destabilize the stance before a beat can be learned.
+        with torch.no_grad():
+            model.policy.log_std[dance.legs] = -2.8
         model.learn(total_timesteps=total_timesteps, callback=callback, progress_bar=False)
         model.save(output / "final")
         nominal_bpm = dance_config["bpm"]

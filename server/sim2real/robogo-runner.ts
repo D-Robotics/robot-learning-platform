@@ -654,6 +654,10 @@ function safeReferenceMetrics(
     trackingRmseRad,
     zeroResidualRmseRad,
     zeroResidualFramesEvaluated,
+    policySelection,
+    ppoTrackingRmseRad,
+    ppoFramesEvaluated,
+    ppoStabilityPassed,
     trajectorySha256,
     onnxMaxAbsError,
     sections: rawSections,
@@ -718,6 +722,22 @@ function safeReferenceMetrics(
         zeroResidualRmseRad,
         zeroResidualFramesEvaluated,
       }),
+    ...(policySelection === 'reference-baseline' || policySelection === 'ppo'
+      ? { policySelection }
+      : {}),
+    ...(typeof ppoTrackingRmseRad === 'number' &&
+      Number.isFinite(ppoTrackingRmseRad) &&
+      ppoTrackingRmseRad >= 0 &&
+      ppoTrackingRmseRad <= 20 &&
+      typeof ppoFramesEvaluated === 'number' &&
+      Number.isSafeInteger(ppoFramesEvaluated) &&
+      ppoFramesEvaluated > 0 &&
+      ppoFramesEvaluated <= framesExpected &&
+      typeof ppoStabilityPassed === 'boolean' && {
+        ppoTrackingRmseRad,
+        ppoFramesEvaluated,
+        ppoStabilityPassed,
+      }),
     ...(sections && { sections }),
     maxTiltDeg,
     finalYawDeg,
@@ -737,11 +757,15 @@ function safeReferenceMetrics(
     checkpointEvaluations <= 64
       ? { checkpointEvaluations }
       : {}),
-    ...(typeof selectedCheckpointSteps === 'number' &&
-      selectedCheckpointSteps >= 8192 &&
-      selectedCheckpointSteps % 4096 === 0 &&
-      trainingSteps !== undefined &&
-      selectedCheckpointSteps <= trainingSteps && { selectedCheckpointSteps }),
+    ...(policySelection === 'reference-baseline' && selectedCheckpointSteps === 0
+      ? { selectedCheckpointSteps }
+      : typeof selectedCheckpointSteps === 'number' &&
+          selectedCheckpointSteps >= 8192 &&
+          selectedCheckpointSteps % 4096 === 0 &&
+          trainingSteps !== undefined &&
+          selectedCheckpointSteps <= trainingSteps
+        ? { selectedCheckpointSteps }
+        : {}),
     ...(replay && { replay }),
     ...(video && { video }),
   };
