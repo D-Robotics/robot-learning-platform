@@ -225,7 +225,9 @@ test('configuration invoked through a directory alias actually runs instead of s
     assert.ok(fs.existsSync(path.join(source, '.mcp.json')));
   } else {
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /Node版本不支持/);
+    assert.match(result.stderr, /不符合插件运行要求/);
+    assert.ok(result.stderr.includes(`Node ${process.versions.node}`));
+    assert.match(result.stderr, /setup/);
   }
 });
 
