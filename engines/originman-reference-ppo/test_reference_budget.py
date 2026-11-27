@@ -111,6 +111,50 @@ class TestReferenceBudget(unittest.TestCase):
                 self.assertEqual(report["referenceLeadFrames"], expected)
                 self.assertEqual(report["gate"], compensated if expected else original)
 
+    def test_feedback_starts_at_zero_and_learns_only_from_the_same_joint(self):
+        nn = worker.torch.nn
+        net = nn.Sequential(nn.Linear(78, 160), nn.Tanh(), nn.Linear(160, 160), nn.Tanh())
+        head = nn.Linear(160, 18)
+        policy = SimpleNamespace(mlp_extractor=SimpleNamespace(policy_net=net), action_net=head)
+        worker.initialize_reference_feedback(policy)
+        obs = worker.torch.zeros(1, 78)
+        obs[0, 47:65] = .25
+        obs[0, 29:47] = .1
+        action = head(net(obs))
+        np.testing.assert_array_equal(action.detach().numpy(), np.zeros((1, 18)))
+        action.sum().backward()
+        gradient = head.weight.grad
+        self.assertEqual(int(gradient.count_nonzero()), 36)
+        for i in range(18):
+            self.assertGreater(float(gradient[i, i]), 0)
+            self.assertGreater(float(gradient[i, i + 18]), 0)
+
+    def test_training_window_compares_matching_frame_and_does_not_count_as_a_full_replay(self):
+        env = worker.gym.Env()
+        env.tick = 99
+        env.previous = np.zeros(18)
+        env.model = env.data = object()
+        env.reset = lambda **_: (None, {})
+        env.observe = lambda: "snapshot observation"
+
+        def step(_action):
+            env.tick += 1
+            return None, 99.0, False, False, {"jointSquaredError": .01, "tilt": 0, "episodeDone": True}
+
+        env.step = step
+        window = worker.ReferenceTrainingWindows(env, ([(99, np.ones(3))], np.full(101, .02)))
+        with patch.object(worker.mujoco, "mj_setState") as restore, patch.object(worker.mujoco, "mj_forward"):
+            self.assertEqual(window.reset()[0], "snapshot observation")
+            self.assertEqual(env.tick, 99)
+            restore.assert_called_once()
+        with patch.object(worker, "TRAINING_WINDOW_FRAMES", 1):
+            _, reward, failed, truncated, info = window.step(np.zeros(18))
+        self.assertAlmostEqual(reward, 4.0)
+        self.assertFalse(failed)
+        self.assertTrue(truncated)
+        self.assertFalse(info["episodeDone"])
+        self.assertEqual(info["referenceFrame"], 99)
+
     def test_long_composition_accepts_every_range_including_a_short_pose(self):
         ranges = [{"id": "short", "from": 0, "to": 2}]
         ranges.extend({"id": "arms", "from": index, "to": index + 100}

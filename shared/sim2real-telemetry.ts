@@ -108,6 +108,7 @@ export interface Sim2RealRunMetrics {
   originmanReference?: SimulationReplayEvidence & {
     checkpointEvaluations?: number;
     selectedCheckpointSteps?: number;
+    trainingFramesObserved?: number;
     framesExpected: number;
     framesEvaluated: number;
     trackingMaeRad: number;

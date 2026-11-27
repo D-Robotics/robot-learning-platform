@@ -799,6 +799,7 @@ test('reference playback seeks only to evaluated sections and handles old and mi
     metrics: {
       [source]: {
         selectedCheckpointSteps: 32768,
+        trainingFramesObserved: 162,
         framesExpected: 170,
         framesEvaluated: 105,
         trackingMaeRad: 0.02,
@@ -831,6 +832,10 @@ test('reference playback seeks only to evaluated sections and handles old and mi
   assert.equal(workshop.pathname, '/robotics-learning/workshop.html');
   assert.equal(workshop.searchParams.get('computeResourceId'), 'workshop-worker');
   assert.match(document.getElementById('run-config-body').textContent, /回放与策略对应步数32,?768/);
+  assert.equal(document.getElementById('completion-heading').textContent, '训练采样覆盖');
+  assert.match(document.getElementById('completion-empty').textContent, /162 \/ 170 帧/);
+  assert.equal(document.getElementById('completion-method').hidden, true);
+  assert.equal(document.getElementById('completion-chart').hasAttribute('hidden'), true);
   const control = document.getElementById('replay-segment-controls');
   const select = document.getElementById('replay-segment');
   assert.equal(control.hidden, false);

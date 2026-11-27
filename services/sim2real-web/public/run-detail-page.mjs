@@ -133,6 +133,16 @@ function drawCurve(document, run, completion = false) {
   const raw = Array.isArray(run.progress) ? run.progress : [];
   if (completion) {
     const caption = document.getElementById('completion-caption');
+    const reference = run.metrics?.originmanReference;
+    if (Number.isInteger(reference?.trainingFramesObserved)) {
+      svg.setAttribute('hidden', '');
+      empty.hidden = false;
+      text(document, 'completion-heading', '训练采样覆盖');
+      document.getElementById('completion-method')?.setAttribute('hidden', '');
+      empty.textContent = `分段采样覆盖 ${reference.trainingFramesObserved} / ${reference.framesExpected} 帧。完整执行结果见上方评测。`;
+      if (caption) caption.hidden = true;
+      return;
+    }
     const latest = raw.at(-1);
     if (caption) {
       caption.hidden = !raw.length;

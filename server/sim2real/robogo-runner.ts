@@ -678,6 +678,7 @@ function safeReferenceMetrics(
     calibrationSha256,
     checkpointEvaluations,
     selectedCheckpointSteps,
+    trainingFramesObserved,
   } = value as Record<string, unknown>;
   if (
     typeof framesExpected !== 'number' ||
@@ -723,6 +724,10 @@ function safeReferenceMetrics(
       Number.isSafeInteger(referenceLeadFrames) &&
       referenceLeadFrames >= 0 &&
       referenceLeadFrames <= 50 && { referenceLeadFrames }),
+    ...(typeof trainingFramesObserved === 'number' &&
+      Number.isSafeInteger(trainingFramesObserved) &&
+      trainingFramesObserved > 0 &&
+      trainingFramesObserved <= framesExpected && { trainingFramesObserved }),
     ...(typeof uncompensatedRmseRad === 'number' &&
       Number.isFinite(uncompensatedRmseRad) &&
       uncompensatedRmseRad >= 0 &&
