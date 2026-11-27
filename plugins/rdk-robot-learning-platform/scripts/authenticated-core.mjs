@@ -1010,6 +1010,7 @@ export async function connectAuthenticatedCore({
         throw Error('当前账号无法读取这条 Run，请核对原运行链接。');
       return {
         ...value.run,
+        ...(Array.isArray(value.artifactRegistry) && { artifactRegistry: value.artifactRegistry }),
         ...(typeof value.workshopEvidenceIssue === 'string' && {
           workshopEvidenceIssue: value.workshopEvidenceIssue,
         }),

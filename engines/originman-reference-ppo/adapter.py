@@ -233,9 +233,16 @@ class ReferenceTracking(gym.Env):
         self.tick += 1
         self.previous = action
         complete = self.tick == len(self.target)
+        episode_end_reason = (
+            "nonfinite" if failed and not np.isfinite(self.data.qpos).all() else
+            "contact" if other_contacts else
+            "tilt" if "tilt" in failure else
+            "height" if "height" in failure else None
+        )
         return self.observe(), reward, failed, complete and not failed, {
             "episodeDone": complete or failed,
             "taskSuccess": complete and not failed,
+            "episodeEndReason": episode_end_reason,
             "failure": failure,
             "tilt": tilt,
             "yaw": math.degrees(yaw),

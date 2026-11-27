@@ -68,6 +68,7 @@ import {
   acceptDanceSimulation,
   createDanceEvaluationReader,
   danceEvaluation,
+  recordedDanceQuality,
 } from './dance-evaluation.mjs';
 import {
   DANCE_TRAINING_TOOLS,
@@ -356,6 +357,16 @@ function attachRunVisualization(payload, runId, baseUrl, section) {
         studentReply += '当前没有全程同帧的零残差对照，跟踪改善待确认。';
       }
     }
+  }
+  if (rawStatus === 'completed' && (danceRun || tracking)) {
+    const registry = payload.run?.artifactRegistry;
+    if (Array.isArray(registry)) {
+      studentReply += registry.length
+        ? `\n制品库已登记 ${registry.length} 个同一策略摘要的版本。`
+        : '\n本轮策略尚未登记到制品库。';
+    }
+    if ((payload.run?.artifact ?? payload.artifact)?.deployable === false)
+      studentReply += '\n本轮策略仅用于仿真。';
   }
   if (rawStatus === 'completed' && dance) {
     const passed = dance.qualityGatePassed;
@@ -1059,8 +1070,9 @@ export function experienceProxy(
       args.runId,
     );
     const task = value.run?.taskId ?? value.taskId;
-    if (task && task !== 'originman-dance') throw Error('请选择一条 OriginMan 舞蹈 Run。');
-    const detail = runVisualizationLink(baseUrl, args.runId);
+    if (task && !['originman-dance', REFERENCE_TRACKING_TASK].includes(task))
+      throw Error('请选择一条 OriginMan 舞蹈 Run。');
+    const detail = runVisualizationLink(baseUrl, args.runId, task);
     const status = value.run?.status ?? value.status;
     if (status !== 'completed') {
       const result = attachRunVisualization(value, args.runId, baseUrl);
@@ -1075,8 +1087,9 @@ export function experienceProxy(
         }),
       };
     }
+    let run;
     try {
-      const run = await upstream.readTrainingRun?.(args.runId, { signal });
+      run = await upstream.readTrainingRun?.(args.runId, { signal });
       if (run?.id !== args.runId) throw Error('当前连接未确认这条原 Run。');
       const simulationAcceptance = await acceptDanceSimulation(run, {
         upstream: upstream.evaluateDanceRun ? { evaluateDanceRun: evaluationReader } : upstream,
@@ -1090,8 +1103,7 @@ export function experienceProxy(
       return {
         ...result,
         simulationAcceptance,
-        delivery:
-          '立即按 studioNavigation 打开 Studio 右侧的本轮结果。页面有判定、分段检查、回放和策略下载。报告实际可用的入口。',
+        delivery: result.delivery,
       };
     } catch (error) {
       signal?.throwIfAborted();
@@ -1099,7 +1111,12 @@ export function experienceProxy(
         return {
           runId: args.runId,
           status,
-          simulationAcceptance: { state: 'waiting', reason: error.message },
+          simulationAcceptance: {
+            ...recordedDanceQuality(run ?? {}),
+            state: 'waiting',
+            evidenceStatus: 'pending',
+            reason: error.message,
+          },
           nextTool: DANCE_ACCEPTANCE_TOOL.name,
           nextArguments: { runId: args.runId },
           studentReply: error.message,
@@ -1108,7 +1125,12 @@ export function experienceProxy(
       return {
         runId: args.runId,
         status,
-        simulationAcceptance: { state: 'unverified', reason: error.message },
+        simulationAcceptance: {
+          ...recordedDanceQuality(run ?? {}),
+          state: 'unverified',
+          evidenceStatus: 'unverified',
+          reason: error.message,
+        },
         ...(detail && { links: { runDetail: detail } }),
         studentReply: '本轮训练已完成，独立仿真验收待核对。' + error.message,
         delivery: '展示待核对原因。恢复时对同一个 Run 再验收。',
@@ -1333,8 +1355,8 @@ export function experienceProxy(
       const version = String(params.clientInfo?.version ?? '');
       host = {
         family:
-          ['qoder', 'studio', 'codex', 'vscode', 'claude', 'cursor'].find((name) =>
-            reported.includes(name),
+          ['workbuddy', 'qoder', 'studio', 'codex', 'vscode', 'claude', 'cursor'].find((name) =>
+            reported.replaceAll(' ', '').includes(name),
           ) ?? 'other',
         reportedVersion: /^\d{1,3}(?:\.\d{1,3}){1,3}(?:[-+][A-Za-z0-9.-]{1,30})?$/.test(version)
           ? version
@@ -2314,6 +2336,19 @@ export function experienceProxy(
         ) {
           const studentReply = experimentStudentReply(payload);
           if (studentReply) payload = { ...payload, studentReply };
+        }
+        if (host.family === 'workbuddy') {
+          const { studioNavigation, qoderNavigation, ...workbuddyPayload } = payload;
+          const href =
+            studioNavigation?.arguments?.url ?? qoderNavigation?.steps?.[0]?.arguments?.url;
+          if (href) {
+            payload = {
+              ...workbuddyPayload,
+              links: { ...workbuddyPayload.links, browser: href },
+              delivery:
+                '在 WorkBuddy 中提供可点击链接，由学员在浏览器打开，并说明当前页面可查看的实际结果。',
+            };
+          }
         }
         payload = { ...payload, pluginRuntime: pluginRuntimeIdentity() };
         return {

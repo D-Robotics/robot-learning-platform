@@ -81,6 +81,10 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   assert.equal(evaluationCount, 0);
   const final = await call(accept, waiting.nextArguments);
   assert.equal(final.simulationAcceptance.state, 'failed');
+  assert.equal(final.simulationAcceptance.evidenceStatus, 'verified');
+  assert.equal(final.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(final.simulationAcceptance.sectionsPassed, 0);
+  assert.equal(final.simulationAcceptance.sectionsEvaluated, 1);
   assert.deepEqual(final.simulationAcceptance.sections, checks);
   assert.match(final.studentReply, /未达标/);
   assert.equal(new URL(final.studioNavigation.arguments.url).searchParams.get('runId'), run.id);
@@ -89,6 +93,8 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   resultScene = 'c'.repeat(64);
   const stale = await call(accept);
   assert.equal(stale.simulationAcceptance.state, 'unverified');
+  assert.equal(stale.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(stale.simulationAcceptance.evidenceStatus, 'unverified');
   assert.equal(stale.studioNavigation, undefined);
   resultScene = scene;
   checks[0].passed = true;
@@ -98,6 +104,51 @@ test('OriginMan one-step acceptance follows the same Run, verifies one evaluatio
   run.status = 'failed';
   assert.equal((await call(accept)).simulationAcceptance.state, 'not-evaluated');
   assert.equal(evaluationCount, 3);
+});
+
+test('WorkBuddy accepts the original blocks evaluation and returns a browser entry', async () => {
+  const { experienceProxy } =
+    await import('../plugins/rdk-robot-learning-platform/scripts/experience-mcp.mjs');
+  const run = {
+    id: 'reference-workbuddy',
+    status: 'completed',
+    taskId: 'originman-reference-track',
+    mock: false,
+    contractId: 'custom-policy-originman-reference-v2',
+    artifact: { format: 'onnx', sha256: 'a'.repeat(64), deployable: false },
+    metrics: {
+      originmanReference: {
+        qualityGatePassed: false,
+        framesEvaluated: 85,
+        framesExpected: 481,
+        sceneSha256: 'b'.repeat(64),
+        referenceSha256: 'c'.repeat(64),
+        sections: [{ id: 'wave', completed: false }],
+      },
+    },
+  };
+  const proxy = experienceProxy(
+    {
+      async request(method) {
+        if (method === 'initialize') return { capabilities: {}, serverInfo: { name: 'fixture' } };
+        return { structuredContent: { runId: run.id, status: run.status, taskId: run.taskId } };
+      },
+      readTrainingRun: async () => run,
+      verifyPolicyDownload: async () => true,
+      evaluateDanceRun: async () => assert.fail('Blocks uses the original trajectory evaluation'),
+    },
+    { env: { RDK_SIM2REAL_MCP_BASE_URL: 'https://platform.test/learning' } },
+  );
+  await proxy('initialize', { clientInfo: { name: 'WorkBuddy' } });
+  const { structuredContent: result } = await proxy('tools/call', {
+    name: 'rdk_originman_dance_acceptance',
+    arguments: { runId: run.id },
+  });
+  assert.equal(result.simulationAcceptance.evidenceSource, 'original-worker');
+  assert.equal(result.simulationAcceptance.qualityStatus, 'failed');
+  assert.equal(result.simulationAcceptance.framesEvaluated, 85);
+  assert.match(result.links.browser, /originman-reference-run\.html\?runId=reference-workbuddy/);
+  assert.equal(result.studioNavigation, undefined);
 });
 
 test('MCP business failures retain flat, nested and textual diagnostics', () => {

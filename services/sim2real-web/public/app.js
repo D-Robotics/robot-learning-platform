@@ -8980,7 +8980,7 @@ function runProgressPoints(run) {
   );
 }
 
-function drawRunProgressChart(canvas, points, { title = '' } = {}) {
+function drawRunProgressChart(canvas, points, { title = '', requiresEpisodeSamples = false } = {}) {
   const ctx = clearCanvas(canvas, RUN_PROGRESS_CANVAS_W, RUN_PROGRESS_CANVAS_H);
   if (!ctx) return false;
   const width = RUN_PROGRESS_CANVAS_W;
@@ -9039,7 +9039,10 @@ function drawRunProgressChart(canvas, points, { title = '' } = {}) {
   ctx.strokeStyle = 'rgba(96, 165, 250, 0.9)';
   ctx.lineWidth = 1.5;
   ctx.beginPath();
-  points.forEach((point, index) => {
+  const ratePoints = requiresEpisodeSamples
+    ? points.filter((point) => point.episodeSamples > 0)
+    : points;
+  ratePoints.forEach((point, index) => {
     const x = xOf(point.iteration);
     const y = ySuccess(point.recentSuccess);
     if (index === 0) ctx.moveTo(x, y);
@@ -9070,7 +9073,8 @@ function renderRunProgressLiveChart(run) {
   const show = (active && run.mock !== true) || points.length > 0;
   wrap.hidden = !show;
   if (!show) return;
-  const isDance = run.training?.engine === 'originman-dance-ppo';
+  const isDance = ['originman-dance', 'originman-reference-track'].includes(run.taskId) ||
+    run.training?.engine === 'originman-dance-ppo';
   const rateLabel = isDance ? '近期完成率' : '近期成功率';
   canvas.setAttribute('aria-label', `训练奖励与${rateLabel}曲线`);
   setText('run-progress-live-note', isDance
@@ -9083,10 +9087,15 @@ function renderRunProgressLiveChart(run) {
     } else {
       const last = points[points.length - 1];
       const total = last.totalIterations || last.iteration;
-      caption.textContent = `第 ${last.iteration}/${total} 轮 · 奖励 ${formatMetricNumber(last.meanReward, 3)} · ${rateLabel} ${metricPercent(last.recentSuccess)}%`;
+      const rate = isDance && !(last.episodeSamples > 0)
+        ? last.episodeSamples === 0 ? '暂无已结束的回合' : '回合样本数未记录'
+        : `${rateLabel} ${metricPercent(last.recentSuccess)}%`;
+      const count = isDance && last.episodeSamples > 0 && Number.isInteger(last.episodeCompleted)
+        ? `（${last.episodeCompleted}/${last.episodeSamples} 回合）` : '';
+      caption.textContent = `第 ${last.iteration}/${total} 轮 · 奖励 ${formatMetricNumber(last.meanReward, 3)} · ${rate}${count}`;
     }
   }
-  drawRunProgressChart(canvas, points);
+  drawRunProgressChart(canvas, points, { requiresEpisodeSamples: isDance });
 }
 
 // Use a worker-reported iteration pair, or a checkpoint with a known target.

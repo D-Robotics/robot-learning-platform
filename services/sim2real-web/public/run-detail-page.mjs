@@ -131,6 +131,33 @@ function drawCurve(document, run, completion = false) {
   if (!svg || !empty) return;
   svg.replaceChildren();
   const raw = Array.isArray(run.progress) ? run.progress : [];
+  if (completion) {
+    const caption = document.getElementById('completion-caption');
+    const latest = raw.at(-1);
+    if (caption) {
+      caption.hidden = !raw.length;
+      if (!latest?.episodeSamples) {
+        caption.textContent = '历史记录未提供已结束回合的样本数，完成率待核实。';
+        if (latest?.episodeSamples === 0) caption.textContent = '当前采样中没有已结束的回合。';
+      } else {
+        const labels = {
+          contact: '非脚部接触地面', tilt: '倾角超限', height: '机身过低',
+          travel: '位移超限', nonfinite: '仿真状态异常', unknown: '原因未归类',
+        };
+        const reasons = Object.entries(labels).flatMap(([key, label]) => {
+          const count = latest.episodeTermination?.[key];
+          return count > 0 ? [`${label} ${count}`] : [];
+        });
+        const count = Number.isInteger(latest.episodeCompleted)
+          ? `完成 ${latest.episodeCompleted}/${latest.episodeSamples} 个回合`
+          : `已结束回合样本 ${latest.episodeSamples} 个，原记录未单独保存完成数`;
+        const termination = latest.episodeTermination
+          ? reasons.length ? '提前终止：' + reasons.join('、') : '本次采样无提前终止'
+          : '原记录未提供终止原因';
+        caption.textContent = `${count} · ${termination}`;
+      }
+    }
+  }
   const points = raw.map((point, index) => ({
     x: Number(point.iteration ?? point.step ?? point.trainingStep ?? index + 1),
     y: completion
@@ -469,7 +496,7 @@ function renderVideo(document, location, run, runId) {
       : '回放生成后会校验策略与轨迹摘要，再显示本次视频。');
 }
 
-function renderRun(document, location, run, runId, evidenceIssue) {
+function renderRun(document, location, run, runId, evidenceIssue, artifactRegistry) {
   const tracking = run.taskId === REFERENCE_TASK;
   const recovery = run.taskId === 'originman-recovery';
   const evidenceMessage = recovery && run.status === 'completed' ? workshopEvidenceMessage(evidenceIssue) : '';
@@ -518,6 +545,12 @@ function renderRun(document, location, run, runId, evidenceIssue) {
     hardware.textContent = run.artifact?.deployable === true
       ? '真机迁移需核对同源评测、已发布制品、目标设备和部署预检。'
       : '当前策略用于仿真。真机迁移还需板端契约、关节标定和可部署制品。';
+    if (Array.isArray(artifactRegistry)) {
+      const published = artifactRegistry.filter((item) => item.status === 'published').length;
+      hardware.textContent += artifactRegistry.length
+        ? ` 制品库已登记 ${artifactRegistry.length} 个版本，已发布 ${published} 个。`
+        : ' 本轮策略尚未登记到制品库。';
+    }
   }
   const copyConfig = document.getElementById('run-copy-config');
   if (copyConfig) {
@@ -591,7 +624,9 @@ function renderRun(document, location, run, runId, evidenceIssue) {
   renderDanceReferenceLinks(document, run, SECTION_LABELS);
   if (tracking) text(document, 'run-kind', 'OriginMan · 参考轨迹仿真');
   drawCurve(document, run);
-  if (tracking) drawCurve(document, run, true);
+  const completionSection = document.getElementById('completion-section');
+  if (completionSection) completionSection.hidden = !isDance;
+  if (tracking || isDance) drawCurve(document, run, true);
   renderVideo(document, location, run, runId);
   text(document, 'run-connection-status', '已连接并定位到本次 Run');
 }
@@ -817,7 +852,7 @@ export async function startRunDetail({
       lastRun = run;
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
-      renderRun(document, location, run, runId, payload.workshopEvidenceIssue);
+      renderRun(document, location, run, runId, payload.workshopEvidenceIssue, payload.artifactRegistry);
       renderReferenceQueue(document, run, payload.queue, now());
       if (queueButton) queueButton.hidden = !run.computeResourceId;
       void showResimulatedReplay(document, location, fetchImpl, run);

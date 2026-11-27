@@ -121,28 +121,69 @@ async function independentDanceReport(run, upstream, signal) {
   return result;
 }
 
+export function recordedDanceQuality(run) {
+  const evidence = run.metrics?.originmanDance ?? run.metrics?.originmanReference;
+  const sections = evidence?.evaluations?.find(
+    (row) => row.bpm === run.training?.originmanDance?.bpm,
+  )?.sections;
+  return {
+    qualityStatus:
+      evidence?.qualityGatePassed === true
+        ? 'passed'
+        : evidence?.qualityGatePassed === false
+          ? 'failed'
+          : 'unknown',
+    ...(sections?.length &&
+      sections.every((section) => typeof section.passed === 'boolean') && {
+        sectionsPassed: sections.filter((section) => section.passed).length,
+        sectionsEvaluated: sections.length,
+      }),
+  };
+}
+
 export async function acceptDanceSimulation(run, { upstream, signal }) {
   if (
     run.status !== 'completed' ||
     run.mock !== false ||
-    run.taskId !== 'originman-dance' ||
-    run.artifact?.format !== 'onnx' ||
+    !['originman-dance', 'originman-reference-track'].includes(run.taskId) ||
+    run.artifact?.format?.toLowerCase() !== 'onnx' ||
     !shaPattern.test(run.artifact.sha256 ?? '')
   )
     throw Error('一键仿真验收需要一条已完成且有可核验 ONNX 的真实 OriginMan 舞蹈 Run。');
+  if (run.taskId === 'originman-reference-track') {
+    const report = run.metrics?.originmanReference;
+    if (
+      !report ||
+      !/^custom-policy-originman-reference-v[12]$/.test(run.contractId ?? '') ||
+      !shaPattern.test(report.sceneSha256 ?? '') ||
+      !shaPattern.test(report.referenceSha256 ?? '') ||
+      typeof report.qualityGatePassed !== 'boolean'
+    )
+      throw Error('本轮参考轨迹、场景或仿真结果记录不完整。');
+    return {
+      ...recordedDanceQuality(run),
+      state: report.qualityGatePassed ? 'passed' : 'failed',
+      evidenceStatus: 'verified',
+      evidenceSource: 'original-worker',
+      contractId: run.contractId,
+      policySha256: run.artifact.sha256,
+      sceneSha256: report.sceneSha256,
+      referenceSha256: report.referenceSha256,
+      framesEvaluated: report.framesEvaluated,
+      framesExpected: report.framesExpected,
+      sections: report.sections ?? [],
+    };
+  }
   const recorded = run.metrics?.originmanDance;
   const scene = recorded?.sceneProvenance?.sceneSha256;
-  if (
-    !upstream.evaluateDanceRun ||
-    typeof recorded?.qualityGatePassed !== 'boolean' ||
-    !shaPattern.test(scene ?? '') ||
-    !run.contractId
-  )
+  if (!upstream.evaluateDanceRun || typeof recorded?.qualityGatePassed !== 'boolean')
     throw Error('本轮场景、契约或质量记录尚不完整。');
   const result = await independentDanceReport(run, upstream, signal);
   if (
-    result.source.sceneSha256 !== scene ||
-    result.source.contractId !== run.contractId ||
+    !shaPattern.test(result.source.sceneSha256 ?? '') ||
+    !/^custom-policy-originman-dance-v[12]$/.test(result.source.contractId ?? '') ||
+    (scene && result.source.sceneSha256 !== scene) ||
+    (run.contractId && result.source.contractId !== run.contractId) ||
     result.qualityGatePassed !== recorded.qualityGatePassed
   )
     throw Error('独立仿真与原 Run 的场景、契约或质量结论不一致。');
@@ -186,12 +227,15 @@ export async function acceptDanceSimulation(run, { upstream, signal }) {
     });
   return {
     ...acceptance,
+    ...recordedDanceQuality(run),
+    evidenceStatus: 'verified',
+    evidenceSource: 'independent-replay',
     allTemposVerified,
     evaluations: checkedRows,
     state: result.qualityGatePassed ? 'passed' : 'failed',
     policySha256: result.source.policySha256,
-    sceneSha256: scene,
-    contractId: run.contractId,
+    sceneSha256: result.source.sceneSha256,
+    contractId: result.source.contractId,
     evaluatedAt: result.evaluatedAt,
   };
 }

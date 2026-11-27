@@ -2598,6 +2598,49 @@ export function createSim2RealRouter(
     prefix,
     requestOwner: (request, response) => requestOwner(request, response, auth),
     getRun: getSim2RealRun,
+    recoverEvidence: async (run, owner) => {
+      const accountId = owner ?? (!auth.isMultiUserDeployment() ? 'local-dev' : '');
+      if (!accountId || run.backend !== 'local' || run.relayAgentUrl || !run.externalRunId)
+        return null;
+      const runner = await resolveRunRunner(run.computeResourceId, owner);
+      if (!runner) return null;
+      try {
+        const latest = await requestLocalTrainingStatus({
+          ...runner,
+          accountId,
+          externalRunId: run.externalRunId,
+          timeoutMs: 6000,
+        });
+        const contractId = latest.contractId;
+        const sceneProvenance = latest.metrics?.originmanDance?.sceneProvenance;
+        if (
+          latest.status !== 'completed' ||
+          latest.mock !== false ||
+          latest.externalRunId !== run.externalRunId ||
+          latest.artifact?.sha256 !== run.artifact?.sha256 ||
+          !contractId ||
+          !/^custom-policy-originman-dance-v[12]$/.test(contractId) ||
+          (run.contractId && run.contractId !== contractId) ||
+          !sceneProvenance ||
+          !run.metrics?.originmanDance
+        )
+          return null;
+        return await updateSim2RealRun(
+          run.id,
+          {
+            contractId,
+            metrics: {
+              ...run.metrics,
+              originmanDance: { ...run.metrics.originmanDance, sceneProvenance },
+            },
+          },
+          owner,
+        );
+      } catch (error) {
+        console.warn('[sim2real] original dance evidence unavailable', redactInternalError(error));
+        return null;
+      }
+    },
     fetchArtifact: async (run, owner) => {
       const accountId = owner ?? (auth.isMultiUserDeployment() ? '' : 'local-dev');
       const artifact = await resolveRunPolicyDownload(run, owner, accountId, { timeoutMs: 10_000 });
@@ -4032,9 +4075,19 @@ export function createSim2RealRouter(
       }
       const video = verifiedDanceVideoReceipt(current);
       const available = video && (await readSim2RealDanceVideo(video.sha256, video.sizeBytes));
+      const trackRegistry =
+        ['originman-dance', ORIGINMAN_REFERENCE_TASK].includes(current.taskId ?? '') &&
+        current.status === 'completed' &&
+        current.artifact?.sha256;
+      const registered = trackRegistry
+        ? (await listSim2RealArtifacts(owner))
+            .filter((item) => item.runId === current.id && item.sha256 === current.artifact?.sha256)
+            .map(({ id, status, version }) => ({ id, status, version }))
+        : undefined;
       response.json({
         ok: true,
         artifactRetention: await getRunPolicyRetention(current, owner),
+        ...(registered && { artifactRegistry: registered }),
         ...(workerQueue ? { queue: workerQueue } : {}),
         ...(evidence.workshopEvidenceIssue && {
           workshopEvidenceIssue: evidence.workshopEvidenceIssue,

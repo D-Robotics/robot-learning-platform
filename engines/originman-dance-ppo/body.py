@@ -89,7 +89,13 @@ class Dance(gym.Env):
                     for c in self.data.contact if self.floor in (c.geom1, c.geom2)}
         height = self.data.qpos[2] / self.robot.base_height
         travel = np.linalg.norm(self.data.qpos[:2])
-        failed = bool(contacts - self.feet or height < .72 or tilt > .58 or travel > .24)
+        episode_end_reason = (
+            "contact" if contacts - self.feet else
+            "height" if height < .72 else
+            "tilt" if tilt > .58 else
+            "travel" if travel > .24 else None
+        )
+        failed = episode_end_reason is not None
         phase = beat % 1
         pulse = (0.5 + 0.5 * math.cos(2 * math.pi * (phase - .94))) ** 2
         velocities = self.data.qvel[self.va]
@@ -117,7 +123,8 @@ class Dance(gym.Env):
         info = {"beats": beat, "pulse": pulse, "armSpeed": arm_speed, "legSpeed": leg_speed,
                 "tiltDeg": math.degrees(tilt), "travelM": float(travel), "mechanicalWorkJ": self.mechanical_work,
                 "footContacts": [geom in contacts for geom in self.foot_geoms],
-                "fallContacts": [self.model.geom(int(i)).name for i in sorted(contacts - self.feet)]}
+                "fallContacts": [self.model.geom(int(i)).name for i in sorted(contacts - self.feet)],
+                "episodeEndReason": episode_end_reason}
         return self.observe(), float(reward), failed, beat >= BEATS and not failed, info
 
 
