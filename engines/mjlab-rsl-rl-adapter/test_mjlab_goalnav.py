@@ -392,5 +392,28 @@ class HonestBackendTests(unittest.TestCase):
             self.assertFalse(os.path.exists(result_path))
 
 
+@unittest.skipUnless(HAVE_TORCH, "torch is required by the adapter")
+class MissingRslDependencyTests(unittest.TestCase):
+    def test_missing_rsl_refuses_without_writing_result(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = pathlib.Path(tmp) / "request.json"
+            result = pathlib.Path(tmp) / "result.json"
+            request.write_text(json.dumps({"schemaVersion": 1}))
+            code = (
+                "import runpy, sys; "
+                "sys.modules['rsl_rl'] = None; "
+                "runpy.run_path(sys.argv[1], run_name='__main__')"
+            )
+            proc = subprocess.run(
+                [sys.executable, "-c", code, str(ADAPTER_PATH)],
+                env={**os.environ, "RDK_SIM2REAL_REQUEST_FILE": str(request),
+                     "RDK_SIM2REAL_RESULT_FILE": str(result)},
+                capture_output=True, text=True, timeout=60,
+            )
+            self.assertEqual(proc.returncode, 3, proc.stderr)
+            self.assertIn("REFUSED", proc.stderr)
+            self.assertFalse(result.exists())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
