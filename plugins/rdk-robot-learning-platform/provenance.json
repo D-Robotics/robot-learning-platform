@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "name": "rdk-robot-learning-platform",
-  "version": "0.7.14",
+  "version": "0.7.15",
   "description": "通用机器人学习插件，支持按机型和任务进入仿真与录制、强化学习与模仿学习、Sim2Real 评测与回放、制品管理和受控部署。OriginMan Workshop 提供预置舞蹈、动作组自由编排和舞蹈仿真回放。",
   "composition": "retained-core-with-host-neutral-workflow-extension",
   "coreBundleSha256": "fe7e5f440cbc357b47de476bee5b8b15facc7940d7bbcc7a8975adbd4e1bfca5",
@@ -50,7 +50,7 @@
     "setup-qoder-macos.command": "93df7254bf6dcc25ff206ebdc3d135333fb4b1528f340cfc2544da34b2ef7516",
     "setup-qoder-windows.cmd": "d4046e68bd62a40bf919c4755411fd294a483758f8ddcf493073863b4a3f834b",
     "runtime-downloads.json": "73ac7276ca81776aa1680cfdb94a817c4c33ecb3e41c024aeaf27663e281f999",
-    "ui/experiment.html": "484f0bd7b9ee41af5cb40ed2a80400aa3ac712057ae034c68ed817d8e28db06d",
+    "ui/experiment.html": "3b05a01d24b459faf59af1c2ddf1021b2f11fb8c6828f91773875a6c47c0bb4c",
     "ui/licenses.json": "a599a96d9a7c8019ff6aa53694023adf50221e4d878542e3437799cdaac3cdd5"
   },
   "uiBuild": {
@@ -63,10 +63,10 @@
     "inputs": {
       "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js": "d24b6ae50dbc989539db8287e217f41f0833f2b0a81ac4c6dbde444715ef5cd0",
       "services/sim2real-web/public/experiment-view.mjs": "6ae4b713e6ede204eab364a04e8398b56085f6a953fb81472ef057a0af733796",
-      "plugins/rdk-robot-learning-platform/plugin.json": "66e00e1b3de1f3258fd4a3040bb12821b9b5ce9b9897c1ce53dc37caf872bede",
+      "plugins/rdk-robot-learning-platform/plugin.json": "0ca5476365db8df622b45c6f81f8697337c754f2c2707e581e9557418071f872",
       "plugins/rdk-robot-learning-platform/ui/experiment-app.mjs": "d735263c46f20143ec8fee49c5f50a0129685e7ae522a32d11390b00fe2a2996",
       "services/sim2real-web/public/tokens.css": "3ad5ee94306710d01bc41e0802c360a779e3c173d11d5d8958ed685b79703e86",
-      "services/sim2real-web/public/experiment.css": "6f865edb6bfea2ffbfa76c8443a525a6fcb6045a14416b3c94e2c545de5aee41",
+      "services/sim2real-web/public/experiment.css": "e5c6843ba215f9577bbf72992d4055f0e40d8d134e45b1d549a8801dcdbfd476",
       "services/sim2real-web/public/experiment.html": "b5bcde81cacfa66d9b51d3d358bcee86b0b9b5dd51b444cc3c8bfe7f0cb86d55"
     }
   },
