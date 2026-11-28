@@ -614,8 +614,10 @@ export async function requestLocalEnginePreflight(input: {
   });
   if (!response.ok) {
     const code = await readWorkerErrorCode(response);
+    // A worker that never registered the engine answers 404 engine_not_registered;
+    // like missing preflightArgs it can never pass, so it is not a transient failure.
     if (
-      (response.status === 404 && code === 'not_found') ||
+      (response.status === 404 && (code === 'not_found' || code === 'engine_not_registered')) ||
       (response.status === 409 && code === 'engine_preflight_not_configured')
     )
       throw new LocalEnginePreflightUnsupportedError();
@@ -787,8 +789,10 @@ export async function requestOriginmanEnginePreflight(input: {
   });
   if (!response.ok) {
     const code = await readWorkerErrorCode(response);
+    // A worker that never registered the engine answers 404 engine_not_registered;
+    // like missing preflightArgs it can never pass, so it is not a transient failure.
     if (
-      (response.status === 404 && code === 'not_found') ||
+      (response.status === 404 && (code === 'not_found' || code === 'engine_not_registered')) ||
       (response.status === 409 && code === 'engine_preflight_not_configured')
     )
       throw new LocalEnginePreflightUnsupportedError();

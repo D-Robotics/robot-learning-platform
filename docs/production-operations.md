@@ -71,6 +71,8 @@ Studio 设备发现由标准构建提供。登录后读取 `GET /api/v1/duck/dev
 `/api/v1/duck/local-bridge/status`，以区分正在连接和仅已登记的设备。
 若 19091 由独立发布的 CPU Worker 占用且同机的 `sim2real-cpu-worker.service` 已停用，
 使用 `DEPLOY_EXTERNAL_CPU_WORKER=1` 执行标准发布。发布会检查实际 Worker 的协议和健康状态。
+同机若装有课堂快检 Worker（`sim2real-starter-worker.service`，19092），发布会把它与 Web、
+mock worker 一起重启并探测健康；回滚时同样一并重启，避免它停留在上一版代码。
 
 选中 OriginMan 后，工作台的「舞蹈课堂」进入同域的 `workshop.html`。旧 `#classroom` 书签和受扰恢复课程入口也进入舞蹈课堂。新学员从「开始跟跳练习」进入 `originman-reference.html?mode=preset`，Studio 的参考轨迹跟跳工具使用同一入口。结果页按原 Run ID 读取评测、回放和策略。按节拍训练是进阶练习，使用独立引擎和兼容的 Worker。
 
