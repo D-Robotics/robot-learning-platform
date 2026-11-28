@@ -10,6 +10,7 @@ finish() {
 trap finish EXIT
 root="$(cd "$(dirname "$0")" && pwd)"
 runtime="$root/mcp/runtime"
+node_path="$runtime/node"
 if [ ! -f "$runtime/provenance.json" ]; then
   if [ "$(/usr/sbin/sysctl -n hw.optional.arm64 2>/dev/null || true)" != 1 ] &&
     [ "$(/usr/bin/uname -m)" != arm64 ]; then
@@ -18,7 +19,6 @@ if [ ! -f "$runtime/provenance.json" ]; then
   fi
   runtime="$runtime/darwin-arm64"
 fi
-node_path="$runtime/node"
 expected="$(/usr/bin/plutil -extract binarySha256 raw -o - "$runtime/provenance.json")"
 if ! [[ "$expected" =~ ^[a-f0-9]{64}$ ]] || [ ! -f "$node_path" ] || [ -L "$node_path" ] ||
   [ "$(/usr/bin/shasum -a 256 "$node_path" | /usr/bin/awk '{print $1}')" != "$expected" ]; then

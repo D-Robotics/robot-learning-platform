@@ -168,9 +168,10 @@ portable, root = sys.argv[1:]
 with zipfile.ZipFile(portable) as archive:
     assert archive.testzip() is None
     config = json.loads(archive.read(root + '.mcp.json'))['mcpServers'][root.rstrip('/')]
+    assert config['command'] == './mcp/runtime/node'
     assert config['commandByPlatform'] == {
-        'darwin-arm64': './mcp/runtime/darwin-arm64/node',
-        'win32-x64': './mcp/runtime/win32-x64/node.exe',
+        'darwin-arm64': './mcp/runtime/node',
+        'win32-x64': './mcp/runtime/node.exe',
     }
     assert config['args'] == ['./scripts/experience-mcp.mjs']
     assert config['requestTimeoutMs'] == 150000
@@ -188,11 +189,11 @@ with zipfile.ZipFile(portable) as archive:
     assert {
         entry[len(runtime_root):].split('/')[0]
         for entry in archive.namelist() if entry.startswith(runtime_root)
-    } == {'darwin-arm64', 'win32-x64'}
+    } == {'darwin-arm64', 'win32-x64', 'node', 'node.exe'}
     assert 'Windows x64' in guide and 'Apple 芯片 Mac' in guide
     for target, binary in [('win32-x64', 'node.exe'), ('darwin-arm64', 'node')]:
         directory = runtime_root + target + '/'
-        path = directory + binary
+        path = runtime_root + binary
         provenance = json.loads(archive.read(directory + 'provenance.json'))
         assert provenance['target'] == target
         assert target in provenance['archive']

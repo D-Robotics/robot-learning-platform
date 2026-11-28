@@ -120,11 +120,11 @@ try {
   if (!path.isAbsolute(dataDirectory)) throw Error('Studio 数据目录必须是绝对路径。');
   const manifest = JSON.parse(readFile(path.join(root, 'plugin.json')));
   const target = process.platform + '-' + process.arch;
-  const legacyRuntime = path.join('mcp', 'runtime');
-  const runtimeDirectory = fs.existsSync(path.join(root, legacyRuntime, 'provenance.json'))
-    ? legacyRuntime
-    : path.join(legacyRuntime, target);
-  const runtime = JSON.parse(readFile(path.join(root, runtimeDirectory, 'provenance.json')));
+  const runtimeDirectory = path.join('mcp', 'runtime');
+  const metadataDirectory = fs.existsSync(path.join(root, runtimeDirectory, 'provenance.json'))
+    ? runtimeDirectory
+    : path.join(runtimeDirectory, target);
+  const runtime = JSON.parse(readFile(path.join(root, metadataDirectory, 'provenance.json')));
   if (
     manifest.name !== name ||
     runtime.target !== target ||

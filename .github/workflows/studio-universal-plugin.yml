@@ -87,3 +87,8 @@ jobs:
           RDK_UNIVERSAL_ARCHIVE: universal-plugin-artifact/${{ needs.package.outputs.archive }}
           RDK_UNIVERSAL_TARGET: ${{ matrix.target }}
         run: node scripts/verify-universal-studio-bundle.mjs
+      - name: Exercise Windows browser authorization and its protected cache
+        if: matrix.target == 'win32-x64'
+        run: >-
+          node --test --test-name-pattern "real current-user DPAPI|pending browser authorization survives actual Node process exit"
+          scripts/plugin-windows.test.mjs scripts/plugin-auth.test.mjs

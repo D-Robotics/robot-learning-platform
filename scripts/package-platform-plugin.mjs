@@ -206,7 +206,7 @@ def write_zip_entry(archive, name, data, mode):
 
 def write_runtime(add, studio, directory):
     binary, license_text = runtime_files(studio)
-    add(directory + studio['binary'], binary, 0o100755)
+    add('mcp/runtime/' + studio['binary'], binary, 0o100755)
     add(directory + 'LICENSE', license_text, 0o100644)
     add(directory + 'provenance.json', json_bytes({
         'target': studio['target'],
@@ -224,12 +224,12 @@ def write_studio_entries(add, studio):
         if studio['universal']:
             directory += item['target'] + '/'
         write_runtime(add, item, directory)
-        commands[item['target']] = './' + directory + item['binary']
-    # On older Studio versions the ordinary command remains usable on Apple Silicon
-    # and in single-target packages. Updated Studio selects the installed native path.
+        commands[item['target']] = './mcp/runtime/' + item['binary']
+    # A Studio host that only reads command launches node on macOS and
+    # resolves the sibling node.exe on Windows.
     add('.mcp.json', json_bytes({'mcpServers': {studio['name']: {
         'transport': 'stdio',
-        'command': next(iter(commands.values())),
+        'command': './mcp/runtime/node' if studio['universal'] else next(iter(commands.values())),
         'commandByPlatform': commands,
         'args': ['./scripts/experience-mcp.mjs'],
         'requestTimeoutMs': 150000,

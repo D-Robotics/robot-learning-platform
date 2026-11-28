@@ -96,10 +96,8 @@ try {
   const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
   const { version } = readJson(path.join(unpacked, 'plugin.json'));
   const packaged = readJson(path.join(unpacked, '.mcp.json')).mcpServers[pluginName];
-  assert.equal(
-    packaged.commandByPlatform[target],
-    './mcp/runtime/' + target + '/' + (windows ? 'node.exe' : 'node'),
-  );
+  const binary = windows ? 'node.exe' : 'node';
+  assert.equal(packaged.commandByPlatform[target], './mcp/runtime/' + binary);
   assert.deepEqual(packaged.args, ['./scripts/experience-mcp.mjs']);
   assert.match(requireExit(launchInstaller(), 2), /"installationState":"requires-action"/);
   assert.ok(!fs.existsSync(path.join(data, 'mcp.json')), 'No connection before host import');
@@ -121,8 +119,15 @@ try {
     server.once('error', reject).listen(0, '127.0.0.1', resolve),
   );
   const platformUrl = 'http://127.0.0.1:' + server.address().port + '/robotics-learning';
+  // Stock Studio uses command and resolves it relative to the installed plugin.
+  // Exercise that path without applying commandByPlatform on the host's behalf.
+  const directCommand = path.resolve(imported, packaged.command);
+  assert.equal(
+    requireExit(run(directCommand, ['-p', 'process.platform+"-"+process.arch'], { env }), 0).trim(),
+    target,
+  );
   const direct = connectMcp({
-    command: path.resolve(imported, packaged.commandByPlatform[target]),
+    command: directCommand,
     args: packaged.args.map((arg) => path.resolve(imported, arg)),
     env: { ...env, ...packaged.env, RDK_SIM2REAL_MCP_BASE_URL: platformUrl },
     timeoutMs: 15_000,
@@ -164,8 +169,7 @@ try {
   const connections = readJson(configuration).mcpServers;
   assert.deepEqual(Object.keys(connections), [pluginName]);
   const entry = connections[pluginName];
-  const binary = windows ? 'node.exe' : 'node';
-  const runtime = path.join(imported, 'mcp', 'runtime', target, binary);
+  const runtime = path.join(imported, 'mcp', 'runtime', binary);
   const { nodeVersion } = readJson(
     path.join(imported, 'mcp', 'runtime', target, 'provenance.json'),
   );
@@ -173,7 +177,7 @@ try {
   assert.deepEqual(entry.args, [path.join(imported, 'scripts', 'experience-mcp.mjs')]);
   assert.equal(entry.permissions.tools.rdk_workshop, 'readonly');
   const declarations = readJson(path.join(imported, '.mcp.json')).mcpServers;
-  assert.equal(declarations[pluginName].command, './mcp/runtime/' + target + '/' + binary);
+  assert.equal(declarations[pluginName].command, './mcp/runtime/' + binary);
   assert.deepEqual(declarations[pluginName].args, ['./scripts/experience-mcp.mjs']);
 
   // Simulate a learner moving the downloaded folder after installation.

@@ -14,7 +14,7 @@ npm run package:plugin -- --out-dir <制品目录> --studio-universal-runtime-di
 npm run package:plugin -- --out-dir <制品目录> --studio-target darwin-arm64 --studio-runtime <Node归档>
 ```
 
-解压后，在 Studio 扩展中心导入并启用插件目录。Windows 双击 `setup-studio-windows.cmd`，macOS 双击 `setup-studio-macos.command`。安装器核对导入副本，用包内的 Node 配置机器人学习 MCP。首次连接按浏览器提示登录。基础插件 ZIP 和 Qoder 安装流程沿用各自的 setup。
+解压后，在 Studio 扩展中心导入并启用插件目录。通用包的默认命令会启动当前系统的随包 Node。首次连接按页面提示登录。若旧安装留下的 MCP 连接仍指向之前的运行时路径，重新运行解压目录中的兼容安装器。Windows 用 `setup-studio-windows.cmd`，macOS 用 `setup-studio-macos.command`。安装器核对导入副本，并更新已有连接的路径。基础插件 ZIP 和 Qoder 安装流程沿用各自的 setup。
 
 发布前在空白的正式版 Studio 配置中完成导入和安装，然后移走解压来源。在 PATH 不含 Node 的条件下核对 Studio 只创建一个机器人学习 MCP 连接，启动文件来自导入副本，工具可用，首次认证状态正确。按实际验收过的系统和架构记录结果。
 
