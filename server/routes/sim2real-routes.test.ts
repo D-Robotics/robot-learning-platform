@@ -901,6 +901,38 @@ describe('Sim2Real HTTP routes', () => {
     }
   });
 
+  it('does not claim a worker has no engines when the resource stores no engine list', async () => {
+    const router = await fixture();
+    const resource = await createSim2RealComputeResource({
+      name: 'server runner without stored engines',
+      runnerUrl: 'http://127.0.0.1:18204/train',
+    });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () =>
+        Response.json(
+          { ok: false, error: 'engine_not_registered', message: 'engine is not registered' },
+          { status: 404 },
+        ),
+      );
+    try {
+      const response = await invoke(
+        router,
+        'post',
+        '/api/sim2real/compute-resources/:id/preflight',
+        {
+          params: { id: resource.id },
+          body: { taskId: 'walk' },
+        },
+      );
+      expect(response.statusCode).toBe(409);
+      expect(response.body.message).not.toContain('当前登记的引擎');
+      expect(response.body.message).toContain('MicroDuck RL');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('does not send log requests to the server loopback for a relayed run', async () => {
     const router = await fixture();
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';

@@ -3688,12 +3688,16 @@ export function createSim2RealRouter(
       return { computeResourceId: selected?.resource.id ?? null, report };
     } catch (error) {
       if (error instanceof LocalEnginePreflightUnsupportedError) {
-        const registered = (selected?.resource.engines ?? []).join('、') || '无';
+        // Server-runner resources carry no stored engine list; do not claim "none".
+        const registered = (selected?.resource.engines ?? []).filter(Boolean);
+        const registeredNote = registered.length
+          ? `；当前登记的引擎：${registered.join('、')}`
+          : '';
         sendApiError(
           response,
           409,
           'SIM2REAL_PREFLIGHT_NOT_SUPPORTED',
-          `该 Worker 未注册 ${originman ? 'OriginMan 受扰恢复' : 'MicroDuck RL（microduck-rl）'} 引擎，或尚未配置环境预检；当前注册的引擎：${registered}。请选择支持该引擎并已配置预检的 Worker。`,
+          `该 Worker 未注册 ${originman ? 'OriginMan 受扰恢复' : 'MicroDuck RL（microduck-rl）'} 引擎，或尚未配置环境预检${registeredNote}。请选择支持该引擎并已配置预检的 Worker。`,
           { retryable: false },
         );
         return null;
