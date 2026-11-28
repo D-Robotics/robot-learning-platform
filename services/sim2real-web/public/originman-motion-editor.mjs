@@ -87,9 +87,9 @@ export function mountOriginmanMotion({ api, changed, initialMode, initialSelecti
         input.value = String(value);
         if (!input.validity.valid) input.value = initialValue;
       }
-      if (blocks.length) draftStatus.textContent = '已恢复草稿。请重新预览后提交。';
+      if (blocks.length) draftStatus.textContent = '已恢复草稿。开始训练前请重新校验编排。';
       if (blocks.length !== saved.blocks.length) {
-        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再预览后提交。';
+        draftStatus.textContent = '草稿中有动作已不可用。请核对恢复的编排，再校验后提交。';
       }
       renderSequence();
       if (mode.value === 'blocks') invalidate();
@@ -218,6 +218,7 @@ export function mountOriginmanMotion({ api, changed, initialMode, initialSelecti
     controls.hidden = isUpload();
     byId('motion-presets').hidden = mode.value !== 'preset';
     byId('motion-blocks').hidden = mode.value !== 'blocks';
+    byId('motion-draft').hidden = mode.value !== 'blocks';
     invalidate();
     if (!isUpload()) return loadCatalog();
   }

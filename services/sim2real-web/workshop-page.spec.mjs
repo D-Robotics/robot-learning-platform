@@ -1400,7 +1400,16 @@ test('free choreography restores only the matching account draft and needs a fre
   );
   assert.equal(restored.get('motion-bpm').value, '118');
   assert.equal(restored.get('motion-transition').value, '0.6');
-  assert.equal(restored.get('motion-draft-status').textContent, '已恢复草稿。请重新预览后提交。');
+  assert.equal(
+    restored.get('motion-draft-status').textContent,
+    '已恢复草稿。开始训练前请重新校验编排。',
+  );
+  assert.equal(restored.get('motion-draft').hidden, false);
+  assert.equal(
+    restored.get('motion-draft').previousElementSibling.id,
+    'motion-playback',
+    'Opening an action preview should not show the saved sequence before playback',
+  );
   assert.equal(restored.editor.submission(), undefined);
   assert.equal(restored.get('motion-prepare').disabled, false);
 
