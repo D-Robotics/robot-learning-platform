@@ -866,6 +866,41 @@ describe('Sim2Real HTTP routes', () => {
     });
   });
 
+  it('reports a Worker without the MicroDuck RL engine as preflight-unsupported, not unavailable', async () => {
+    const router = await fixture();
+    const resource = await createSim2RealComputeResource({
+      name: 'starter-only worker',
+      runnerUrl: 'http://127.0.0.1:18203/train',
+      engines: ['starter-ppo'],
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      expect(String(input)).toBe('http://127.0.0.1:18203/engines/microduck-rl/preflight');
+      return Response.json(
+        { ok: false, error: 'engine_not_registered', message: 'engine is not registered' },
+        { status: 404 },
+      );
+    });
+    try {
+      const response = await invoke(
+        router,
+        'post',
+        '/api/sim2real/compute-resources/:id/preflight',
+        {
+          params: { id: resource.id },
+          body: { taskId: 'walk' },
+        },
+      );
+      expect(response.statusCode).toBe(409);
+      expect(response.body).toMatchObject({
+        code: 'SIM2REAL_PREFLIGHT_NOT_SUPPORTED',
+        retryable: false,
+      });
+      expect(response.body.message).toContain('starter-ppo');
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it('does not send log requests to the server loopback for a relayed run', async () => {
     const router = await fixture();
     process.env.RDK_SIM2REAL_LOCAL_RUNNER_URL = 'http://127.0.0.1:18202/train';
