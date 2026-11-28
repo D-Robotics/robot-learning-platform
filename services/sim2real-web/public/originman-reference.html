@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OriginMan · 参考轨迹跟跳</title>
     <link rel="stylesheet" href="./tokens.css" />
-    <link rel="stylesheet" href="./experiment.css" />
-    <script type="module" src="./originman-reference-page.mjs?v=course-login"></script>
+    <link rel="stylesheet" href="./experiment.css?v=motion-visuals-1" />
+    <script type="module" src="./originman-reference-page.mjs?v=motion-visuals-1"></script>
   </head>
   <body>
     <a class="skip-link" href="#reference-main">跳到任务内容</a>
@@ -40,12 +40,14 @@
             <button id="reference-motion-retry" type="button" hidden>重新加载动作库</button>
             <p id="reference-motion-presets">
               <label>预置舞蹈 <select id="reference-motion-preset" disabled></select></label>
+              <button id="reference-motion-show-preset" type="button" disabled>看整支仿真</button>
             </p>
             <div id="reference-motion-blocks" hidden>
               <p><label>搜索动作 <input id="reference-motion-search" type="search" disabled /></label>
               <label>分类 <select id="reference-motion-category" disabled><option value="">全部分类</option></select></label></p>
               <p id="reference-motion-matches" role="status" hidden></p>
               <p><label>动作 <select id="reference-motion-action" disabled></select></label>
+              <button id="reference-motion-show-action" type="button" disabled>看这个动作</button>
               <button id="reference-motion-add" type="button" disabled>添加到编排</button></p>
               <ol id="reference-motion-sequence" aria-label="动作编排顺序"></ol>
               <p id="reference-motion-draft-status" role="status"></p>
@@ -56,8 +58,21 @@
               <p><label>估算拍数用 BPM <input id="reference-motion-bpm" type="number" min="80" max="140" value="100" /></label>
               <label>最短过渡秒数 <input id="reference-motion-transition" type="number" min="0" max="2" step="0.02" value="0.4" /></label></p>
             </div>
+            <section id="motion-playback" class="motion-playback" aria-labelledby="motion-playback-title" hidden>
+              <h3 id="motion-playback-title">仿真预览</h3>
+              <p role="status" aria-live="polite"></p>
+              <canvas aria-label="OriginMan 三维仿真画面" hidden></canvas>
+              <div class="motion-playback-controls" hidden>
+                <button type="button">播放</button>
+                <input type="range" min="0" max="0" step="0.02" aria-label="仿真预览进度" />
+                <output aria-label="当前播放时间"></output>
+                <label>倍速 <select><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option></select></label>
+                <button type="button" data-view-angle="35">正侧视角</button>
+                <button type="button" data-view-angle="125">背侧视角</button>
+              </div>
+            </section>
             <p id="reference-motion-estimate"></p>
-            <button id="reference-motion-prepare" type="button" disabled>预览参考轨迹</button>
+            <button id="reference-motion-prepare" type="button" disabled>校验编排并准备训练</button>
             <p id="reference-motion-status" role="status" aria-live="polite"></p>
             <div id="reference-motion-result" hidden>
               <label>预览关节 <select id="reference-motion-joint"></select></label>

@@ -1,6 +1,8 @@
+import { mountMotionPlayback } from './originman-motion-playback.mjs?v=1';
+
 const FPS = 50;
 
-export function mountOriginmanMotion({ api, changed, initialMode, document = globalThis.document }) {
+export function mountOriginmanMotion({ api, changed, initialMode, initialSelection, document = globalThis.document }) {
   const byId = (name) => document.getElementById('reference-' + name);
   const { Option } = document.defaultView;
   const mode = byId('mode');
@@ -26,6 +28,9 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
   const result = byId('motion-result');
   const joint = byId('motion-joint');
   const curve = byId('motion-curve');
+  const visual = mountMotionPlayback({ document, api });
+  const showPreset = byId('motion-show-preset');
+  const showAction = byId('motion-show-action');
   let catalog;
   let preview;
   let submission;
@@ -128,6 +133,8 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
     for (const input of [preset, search, category]) input.disabled = locked || !catalog;
     action.disabled = locked || !action.value;
     add.disabled = action.disabled || blocks.length >= 128;
+    if (showPreset) showPreset.disabled = locked || !preset.value;
+    if (showAction) showAction.disabled = action.disabled;
   }
 
   function populateActions() {
@@ -205,6 +212,7 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
   }
 
   function showMode() {
+    visual?.reset();
     byId('import-section').hidden = !isUpload();
     byId('screen-file-control').hidden = !isUpload();
     controls.hidden = isUpload();
@@ -235,6 +243,16 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
       restoreDraft();
       if (!catalog.presets.length && mode.value === 'preset') status.textContent = '当前动作库没有预置。';
       populateActions();
+      if (mode.value === 'preset' && catalog.presets.some(({ id }) => id === initialSelection?.presetId)) {
+        preset.value = initialSelection.presetId;
+        void visual?.open({ presetId: preset.value,
+          ...(initialSelection.trajectorySha256 &&
+            { expectedTrajectorySha256: initialSelection.trajectorySha256 }) });
+      } else if (mode.value === 'blocks' && catalog.motions.some(({ id }) => id === initialSelection?.motionId)) {
+        action.value = initialSelection.motionId;
+        void visual?.open({ motionId: action.value });
+      }
+      initialSelection = undefined;
       setPrepareState();
       if (restoreFocus && !isUpload()) (mode.value === 'preset' ? preset : search).focus();
     } catch (error) {
@@ -257,7 +275,10 @@ export function mountOriginmanMotion({ api, changed, initialMode, document = glo
 
   mode.addEventListener('change', showMode);
   retry.addEventListener('click', () => loadCatalog(true));
-  preset.addEventListener('change', invalidate);
+  preset.addEventListener('change', () => { visual?.reset(); invalidate(); });
+  action.addEventListener('change', () => { visual?.reset(); setCatalogControls(); });
+  showPreset?.addEventListener('click', () => void visual?.open({ presetId: preset.value }));
+  showAction?.addEventListener('click', () => void visual?.open({ motionId: action.value }));
   for (const input of [bpm, transition]) input.addEventListener('input', () => {
     if (input.value && input.validity.valid) saveDraft();
     invalidate();

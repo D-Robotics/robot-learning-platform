@@ -510,6 +510,90 @@ export async function preparePinnedOriginmanMotion(recipe: unknown, expectedDige
   return prepared;
 }
 
+const PREVIEW_DIRECTORY = 'visual-preview-v1';
+const PREVIEW_LIMIT = 5 * 1024 * 1024;
+
+async function visualAsset(catalog: Catalog, filename: string) {
+  try {
+    if (!catalog.directory) throw Error('No visual library');
+    return record(
+      JSON.parse(
+        (
+          await readBounded(
+            path.join(catalog.directory, PREVIEW_DIRECTORY, filename),
+            PREVIEW_LIMIT,
+          )
+        ).toString(),
+      ),
+    );
+  } catch {
+    throw new OriginmanMotionError('此素材的仿真预览暂不可用。仍可校验轨迹并选择算力。', 404);
+  }
+}
+
+export async function readOriginmanMotionScene() {
+  const data = await visualAsset(await loadCatalog(), 'scene.json');
+  if (typeof data.sceneSha256 !== 'string' || !SHA256.test(data.sceneSha256) || !data.scene)
+    throw new OriginmanMotionError('仿真模型预览未通过校验。', 409);
+  return data;
+}
+
+export async function readOriginmanMotionPlayback(input: unknown) {
+  const { presetId, motionId, expectedTrajectorySha256, ...extra } = record(input);
+  if (Object.keys(extra).length || (presetId === undefined) === (motionId === undefined))
+    throw new OriginmanMotionError('请选择一个预置舞蹈或一个原子动作。');
+  if (
+    expectedTrajectorySha256 !== undefined &&
+    (presetId === undefined ||
+      typeof expectedTrajectorySha256 !== 'string' ||
+      !SHA256.test(expectedTrajectorySha256))
+  )
+    throw new OriginmanMotionError('预置轨迹摘要无效。');
+  const catalog = await loadCatalog();
+  const kind = presetId === undefined ? 'motion' : 'preset';
+  const id = presetId ?? motionId;
+  if (typeof id !== 'string' || !ID.test(id))
+    throw new OriginmanMotionError('动作或预置 ID 无效。');
+  const item = (kind === 'preset' ? catalog.presets : catalog.motions).find((row) => row.id === id);
+  if (!item) throw new OriginmanMotionError('该素材已不在可用动作库中。', 404);
+  let sourceSha256: string;
+  let poseOnly = false;
+  if ('sha256' in item) {
+    await readMotion(catalog, item);
+    sourceSha256 = item.sha256;
+    poseOnly = item.poseOnly === true;
+  } else {
+    sourceSha256 = (await prepareOriginmanMotion({ presetId: id })).provenance.trajectorySha256;
+    if (expectedTrajectorySha256 !== undefined && expectedTrajectorySha256 !== sourceSha256)
+      throw new OriginmanMotionError('该预置已更新，请打开当前版本重新预览。', 409);
+  }
+  const clip = await visualAsset(catalog, kind + '/' + id + '.json');
+  if (
+    clip.schemaVersion !== 1 ||
+    clip.sourceSha256 !== sourceSha256 ||
+    typeof clip.sceneSha256 !== 'string' ||
+    !SHA256.test(clip.sceneSha256) ||
+    clip.method !== (poseOnly ? 'pose' : 'reference-control') ||
+    clip.fps !== FPS ||
+    clip.stride !== 4 ||
+    typeof clip.frames !== 'number' ||
+    !Number.isSafeInteger(clip.frames) ||
+    clip.frames < 1 ||
+    clip.frames > MAX_FRAMES ||
+    typeof clip.bodyCount !== 'number' ||
+    !Number.isSafeInteger(clip.bodyCount) ||
+    clip.bodyCount < 1 ||
+    clip.bodyCount > 64 ||
+    typeof clip.samples !== 'string'
+  ) {
+    throw new OriginmanMotionError('预览素材与当前动作版本不一致。请刷新动作库。', 409);
+  }
+  const sampleCount = Math.ceil((clip.frames - 1) / clip.stride) + 1;
+  if (clip.samples.length !== Math.ceil((sampleCount * clip.bodyCount * 7 * 4) / 3) * 4)
+    throw new OriginmanMotionError('仿真预览帧不完整。', 409);
+  return { playback: clip, displayName: item.displayName };
+}
+
 export function summarizeOriginmanMotion(
   prepared: Awaited<ReturnType<typeof prepareOriginmanMotion>>,
 ) {

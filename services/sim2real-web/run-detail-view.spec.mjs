@@ -924,6 +924,9 @@ test('reference Run discloses the delivered baseline and compares the evaluated 
   assert.equal(byId('run-policy-download').textContent, '下载纯参考基线 ONNX');
   assert.match(byId('quality-body').textContent, /本轮 PPO 候选 RMSE0\.0148 rad · 200\/200 帧/);
   assert.match(byId('quality-body').textContent, /PPO 相对纯参考的 RMSE 变化\+1\.28%/);
+  assert.equal(byId('reference-rmse-comparison').hidden, false);
+  assert.match(byId('reference-rmse-delta').textContent, /高 1\.28%/);
+  assert.equal(byId('reference-frame-count').textContent, '200 / 200 帧');
   assert.doesNotMatch(byId('quality-body').textContent, /undefined|NaN/);
   assert.doesNotMatch(byId('run-next-action').textContent, /播放/);
   assert.equal(byId('run-error').hidden, true);
@@ -938,4 +941,10 @@ test('reference Run discloses the delivered baseline and compares the evaluated 
   assert.match(byId('quality-body').textContent, /提前 40 ms 发出参考指令/);
   assert.match(byId('quality-body').textContent, /补偿前的零残差 RMSE0\.0334 rad/);
   assert.match(byId('quality-body').textContent, /PPO 相对补偿后基线的 RMSE 变化\+1\.28%/);
+  compensated.dispose();
+
+  evidence.ppoFramesEvaluated = 199;
+  const incomplete = await open();
+  t.after(() => incomplete.dispose());
+  assert.equal(byId('reference-rmse-comparison').hidden, true);
 });

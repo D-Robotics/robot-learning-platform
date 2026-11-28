@@ -8,6 +8,8 @@ import {
   OriginmanMotionError,
   prepareOriginmanMotion,
   preparePinnedOriginmanMotion,
+  readOriginmanMotionPlayback,
+  readOriginmanMotionScene,
   summarizeOriginmanMotion,
 } from '../sim2real/originman-motion.js';
 import { getWorkshopRun } from '../sim2real/workshop-run-evidence.js';
@@ -151,6 +153,14 @@ export function registerSim2RealWorkshopRoutes(
     handle(async (request) => ({
       preview: summarizeOriginmanMotion(await prepareOriginmanMotion(request.body)),
     })),
+  );
+  router.get(
+    motionApi + '/visual-scene',
+    handle(async () => readOriginmanMotionScene()),
+  );
+  router.post(
+    motionApi + '/playback',
+    handle(async (request) => readOriginmanMotionPlayback(request.body)),
   );
   const referenceApi = options.prefix + '/originman-reference';
   router.get(

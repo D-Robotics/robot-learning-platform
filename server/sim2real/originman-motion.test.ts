@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,8 @@ import {
   listOriginmanMotion,
   prepareOriginmanMotion,
   preparePinnedOriginmanMotion,
+  readOriginmanMotionPlayback,
+  readOriginmanMotionScene,
   summarizeOriginmanMotion,
 } from './originman-motion.js';
 
@@ -49,6 +51,48 @@ async function library() {
 }
 
 describe('OriginMan reference choreography', () => {
+  it('serves baked previews only for the current catalog version and complete pose bytes', async () => {
+    const directory = await library();
+    const root = path.join(directory, 'visual-preview-v1');
+    await mkdir(path.join(root, 'preset'), { recursive: true });
+    const prepared = await prepareOriginmanMotion({ presetId: 'full-dance' });
+    const sceneSha256 = 'a'.repeat(64);
+    await writeFile(
+      path.join(root, 'scene.json'),
+      JSON.stringify({
+        sceneSha256,
+        scene: { version: 1, bodyCount: 1, meshes: {}, geoms: [] },
+      }),
+    );
+    const file = path.join(root, 'preset', 'full-dance.json');
+    const preview = {
+      schemaVersion: 1,
+      sourceSha256: prepared.provenance.trajectorySha256,
+      sceneSha256,
+      method: 'reference-control',
+      fps: 50,
+      stride: 4,
+      bodyCount: 1,
+      frames: 50,
+      samples: Buffer.alloc((Math.ceil(49 / 4) + 1) * 7 * 4).toString('base64'),
+    };
+    await writeFile(file, JSON.stringify(preview));
+    expect(await readOriginmanMotionScene()).toMatchObject({ sceneSha256 });
+    expect(await readOriginmanMotionPlayback({ presetId: 'full-dance' })).toMatchObject({
+      displayName: '26 段',
+      playback: { sourceSha256: preview.sourceSha256 },
+    });
+    await writeFile(file, JSON.stringify({ ...preview, samples: '' }));
+    await expect(readOriginmanMotionPlayback({ presetId: 'full-dance' })).rejects.toThrow(
+      '帧不完整',
+    );
+    await writeFile(file, JSON.stringify({ ...preview, sourceSha256: 'b'.repeat(64) }));
+    await expect(readOriginmanMotionPlayback({ presetId: 'full-dance' })).rejects.toThrow(
+      '版本不一致',
+    );
+    await expect(readOriginmanMotionPlayback({ presetId: '../scene' })).rejects.toThrow('ID 无效');
+  });
+
   it('compiles 26 blocks with stable frame ranges, metadata and bounded preview curves', async () => {
     await library();
     const catalog = await listOriginmanMotion();

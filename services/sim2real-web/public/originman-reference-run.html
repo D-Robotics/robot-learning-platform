@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>OriginMan · 跟跳结果</title>
     <link rel="stylesheet" href="./tokens.css" />
-    <link rel="stylesheet" href="./experiment.css?v=reference-replay-2" />
-    <script type="module" src="./run-detail-page.mjs?v=16"></script>
+    <link rel="stylesheet" href="./experiment.css?v=originman-results-1" />
+    <script type="module" src="./run-detail-page.mjs?v=originman-results-1"></script>
   </head>
   <body>
     <a class="skip-link" href="#run-main">跳到运行内容</a>
@@ -15,7 +15,7 @@
       <span>本次训练运行</span>
       <span id="run-connection-status" role="status" aria-live="polite">正在读取运行记录</span>
     </header>
-    <main id="run-main" class="experiment-layout">
+    <main id="run-main" class="experiment-layout originman-result-layout">
       <aside aria-label="本次运行导航">
         <p id="run-kind" class="eyebrow">机器人学习 · 仿真</p>
         <h1 id="run-title">本次运行</h1>
@@ -25,6 +25,7 @@
           <li id="run-step-replay">查看本次回放</li>
         </ol>
         <p id="run-next-action" aria-live="polite">正在按链接中的 Run ID 读取详情。</p>
+        <a id="run-replay-jump" class="originman-primary-link" href="#replay-heading" hidden>看本次回放</a>
         <button id="refresh-run" type="button">刷新本次运行</button>
         <p><a id="run-workshop-home" href="./workshop.html">返回舞蹈 Workshop</a></p>
         <p><a id="run-platform-home" href="./">返回学习平台</a></p>
@@ -32,17 +33,13 @@
       <section class="experiment-content" aria-label="运行详情与仿真结果">
         <div id="run-error" class="experiment-error" role="alert" hidden></div>
         <p id="reference-run-login" hidden><a href="./login">登录后查看本次跟跳</a></p>
+        <div id="reference-run-content" hidden>
         <section class="experiment-summary" aria-label="本次运行状态">
           <div><span>运行状态</span><strong id="run-status">待连接</strong></div>
-          <div><span>产品 / 任务</span><strong id="run-task">—</strong></div>
+          <div><span>范围</span><strong>仅仿真</strong></div>
           <div><span>训练引擎</span><strong id="run-engine">—</strong></div>
         </section>
 
-        <section aria-labelledby="run-overview-heading">
-          <div class="section-heading">
-            <h2 id="run-overview-heading">本轮运行</h2>
-            <span id="run-id-label">等待 Run ID</span>
-          </div>
           <section id="run-queue-panel" aria-labelledby="run-queue-heading" hidden>
             <h3 id="run-queue-heading">排队进度</h3>
             <p id="run-queue-status" role="status"></p>
@@ -50,38 +47,20 @@
             <p id="run-queue-worker-status" role="status" hidden></p>
             <a id="run-queue-alternative" hidden></a>
           </section>
-          <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
-          <p id="run-hardware-readiness" hidden></p>
-          <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
-          <details class="experiment-details" id="run-logs" hidden>
-            <summary>本轮引擎日志</summary>
-            <button type="button" id="run-logs-load">读取日志</button>
-            <pre id="run-logs-output" class="empty-state" tabindex="0" aria-label="本轮引擎日志">等待读取。</pre>
-          </details>
-        </section>
-
-        <section aria-labelledby="quality-heading">
-          <div class="section-heading">
-            <h2 id="quality-heading">训练结果与质量门</h2>
-            <span id="quality-status">待核对</span>
-          </div>
-          <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
-          <div class="comparison-scroll">
-            <table id="quality-table" hidden>
-              <caption>本次跟跳的评测指标</caption>
-              <thead><tr><th scope="col">指标</th><th scope="col">实测结果</th></tr></thead>
-              <tbody id="quality-body"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section aria-labelledby="replay-heading">
+        <section aria-labelledby="replay-heading" class="originman-result-replay">
           <div class="section-heading">
             <h2 id="replay-heading">本次仿真回放</h2>
             <span id="replay-status">尚未核验</span>
           </div>
           <p id="replay-policy-source" hidden></p>
-          <video id="run-video" controls playsinline preload="none" hidden aria-label="本次 ONNX 策略的跟跳仿真视频"></video>
+          <p><a id="run-reference-visual" hidden>查看本轮预置的参考仿真</a></p>
+          <video id="run-video" controls playsinline preload="metadata" hidden aria-label="本次 ONNX 策略的跟跳仿真视频"></video>
+          <div id="run-video-tools" class="originman-replay-tools" hidden>
+            <output id="run-video-time" aria-label="回放播放进度"></output>
+            <label>播放速度 <select id="run-video-speed">
+              <option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="1.5">1.5×</option><option value="2">2×</option>
+            </select></label>
+          </div>
           <div id="replay-segment-controls" hidden>
             <label>舞段 <select id="replay-segment"></select></label>
             <button id="replay-segment-seek" type="button">跳到舞段</button>
@@ -90,6 +69,50 @@
           <p id="replay-empty" class="empty-state">回放生成后会校验策略与轨迹摘要，再显示本次视频。</p>
           <button id="reference-replay-retry" type="button" hidden>重新生成原回放</button>
           <p id="reference-replay-feedback" role="status" aria-live="polite" hidden></p>
+        </section>
+
+        <section aria-labelledby="quality-heading">
+          <div class="section-heading">
+            <h2 id="quality-heading">训练结果与质量门</h2>
+            <span id="quality-status">待核对</span>
+          </div>
+          <p id="quality-summary" class="empty-state">本次运行完成后读取实际质量证据。</p>
+          <div id="reference-quality-cards" class="originman-quality-cards" hidden>
+            <div><span>轨迹覆盖</span><strong id="reference-frame-count"></strong></div>
+            <div><span>峰值倾角</span><strong id="reference-peak-tilt"></strong></div>
+            <div><span>当前交付策略</span><strong id="reference-selected-policy"></strong></div>
+          </div>
+          <section id="reference-rmse-comparison" class="originman-rmse" aria-labelledby="reference-rmse-title" hidden>
+            <h3 id="reference-rmse-title">全程关节跟踪误差（RMSE，越低越好）</h3>
+            <div><span>参考基线</span><meter id="reference-rmse-baseline" min="0" aria-label="参考基线误差"></meter><output id="reference-rmse-baseline-value"></output></div>
+            <div><span>本轮 PPO</span><meter id="reference-rmse-ppo" min="0" aria-label="PPO 误差"></meter><output id="reference-rmse-ppo-value"></output></div>
+            <p id="reference-rmse-delta"></p>
+          </section>
+          <details class="experiment-details">
+            <summary>查看评测明细与舞段</summary>
+            <div class="comparison-scroll">
+            <table id="quality-table" hidden>
+              <caption>本次跟跳的评测指标</caption>
+              <thead><tr><th scope="col">指标</th><th scope="col">实测结果</th></tr></thead>
+              <tbody id="quality-body"></tbody>
+            </table>
+            </div>
+          </details>
+        </section>
+
+        <section aria-labelledby="run-overview-heading">
+          <div class="section-heading">
+            <h2 id="run-overview-heading">本轮运行</h2>
+            <span id="run-id-label">等待 Run ID</span>
+          </div>
+          <p id="run-summary" class="empty-state">尚未取得运行记录。</p>
+          <p id="run-hardware-readiness" hidden></p>
+          <p><a id="run-policy-download" download hidden>下载本次 ONNX 策略</a></p>
+          <details class="experiment-details" id="run-logs" hidden>
+            <summary>本轮引擎日志</summary>
+            <button type="button" id="run-logs-load">读取日志</button>
+            <pre id="run-logs-output" class="empty-state" tabindex="0" aria-label="本轮引擎日志">等待读取。</pre>
+          </details>
         </section>
 
         <section aria-labelledby="curve-heading">
@@ -122,12 +145,14 @@
           <summary>运行标识与制品摘要</summary>
           <dl>
             <dt>Run ID</dt><dd id="run-id-detail">—</dd>
+            <dt>产品 / 任务</dt><dd id="run-task">—</dd>
             <dt>模型 ID</dt><dd id="run-model-id">—</dd>
             <dt>训练轨迹 SHA-256</dt><dd id="run-trajectory-sha">—</dd>
             <dt>Worker 轨迹文件 SHA-256</dt><dd id="run-reference-file-sha">—</dd>
             <dt>策略 SHA-256</dt><dd id="run-policy-sha">—</dd>
           </dl>
         </details>
+        </div>
       </section>
     </main>
   </body>

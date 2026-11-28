@@ -1,4 +1,4 @@
-import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=12';
+import { mountOriginmanMotion } from './originman-motion-editor.mjs?v=visual-preview-1';
 import { readOriginmanNpz } from './originman-reference-npz.mjs';
 import {
   anotherWorkshopWorker, freshWorkshopWorkerLoad, workshopWorkerReady,
@@ -126,10 +126,17 @@ function showError(target, message = '') {
 }
 
 const query = new URLSearchParams(location.search);
-const motion = mountOriginmanMotion({ api, changed: refresh, initialMode: query.get('mode') });
+const motion = mountOriginmanMotion({
+  api, changed: refresh, initialMode: query.get('mode'),
+  initialSelection: { presetId: query.get('presetId'), motionId: query.get('motionId'),
+    trajectorySha256: query.get('trajectorySha256') },
+});
 if (query.get('budget') === 'formal') steps.value = '503808';
 byId('reference-mode').addEventListener('change', (event) => {
   const url = new URL(location.href);
+  url.searchParams.delete('presetId');
+  url.searchParams.delete('motionId');
+  url.searchParams.delete('trajectorySha256');
   if (motion.isUpload()) url.searchParams.delete('mode');
   else url.searchParams.set('mode', event.target.value);
   history.replaceState(history.state, '', url);

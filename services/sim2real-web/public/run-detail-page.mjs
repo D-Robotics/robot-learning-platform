@@ -318,11 +318,51 @@ function referencePolicyLabel(reference) {
   return '';
 }
 
+function renderReferenceOverview(document, reference) {
+  const cards = document.getElementById('reference-quality-cards');
+  const comparison = document.getElementById('reference-rmse-comparison');
+  if (!cards || !comparison) return;
+  cards.hidden = !reference;
+  comparison.hidden = true;
+  if (!reference) return;
+  const delivered = referencePolicyLabel(reference);
+  text(document, 'reference-frame-count',
+    Number.isSafeInteger(reference.framesEvaluated) && Number.isSafeInteger(reference.framesExpected)
+      ? `${reference.framesEvaluated.toLocaleString('zh-CN')} / ${reference.framesExpected.toLocaleString('zh-CN')} 帧` : '—');
+  text(document, 'reference-peak-tilt',
+    Number.isFinite(reference.maxTiltDeg) ? reference.maxTiltDeg.toFixed(1) + '°' : '—');
+  text(document, 'reference-selected-policy', delivered || '未注明');
+  const isPpo = reference.policySelection === 'ppo';
+  const baseline = reference.zeroResidualRmseRad;
+  const ppo = reference.ppoTrackingRmseRad ?? (isPpo ? reference.trackingRmseRad : undefined);
+  const ppoFrames = reference.ppoFramesEvaluated ?? (isPpo ? reference.framesEvaluated : undefined);
+  if (
+    !Number.isFinite(baseline) || baseline <= 0 || !Number.isFinite(ppo) || ppo < 0 ||
+    !Number.isSafeInteger(reference.framesExpected) || reference.framesExpected < 1 ||
+    reference.zeroResidualFramesEvaluated !== reference.framesExpected ||
+    ppoFrames !== reference.framesExpected || reference.ppoStabilityPassed === false ||
+    !(reference.ppoStabilityPassed === true || (isPpo && reference.qualityGatePassed === true))
+  ) return;
+  const max = Math.max(baseline, ppo);
+  for (const [name, value] of [['baseline', baseline], ['ppo', ppo]]) {
+    const meter = document.getElementById('reference-rmse-' + name);
+    meter.max = max;
+    meter.value = value;
+    text(document, 'reference-rmse-' + name + '-value', value.toFixed(4) + ' rad');
+  }
+  const delta = (ppo / baseline - 1) * 100;
+  text(document, 'reference-rmse-delta',
+    Math.abs(delta) < 0.005 ? '与参考基线基本持平。'
+      : `同一场景、同一轨迹下，PPO 比基线${delta < 0 ? '低' : '高'} ${Math.abs(delta).toFixed(2)}%。`);
+  comparison.hidden = false;
+}
+
 function renderQuality(document, run) {
   const evidence = danceEvidenceFor(run);
   const tracking = run.taskId === REFERENCE_TASK;
   const referenceMismatch = tracking && referenceEvidenceMismatch(run);
   const reference = tracking && !referenceMismatch ? run.metrics?.originmanReference : null;
+  renderReferenceOverview(document, reference);
   const policy = referencePolicyLabel(reference);
   const gate = evidence?.qualityGate;
   const passed = tracking ? reference?.qualityGatePassed : typeof evidence?.qualityGatePassed === 'boolean'
@@ -455,6 +495,12 @@ function showPlaybackStatus(document, video) {
   text(document, 'replay-status', message);
 }
 
+function showPlaybackTime(document, video) {
+  if (video.hidden) return;
+  const format = (value) => Number.isFinite(value) ? value.toFixed(1) + ' 秒' : '—';
+  text(document, 'run-video-time', format(video.currentTime) + ' / ' + format(video.duration));
+}
+
 function renderReferenceSegments(document, run, video, available) {
   const controls = document.getElementById('replay-segment-controls');
   if (!controls) return;
@@ -507,6 +553,10 @@ function renderVideo(document, location, run, runId) {
   const valid = verifiedDanceVideo(run);
   if (!video || !empty) return;
   const href = danceVideoUrl(location, run, runId);
+  for (const id of ['run-video-tools', 'run-replay-jump']) {
+    const element = document.getElementById(id);
+    if (element) element.hidden = !(valid && href);
+  }
   renderReferenceSegments(document, run, video, valid && href);
   const policyNote = document.getElementById('replay-policy-source');
   if (policyNote) {
@@ -520,6 +570,7 @@ function renderVideo(document, location, run, runId) {
     video.hidden = false;
     empty.hidden = true;
     showPlaybackStatus(document, video);
+    showPlaybackTime(document, video);
     text(document, 'run-step-replay', '播放本次仿真回放');
     return;
   }
@@ -567,13 +618,25 @@ function renderRun(document, location, run, runId, evidenceIssue, artifactRegist
   const isDance = run.taskId === 'originman-dance' || Boolean(danceConfigFor(run) || danceEvidenceFor(run));
   const reference = run.metrics?.originmanReference;
   const expectedTrajectory = run.training?.originmanReferenceSummary?.trajectorySha256;
+  const visual = document.getElementById('run-reference-visual');
+  if (visual) {
+    const preset = /^preset:([a-z0-9][a-z0-9_-]{0,63})$/.exec(run.training?.originmanReferenceComposition?.source ?? '');
+    visual.hidden = !(preset && SHA256_PATTERN.test(expectedTrajectory ?? '') && !referenceEvidenceMismatch(run));
+    if (!visual.hidden) {
+      const href = new URL('./originman-reference.html', location.href);
+      href.searchParams.set('mode', 'preset');
+      href.searchParams.set('presetId', preset[1]);
+      href.searchParams.set('trajectorySha256', expectedTrajectory);
+      visual.href = href.href;
+    } else visual.removeAttribute('href');
+  }
   text(document, 'run-trajectory-sha', expectedTrajectory
     ? expectedTrajectory + (reference?.trajectorySha256 === expectedTrajectory ? ' · 与 Worker 一致' :
       referenceDigestMismatch(run) ? ' · 与 Worker 不一致' : '')
     : '—');
   text(document, 'run-reference-file-sha', reference?.referenceSha256 ?? '—');
   const status = STATUS_LABELS[run.status] ?? '状态待核对';
-  text(document, 'run-title', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : recovery ? 'OriginMan · 受扰恢复' : '本次训练运行');
+  text(document, 'run-title', tracking ? run.training?.originmanReferenceComposition?.displayName || 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 本次舞蹈训练' : recovery ? 'OriginMan · 受扰恢复' : '本次训练运行');
   text(document, 'run-status', status);
   text(document, 'run-task', tracking ? 'OriginMan · 参考轨迹跟跳' : isDance ? 'OriginMan · 强化学习舞蹈' : run.taskId ?? run.productId ?? '—');
   text(document, 'run-engine', run.training?.engine ?? run.training?.algorithm ?? '—');
@@ -766,9 +829,15 @@ export async function startRunDetail({
   text(document, 'run-id-label', `Run ${runId}`);
   text(document, 'run-id-detail', runId);
   const video = document.getElementById('run-video');
+  const referenceContent = document.getElementById('reference-run-content');
+  const videoSpeed = document.getElementById('run-video-speed');
   const playbackEvents = ['playing', 'pause', 'ended', 'error'];
   const onPlayback = () => showPlaybackStatus(document, video);
   for (const event of playbackEvents) video?.addEventListener(event, onPlayback);
+  const onPlaybackTime = () => showPlaybackTime(document, video);
+  for (const event of ['loadedmetadata', 'timeupdate']) video?.addEventListener(event, onPlaybackTime);
+  const onVideoSpeed = () => { video.playbackRate = Number(videoSpeed.value); };
+  videoSpeed?.addEventListener('change', onVideoSpeed);
   const requestUrl = new URL(`./api/v1/duck/runs/${encodeURIComponent(runId)}`, location.href).toString();
   const independentPanel = document.getElementById('independent-review');
   const independentButton = document.getElementById('independent-review-start');
@@ -994,6 +1063,18 @@ export async function startRunDetail({
       }
       if (!response.ok) {
         if ([401, 403, 404, 409].includes(response.status)) active = false;
+        if (referenceContent && [401, 403, 404].includes(response.status)) {
+          referenceContent.hidden = true;
+          lastRun = undefined;
+          text(document, 'run-title', 'OriginMan · 跟跳结果');
+          const jump = document.getElementById('run-replay-jump');
+          if (jump) jump.hidden = true;
+          if (video?.hasAttribute('src')) {
+            video.pause();
+            video.removeAttribute('src');
+            video.load();
+          }
+        }
         if (independentPanel) independentPanel.hidden = true;
         if (response.status === 401) throw new Error(login ? '登录后可继续查看这条 Run。' : '当前浏览器尚未登录学习平台。请先登录，再回到此页点“刷新本次运行”。');
         if (response.status === 403 || response.status === 404) throw new Error('当前账号无权查看这条 Run，或该记录不存在。链接不会切换账号，也不会改看其他实验。');
@@ -1007,6 +1088,7 @@ export async function startRunDetail({
       if (run.status !== 'queued' || run.computeResourceId !== lastRun?.computeResourceId) clearQueueAlternative();
       const previousRun = lastRun;
       lastRun = run;
+      if (referenceContent) referenceContent.hidden = false;
       active = ['queued', 'running', 'cancelling', 'ready'].includes(run.status);
       if (error) error.hidden = true;
       renderRun(document, location, run, runId, payload.workshopEvidenceIssue, payload.artifactRegistry);
@@ -1063,6 +1145,8 @@ export async function startRunDetail({
       independentButton?.removeEventListener('click', startIndependentReview);
       if (replayTimer !== null) clearTimeoutImpl(replayTimer);
       for (const event of playbackEvents) video?.removeEventListener(event, onPlayback);
+      for (const event of ['loadedmetadata', 'timeupdate']) video?.removeEventListener(event, onPlaybackTime);
+      videoSpeed?.removeEventListener('change', onVideoSpeed);
     },
   };
 }

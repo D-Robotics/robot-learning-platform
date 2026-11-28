@@ -289,6 +289,16 @@ test('Studio previews and submits a pinned preset or composition in the same con
       })
     ).structuredContent;
     assert.equal(draft.trainingSubmitted, false);
+    if (recipe.presetId) {
+      assert.equal(
+        draft.links.simulationPreview,
+        'https://platform.test/robotics-learning/originman-reference.html?mode=preset&presetId=g1_show&trajectorySha256=' +
+          originalDigest,
+      );
+      assert.equal(draft.studioNavigation.arguments.url, draft.links.simulationPreview);
+    } else {
+      assert.equal(draft.links, undefined);
+    }
     assert.equal(Object.hasOwn(draft, 'workspaceAccountId'), false);
     assert.equal(draft.nextTool, trainName);
     assert.equal(draft.workerSelectionRequired, !worker.computeResourceId);

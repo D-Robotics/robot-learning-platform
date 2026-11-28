@@ -1681,7 +1681,28 @@ export function experienceProxy(
           referenceDancePlans.set(operationId, prepared.plan);
           if (referenceDancePlans.size > 32)
             referenceDancePlans.delete(referenceDancePlans.keys().next().value);
-          payload = prepared.response;
+          const dance = prepared.plan.arguments.dance;
+          const exactPreview = dance.presetId
+            ? {
+                mode: 'preset',
+                presetId: dance.presetId,
+                trajectorySha256: prepared.plan.arguments.expectedTrajectorySha256,
+              }
+            : dance.blocks?.length === 1 && (dance.blocks[0].repeats ?? 1) === 1
+              ? { mode: 'blocks', motionId: dance.blocks[0].id }
+              : null;
+          if (exactPreview && workspaceLink(baseUrl, '')) {
+            const link = new URL(baseUrl);
+            link.pathname = link.pathname.replace(/\/+$/, '') + '/originman-reference.html';
+            for (const [key, value] of Object.entries(exactPreview))
+              link.searchParams.set(key, value);
+            const url = link.href;
+            payload = {
+              ...prepared.response,
+              links: { simulationPreview: url },
+              studioNavigation: { tool: 'studio_open_url', arguments: { url } },
+            };
+          } else payload = prepared.response;
         } else if (params.name === DANCE_ACCEPTANCE_TOOL.name) {
           payload = await completeDanceAcceptance(params.arguments ?? {}, signal);
         } else if (params.name === DANCE_CPU_REHEARSAL_TOOL.name) {
