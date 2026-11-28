@@ -363,6 +363,46 @@ paths:
         "401": { $ref: "#/components/responses/AuthRequired" }
         "422": { description: The selected trajectory exceeded range or motion limits }
         "503": { description: The configured catalog is unavailable }
+  /api/v1/duck/originman-motion/visual-scene:
+    get:
+      tags: [workspace]
+      operationId: getOriginManMotionVisualScene
+      summary: Read the MuJoCo mesh description shared by catalog previews
+      responses:
+        "200": { description: Scene description and its SHA-256 identity }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { description: The configured catalog has no visual scene }
+        "409": { description: The visual scene identity is invalid }
+  /api/v1/duck/originman-motion/playback:
+    post:
+      tags: [workspace]
+      operationId: getOriginManMotionPlayback
+      summary: Read baked body poses for a verified preset or motion without starting a training run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                presetId: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }
+                motionId: { type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,63}$' }
+                expectedTrajectorySha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+              oneOf:
+                - required: [presetId]
+                  not: { required: [motionId] }
+                - required: [motionId]
+                  not:
+                    anyOf:
+                      - required: [presetId]
+                      - required: [expectedTrajectorySha256]
+      responses:
+        "200": { description: Motion label, versioned Base64 body poses, scene and reference identities, and optional reference-controller evaluation }
+        "400": { description: The selection or expected preset digest is invalid }
+        "401": { $ref: "#/components/responses/AuthRequired" }
+        "404": { description: The selected item or its baked preview is unavailable }
+        "409": { description: The baked preview or expected preset digest no longer matches }
   /api/v1/duck/originman-reference:
     get:
       tags: [workspace]
