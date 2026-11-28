@@ -6,8 +6,8 @@
 # 不可跳过的机器步骤：构建 → 组包 → 上传
 # → 服务端解压（安装 Linux 原生依赖，继承引擎环境并覆盖本次干净引擎源码）→
 # **按 systemd ExecStart 逐一校验新 release 的入口文件** → 切软链 → 重启服务
-# → 健康检查，失败自动回滚。已安装的真实 CPU worker 自动纳入同一预检、
-# 重启与回滚事务。
+# → 健康检查，失败自动回滚。已安装的真实 CPU worker 与课堂 starter worker
+# 自动纳入同一预检、重启、健康检查与回滚事务。
 #
 # 用法：
 #   scripts/deploy-sim2real-production.sh                # 完整部署
@@ -25,6 +25,7 @@ NPM_CLI="${DEPLOY_NPM_CLI:-}"
 WEB_UNIT=sim2real-web.service
 WORKER_UNIT=sim2real-mock-worker.service
 CPU_WORKER_UNIT=sim2real-cpu-worker.service
+STARTER_WORKER_UNIT=sim2real-starter-worker.service
 EXTERNAL_CPU_WORKER="${DEPLOY_EXTERNAL_CPU_WORKER:-0}"
 case "$EXTERNAL_CPU_WORKER" in 0|1) ;; *) echo "Invalid DEPLOY_EXTERNAL_CPU_WORKER" >&2; exit 1 ;; esac
 remote_bash() {
@@ -221,7 +222,7 @@ rm -f "/tmp/$TARBALL"
 REMOTE
 
 select_deploy_units() {
-  local cpu_state
+  local cpu_state starter_state units
   if ! cpu_state=$(ssh -o BatchMode=yes "$HOST" systemctl show "$CPU_WORKER_UNIT" --property=LoadState --value); then
     echo "FATAL: optional CPU worker installation could not be checked" >&2
     return 1
@@ -233,13 +234,24 @@ select_deploy_units() {
           echo "FATAL: external CPU worker mode requires the release-managed CPU unit to be stopped" >&2
           return 1
         fi
-        printf '%s %s\n' "$WEB_UNIT" "$WORKER_UNIT"
+        units="$WEB_UNIT $WORKER_UNIT"
       else
-        printf '%s %s %s\n' "$WEB_UNIT" "$WORKER_UNIT" "$CPU_WORKER_UNIT"
+        units="$WEB_UNIT $WORKER_UNIT $CPU_WORKER_UNIT"
       fi
       ;;
-    not-found) printf '%s %s\n' "$WEB_UNIT" "$WORKER_UNIT" ;;
+    not-found) units="$WEB_UNIT $WORKER_UNIT" ;;
     *) echo "FATAL: optional CPU worker unit has an invalid load state" >&2; return 1 ;;
+  esac
+  # The starter worker also runs local-training-worker.mjs from current; a
+  # release that skips its restart leaves it executing the previous code.
+  if ! starter_state=$(ssh -o BatchMode=yes "$HOST" systemctl show "$STARTER_WORKER_UNIT" --property=LoadState --value); then
+    echo "FATAL: optional starter worker installation could not be checked" >&2
+    return 1
+  fi
+  case "$starter_state" in
+    loaded) printf '%s %s\n' "$units" "$STARTER_WORKER_UNIT" ;;
+    not-found) printf '%s\n' "$units" ;;
+    *) echo "FATAL: optional starter worker unit has an invalid load state" >&2; return 1 ;;
   esac
 }
 read_cpu_activation_state() {
@@ -362,12 +374,12 @@ if [ "$EXTERNAL_CPU_WORKER" = 1 ]; then PROBE_UNITS+=(external-cpu-worker); fi
 if ! remote_bash "$NODE_BIN" "${PROBE_UNITS[@]}" <<'REMOTE'
 set -euo pipefail
 NODE_BIN=$1; shift; UNITS=("$@")
-probe_cpu_worker() {
-  local cpu_health_code cpu_health_body cpu_rejection
-  cpu_health_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 http://127.0.0.1:19091/healthz)
-  [ "$cpu_health_code" = "200" ] || { echo "CPU worker healthz=$cpu_health_code" >&2; return 1; }
-  cpu_health_body=$(curl -fsS --max-time 8 http://127.0.0.1:19091/healthz)
-  if ! printf '%s' "$cpu_health_body" | "$NODE_BIN" -e '
+probe_engine_worker() {
+  local port=$1 label=$2 health_code health_body rejection
+  health_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://127.0.0.1:$port/healthz")
+  [ "$health_code" = "200" ] || { echo "$label healthz=$health_code" >&2; return 1; }
+  health_body=$(curl -fsS --max-time 8 "http://127.0.0.1:$port/healthz")
+  if ! printf '%s' "$health_body" | "$NODE_BIN" -e '
     try {
       const health = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
       const ready = health.ok === true && health.configured === true &&
@@ -375,17 +387,19 @@ probe_cpu_worker() {
       process.exit(ready ? 0 : 1);
     } catch { process.exit(1); }
   '; then
-    echo "CPU worker is not a configured real engine" >&2
+    echo "$label is not a configured real engine" >&2
     return 1
   fi
-  cpu_rejection=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST \
-    http://127.0.0.1:19091/train -H 'content-type: application/json' -d '{}')
-  case "$cpu_rejection" in
+  rejection=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -X POST \
+    "http://127.0.0.1:$port/train" -H 'content-type: application/json' -d '{}')
+  case "$rejection" in
     400|401|422) ;; # 无凭据请求可由认证层拒绝；不创建任何真实训练任务。
-    *) echo "CPU worker 未按协议拒绝空请求：HTTP $cpu_rejection" >&2; return 1 ;;
+    *) echo "$label 未按协议拒绝空请求：HTTP $rejection" >&2; return 1 ;;
   esac
-  echo "CPU worker healthz=200 real-engine-ready rejected=$cpu_rejection"
+  echo "$label healthz=200 real-engine-ready rejected=$rejection"
 }
+probe_cpu_worker() { probe_engine_worker 19091 "CPU worker"; }
+probe_starter_worker() { probe_engine_worker 19092 "starter worker"; }
 for endpoint in healthz readyz metrics; do
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:18102/$endpoint")
   [ "$code" = "200" ] || { echo "$endpoint=$code" >&2; exit 1; }
@@ -401,6 +415,7 @@ esac
 for unit in "${UNITS[@]}"; do
   case "$unit" in
     sim2real-cpu-worker.service|external-cpu-worker) probe_cpu_worker ;;
+    sim2real-starter-worker.service) probe_starter_worker ;;
   esac
 done
 echo "healthz=200 readyz=200 metrics=200 worker-healthz=$worker_health worker-rejected=$worker"

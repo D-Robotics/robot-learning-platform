@@ -46,22 +46,48 @@ function write(relative, text = 'fixture') {
 try {
   // An installed optional CPU worker joins the same release transaction;
   // an absent unit keeps the established two-service deployment unchanged.
+  // The classroom starter worker is optional in the same way: installed units
+  // are appended, absent units leave every expectation below untouched.
   const selectUnits = functionSource('select_deploy_units');
-  const selectBody = `HOST=fixture; WEB_UNIT=sim2real-web.service; WORKER_UNIT=sim2real-mock-worker.service; CPU_WORKER_UNIT=sim2real-cpu-worker.service
-ssh() { printf '%s' "$MOCK_LOAD_STATE"; }
+  const starterUnit = 'sim2real-starter-worker.service';
+  const selectBody = `HOST=fixture; WEB_UNIT=sim2real-web.service; WORKER_UNIT=sim2real-mock-worker.service; CPU_WORKER_UNIT=sim2real-cpu-worker.service; STARTER_WORKER_UNIT=${starterUnit}
+ssh() {
+  if [[ "$*" == *${starterUnit}* ]]; then printf '%s' "$MOCK_STARTER_STATE"; else printf '%s' "$MOCK_LOAD_STATE"; fi
+}
 ${selectUnits}
 select_deploy_units`;
+  const selectEnv = { MOCK_STARTER_STATE: 'not-found' };
   assert.equal(
-    bash(selectBody, [], { MOCK_LOAD_STATE: 'not-found' }).stdout.trim(),
+    bash(selectBody, [], { ...selectEnv, MOCK_LOAD_STATE: 'not-found' }).stdout.trim(),
     'sim2real-web.service sim2real-mock-worker.service',
   );
   assert.equal(
-    bash(selectBody, [], { MOCK_LOAD_STATE: 'loaded' }).stdout.trim(),
+    bash(selectBody, [], { ...selectEnv, MOCK_LOAD_STATE: 'loaded' }).stdout.trim(),
     'sim2real-web.service sim2real-mock-worker.service sim2real-cpu-worker.service',
   );
-  assert.notEqual(bash(selectBody, [], { MOCK_LOAD_STATE: 'error' }).status, 0);
+  assert.notEqual(bash(selectBody, [], { ...selectEnv, MOCK_LOAD_STATE: 'error' }).status, 0);
+  assert.equal(
+    bash(selectBody, [], {
+      MOCK_STARTER_STATE: 'loaded',
+      MOCK_LOAD_STATE: 'not-found',
+    }).stdout.trim(),
+    `sim2real-web.service sim2real-mock-worker.service ${starterUnit}`,
+  );
+  assert.equal(
+    bash(selectBody, [], { MOCK_STARTER_STATE: 'loaded', MOCK_LOAD_STATE: 'loaded' }).stdout.trim(),
+    `sim2real-web.service sim2real-mock-worker.service sim2real-cpu-worker.service ${starterUnit}`,
+  );
+  assert.notEqual(
+    bash(selectBody, [], { ...selectEnv, MOCK_STARTER_STATE: 'error' }).status,
+    0,
+    'an unreadable starter worker unit state must stop the deployment',
+  );
   assert.notEqual(
     bash(selectBody.replace('printf \'%s\' "$MOCK_LOAD_STATE"', 'return 255')).status,
+    0,
+  );
+  assert.notEqual(
+    bash(selectBody.replace('printf \'%s\' "$MOCK_STARTER_STATE"', 'return 255')).status,
     0,
   );
 
@@ -75,9 +101,10 @@ read_cpu_activation_state`;
   for (const state of ['activating', 'deactivating', 'reloading', 'unknown'])
     assert.notEqual(bash(activationBody, [], { MOCK_ACTIVE_STATE: state }).status, 0);
 
-  const externalSelection = `HOST=fixture; WEB_UNIT=sim2real-web.service; WORKER_UNIT=sim2real-mock-worker.service; CPU_WORKER_UNIT=sim2real-cpu-worker.service
+  const externalSelection = `HOST=fixture; WEB_UNIT=sim2real-web.service; WORKER_UNIT=sim2real-mock-worker.service; CPU_WORKER_UNIT=sim2real-cpu-worker.service; STARTER_WORKER_UNIT=${starterUnit}
 ssh() {
-  if [[ "$*" == *ActiveState* ]]; then printf '%s' "$MOCK_ACTIVE_STATE"; else printf '%s' "$MOCK_LOAD_STATE"; fi
+  if [[ "$*" == *${starterUnit}* ]]; then printf '%s' "$MOCK_STARTER_STATE"
+  elif [[ "$*" == *ActiveState* ]]; then printf '%s' "$MOCK_ACTIVE_STATE"; else printf '%s' "$MOCK_LOAD_STATE"; fi
 }
 ${functionSource('read_cpu_activation_state')}
 ${selectUnits}
@@ -86,6 +113,7 @@ select_deploy_units`;
     EXTERNAL_CPU_WORKER: '1',
     MOCK_LOAD_STATE: 'loaded',
     MOCK_ACTIVE_STATE: 'inactive',
+    MOCK_STARTER_STATE: 'not-found',
   };
   assert.equal(
     bash(externalSelection, [], external).stdout.trim(),
@@ -94,6 +122,11 @@ select_deploy_units`;
   assert.notEqual(
     bash(externalSelection, [], { ...external, MOCK_ACTIVE_STATE: 'active' }).status,
     0,
+  );
+  assert.equal(
+    bash(externalSelection, [], { ...external, MOCK_STARTER_STATE: 'loaded' }).stdout.trim(),
+    `sim2real-web.service sim2real-mock-worker.service ${starterUnit}`,
+    'the external CPU worker mode must not drop the installed starter worker',
   );
 
   // A clean source overlay must ship new common helpers and retain configs,
@@ -303,6 +336,7 @@ export async function tryLockExclusive(fd) {
     sim2real-web.service) printf 'ExecStart=/fixture/node %s/current/dist-server/services/sim2real-web/server.js\\n' "$BASE" ;;
     sim2real-mock-worker.service) printf 'ExecStart=/fixture/node %s/current/mock-local-worker.mjs\\n' "$BASE" ;;
     sim2real-cpu-worker.service) printf 'ExecStart=/fixture/node %s/current/local-training-worker.mjs\\n' "$BASE" ;;
+    sim2real-starter-worker.service) printf 'ExecStart=/fixture/node %s/current/local-training-worker.mjs\\n' "$BASE" ;;
     *) return 1 ;;
   esac
 }`;
@@ -341,6 +375,12 @@ ${remoteEntrySection}`,
     bash(`${unitFixture}\n${remoteBlocks[1]}`, [base, 'next', ...threeUnits.split(' ')]).status,
     0,
   );
+  // An installed starter worker is part of the same unit list everywhere.
+  const fourUnits = `${threeUnits} ${starterUnit}`;
+  assert.equal(
+    bash(`${unitFixture}\n${remoteBlocks[1]}`, [base, 'next', ...fourUnits.split(' ')]).status,
+    0,
+  );
   const publicDir = 'dist-server/services/sim2real-web/public';
   const legacyClassroom = '<section id="originman-classroom-slot"></section>';
   write(`server/releases/previous/${publicDir}/index.html`, legacyClassroom);
@@ -369,7 +409,7 @@ ${remoteEntrySection}`,
     'the detected unit array must reach entry checks, switch and rollback',
   );
   assert.match(source, /PROBE_UNITS=\("\$\{DEPLOY_UNITS\[@\]\}"\)/);
-  for (const units of [twoUnits, threeUnits]) {
+  for (const units of [twoUnits, threeUnits, fourUnits]) {
     const restartTrace = path.join(scratch, 'restart-trace');
     fs.writeFileSync(restartTrace, '');
     const recovery = bash(
@@ -447,6 +487,11 @@ case "$endpoint" in
     elif [ -n "\${CPU_HEALTH_BODY:-}" ]; then printf '%s' "$CPU_HEALTH_BODY";
     else printf '%s' '{"ok":true,"configured":true,"mode":"external-engine","engines":["offline-bc"]}'; fi ;;
   *:19091/train) printf '%s' "\${CPU_CODE:-401}" ;;
+  *:19092/healthz)
+    if [ "$code_only" = 1 ]; then printf '%s' "\${STARTER_HEALTH_CODE:-200}";
+    elif [ -n "\${STARTER_HEALTH_BODY:-}" ]; then printf '%s' "$STARTER_HEALTH_BODY";
+    else printf '%s' '{"ok":true,"configured":true,"mode":"external-engine","engines":["starter-ppo"]}'; fi ;;
+  *:19092/train) printf '%s' "\${STARTER_CODE:-400}" ;;
   *) printf '200' ;;
 esac
 `,
@@ -463,6 +508,7 @@ esac
     for (const endpoint of ['/healthz', '/readyz', '/metrics', '/train'])
       assert.ok(calls.includes(endpoint));
     assert.ok(!calls.includes(':19091/'), 'an absent CPU unit must never be probed');
+    assert.ok(!calls.includes(':19092/'), 'an absent starter unit must never be probed');
   }
   for (const code of ['000', '200', '404', '500']) {
     const probes = bash(remoteBlocks[4], probeArgs, { ...probeEnv, WORKER_CODE: code });
@@ -525,6 +571,33 @@ esac
     assert.notEqual(bash(remoteBlocks[4], cpuArgs, { ...probeEnv, ...env }).status, 0);
   }
   assert.match(remoteBlocks[4], /-d '\{\}'/, 'probe submits only a malformed empty request');
+
+  // An installed starter worker is probed like the CPU worker: a real engine
+  // must answer on 19092 and reject an empty request.
+  const starterArgs = [process.execPath, ...fourUnits.split(' '), 'external-cpu-worker'];
+  fs.writeFileSync(trace, '');
+  const starterProbes = bash(remoteBlocks[4], starterArgs, probeEnv);
+  assert.equal(starterProbes.status, 0, starterProbes.stderr);
+  const starterCalls = fs.readFileSync(trace, 'utf8');
+  for (const endpoint of [':19091/healthz', ':19091/train', ':19092/healthz', ':19092/train'])
+    assert.ok(starterCalls.includes(endpoint), `${endpoint} must be probed`);
+  for (const env of [
+    { STARTER_HEALTH_CODE: '503' },
+    { STARTER_CODE: '000' },
+    { STARTER_CODE: '200' },
+    { STARTER_CODE: '403' },
+    { STARTER_CODE: '500' },
+    { STARTER_HEALTH_BODY: '{"ok":true,"configured":true,"mode":"mock","engines":["smoke"]}' },
+    {
+      STARTER_HEALTH_BODY: '{"ok":true,"configured":true,"mode":"external-engine","engines":[]}',
+    },
+    { STARTER_HEALTH_BODY: 'invalid-json' },
+  ])
+    assert.notEqual(
+      bash(remoteBlocks[4], starterArgs, { ...probeEnv, ...env }).status,
+      0,
+      `starter worker probe must fail release acceptance for ${JSON.stringify(env)}`,
+    );
 
   // Test the top-level failure branches with a shell-function SSH stub. A
   // restart/link failure must run rollback despite set -e.
